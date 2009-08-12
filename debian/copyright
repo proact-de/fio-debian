@@ -1,29 +1,37 @@
 This package was debianized by Martin Steigerwald <ms@teamix.de> on
 Tue, 19 May 2009 15:04:02 +0200.
 
-It was downloaded from:
-http://freshmeat.net/urls/3aa21b8c106cab742bf1f20d60629e3f
-aka http://brick.kernel.dk/snaps/fio-1.26.tar.gz
+It was downloaded from http://freshmeat.net/projects/fio/
+aka http://brick.kernel.dk/snaps/fio-1.32.tar.gz
 
 Upstream Author:
 
-    Jens Axboe <jens.axboe@oracle.com> (as of posting in LKML from 19 May 2009)
+    Jens Axboe <jens.axboe@oracle.com>
 
-Copyright:
-
-    Copyright (C) 2005 Jens Axboe <axboe@suse.de>
-    Copyright (C) 2006 Jens Axboe <axboe@kernel.dk>
+Copyright: © 2005-2006 by Jens Axboe
 
 License:
 
-    GNU GENERAL PUBLIC LICENSE Version 2
+   This package is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; version 2 dated June, 1991.
 
-The Debian packaging is (C) 2009, Martin Steigerwald <ms@teamix.de> and
-is licensed under the GPL, see `/usr/share/common-licenses/GPL'.
+   This package is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
 
-Files under differing copyrights:
+   You should have received a copy of the GNU General Public License
+   along with this package; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+   02110-1301, USA.
 
-    fifo.c, fifo.h: 
+On Debian GNU/Linux systems, the complete text of the GNU General
+Public License can be found in `/usr/share/common-licenses/GPL-2'.
+
+Copyrights notes:
+
+    fifo.c, fifo.h:
     Copyright (C) 2004 Stelian Pop <stelian@popies.net>
 
     hash.h:
@@ -66,3 +74,6 @@ Files under differing copyrights:
     Copyright (C) Jean-Luc Cooke <jlcooke@certainkey.com>
     Copyright (C) Andrew McDonald <andrew@mcdonald.org.uk>
     Copyright (C) 2003 Kyle McMartin <kyle@debian.org>
+
+The Debian packaging is (C) 2009, Martin Steigerwald <ms@teamix.de> and
+is licensed under the GPL, see `/usr/share/common-licenses/GPL-2'.
