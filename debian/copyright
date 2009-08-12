@@ -1,0 +1,68 @@
+This package was debianized by Martin Steigerwald <ms@teamix.de> on
+Tue, 19 May 2009 15:04:02 +0200.
+
+It was downloaded from:
+http://freshmeat.net/urls/3aa21b8c106cab742bf1f20d60629e3f
+aka http://brick.kernel.dk/snaps/fio-1.26.tar.gz
+
+Upstream Author:
+
+    Jens Axboe <jens.axboe@oracle.com> (as of posting in LKML from 19 May 2009)
+
+Copyright:
+
+    Copyright (C) 2005 Jens Axboe <axboe@suse.de>
+    Copyright (C) 2006 Jens Axboe <axboe@kernel.dk>
+
+License:
+
+    GNU GENERAL PUBLIC LICENSE Version 2
+
+The Debian packaging is (C) 2009, Martin Steigerwald <ms@teamix.de> and
+is licensed under the GPL, see `/usr/share/common-licenses/GPL'.
+
+Files under differing copyrights:
+
+    fifo.c, fifo.h: 
+    Copyright (C) 2004 Stelian Pop <stelian@popies.net>
+
+    hash.h:
+    Copyright (C) 2002 William Lee Irwin III, IBM
+
+    rbtree.c:
+    Copyright (C) 1999 Andrea Arcangeli <andrea@suse.de>
+    Copyright (C) 2002  David Woodhouse <dwmw2@infradead.org>
+
+    rbtree.h:
+    (C) 1999 Andrea Arcangeli <andrea@suse.de>
+
+    crc/crc16.h:
+    Copyright (C) 2005 Ben Gardner <bgardner@wabtec.com>
+
+    crc/crc32.c:
+    Copyright (C) 1992, 1995-1999 Free Software Foundation, Inc.
+
+    crc/crc32.h:
+    Copyright (C) 92, 1995-1999 Free Software Foundation, Inc.
+
+    crc/crc32c.h:
+    Copyright (C) 1992, 1995-1999 Free Software Foundation, Inc.
+
+    crc/crc32c.c:
+    Copyright (C) 2004 Cisco Systems, Inc.
+
+    crc/crc32c-intel.c:
+    Based on a posting to lkml by Austin Zhang <austin.zhang@intel.com>
+
+    crc/md5.c:
+    Shamelessly lifted from the 2.6 kernel (crypto/md5.c)
+
+    crc/sha256.c:
+    Copyright (C) Jean-Luc Cooke <jlcooke@certainkey.com>
+    Copyright (C) Andrew McDonald <andrew@mcdonald.org.uk>
+    Copyright (C) 2002 James Morris <jmorris@intercode.com.au>
+
+    crc/sha512.c:
+    Copyright (C) Jean-Luc Cooke <jlcooke@certainkey.com>
+    Copyright (C) Andrew McDonald <andrew@mcdonald.org.uk>
+    Copyright (C) 2003 Kyle McMartin <kyle@debian.org>

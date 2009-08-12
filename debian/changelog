@@ -1,0 +1,20 @@
+fio (1.32-1) unstable; urgency=low
+
+  * New upstream release
+  * Dropped patch for lintian error in original manpage, fixed
+    upstream.
+  * Dropped manpage for bash shell script fio_generate_plots,
+    upstream integrated it.
+
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 12 Aug 2009 15:34:02 +0200
+
+fio (1.26-1) UNRELEASED; urgency=low
+
+  * Initial release (Closes: #524790).
+  * Changed Makefile to build to /usr instead of /usr/local.
+  * Changed Makefile to install the manpage /usr/share/man.
+  * Fixed a lintian reported error in the original manpage.
+  * Created manpage for bash shell script fio_generate_plots.
+
+ -- Martin Steigerwald <ms@teamix.de>  Tue, 19 May 2009 17:12:02 +0200
+
