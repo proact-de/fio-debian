@@ -2,8 +2,9 @@ Source: fio
 Section: utils
 Priority: optional
 Maintainer: Martin Steigerwald <ms@teamix.de>
+Uploaders: Michael Prokop <mika@debian.org>
 Build-Depends: debhelper (>= 7), libaio-dev
-Standards-Version: 3.8.0
+Standards-Version: 3.8.2
 Homepage: http://freshmeat.net/projects/fio
 
 Package: fio
