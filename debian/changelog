@@ -6,8 +6,9 @@ fio (1.32-1) unstable; urgency=low
   * Dropped manpage for bash shell script fio_generate_plots,
     upstream integrated it.
   * Included examples as documentation.
+  * Fixed watch file to ignore git-latest snapshots.
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 12 Aug 2009 16:41:52 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 12 Aug 2009 16:59:12 +0200
 
 fio (1.26-1) UNRELEASED; urgency=low
 
