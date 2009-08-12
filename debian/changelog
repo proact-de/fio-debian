@@ -5,6 +5,7 @@ fio (1.32-1) unstable; urgency=low
     upstream.
   * Dropped manpage for bash shell script fio_generate_plots,
     upstream integrated it.
+  * Included examples as documentation.
 
  -- Martin Steigerwald <ms@teamix.de>  Wed, 12 Aug 2009 15:34:02 +0200
 
