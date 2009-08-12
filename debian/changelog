@@ -5,6 +5,7 @@ fio (1.32-1) unstable; urgency=low
     upstream.
   * Dropped manpage for bash shell script fio_generate_plots,
     upstream integrated it.
+  * Imported to git-buildpackage with pristine tar.
   * Included examples as documentation.
   * Fixed watch file to ignore git-latest snapshots.
 
