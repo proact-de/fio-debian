@@ -1,5 +1,6 @@
 fio (1.32-1) unstable; urgency=low
 
+  [ Martin Steigerwald ]
   * New upstream release
   * Dropped patch for lintian error in original manpage, fixed
     upstream.
@@ -9,7 +10,15 @@ fio (1.32-1) unstable; urgency=low
   * Included examples as documentation.
   * Fixed watch file to ignore git-latest snapshots.
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 12 Aug 2009 16:59:12 +0200
+  [ Michael Prokop ]
+  * fio.1: fix hyphen-used-as-minus-sign
+  * debian/copyright: refer to gpl2 and include its header;
+    updated URLs; some formating changes
+  * debian/rules: drop unnecessary configure target;
+    replace dh_clean with dh_prep; drop templates
+  * Bump Standard-Version to 3.8.2; add myself to Uploaders
+
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 12 Aug 2009 21:01:18 +0200
 
 fio (1.26-1) UNRELEASED; urgency=low
 
