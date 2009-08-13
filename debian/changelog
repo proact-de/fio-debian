@@ -1,7 +1,7 @@
 fio (1.32-1) unstable; urgency=low
 
   [ Martin Steigerwald ]
-  * New upstream release
+  * New upstream release.
   * Dropped patch for lintian error in original manpage, fixed
     upstream.
   * Dropped manpage for bash shell script fio_generate_plots,
@@ -18,7 +18,11 @@ fio (1.32-1) unstable; urgency=low
     replace dh_clean with dh_prep; drop templates
   * Bump Standard-Version to 3.8.2; add myself to Uploaders
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 12 Aug 2009 21:01:18 +0200
+  [ Martin Steigerwald ]
+  * debian/copyright: fix copyright unicode char and replaced
+    another (C) with it, thanks Michael.
+
+ -- Martin Steigerwald <ms@teamix.de>  Thu, 13 Aug 2009 08:22:40 +0200
 
 fio (1.26-1) UNRELEASED; urgency=low
 

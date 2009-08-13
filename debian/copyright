@@ -8,7 +8,7 @@ Upstream Author:
 
     Jens Axboe <jens.axboe@oracle.com>
 
-Copyright: � 2005-2006 by Jens Axboe
+Copyright: © 2005-2006 by Jens Axboe
 
 License:
 
@@ -75,5 +75,5 @@ Copyrights notes:
     Copyright (C) Andrew McDonald <andrew@mcdonald.org.uk>
     Copyright (C) 2003 Kyle McMartin <kyle@debian.org>
 
-The Debian packaging is (C) 2009, Martin Steigerwald <ms@teamix.de> and
+The Debian packaging is © 2009, Martin Steigerwald <ms@teamix.de> and
 is licensed under the GPL, see `/usr/share/common-licenses/GPL-2'.
