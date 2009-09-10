@@ -2,6 +2,7 @@ fio (1.33.1-1) UNRELEASED; urgency=low
 
   * arch/arch-alpha.h: Removed my FTBFS on alpha bugfix. Applied upstream.
   * New Upstream Version.
+  * control: Added Vcs-Git and Vcs-Browser.
 
  -- Martin Steigerwald <martin@teamix.de>  Thu, 10 Sep 2009 10:30:20 +0200
 
