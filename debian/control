@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Martin Steigerwald <ms@teamix.de>
 Uploaders: Michael Prokop <mika@debian.org>
 Build-Depends: debhelper (>= 7), libaio-dev
-Standards-Version: 3.8.2
+Standards-Version: 3.8.3
 Homepage: http://freshmeat.net/projects/fio
 Vcs-Git: git://github.com/martin21/fio.git
 Vcs-Browser: http://github.com/martin21/fio/tree/master
