@@ -4,14 +4,14 @@ fio (1.33.1-1) UNRELEASED; urgency=low
   * New Upstream Version. (Closes: #545839).
   * control: Added Vcs-Git and Vcs-Browser.
 
- -- Martin Steigerwald <martin@teamix.de>  Thu, 10 Sep 2009 10:30:20 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Thu, 10 Sep 2009 10:30:20 +0200
 
 fio (1.32-2) UNRELEASED; urgency=low
 
   * arch/arch-alpha.h: Correct typo writer_barrier to write_barrier.
     Thanks, Kurt Roeckx. (Closes: #545839).
 
- -- Martin Steigerwald <martin@teamix.de>  Thu, 10 Sep 2009 09:30:07 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Thu, 10 Sep 2009 09:30:07 +0200
 
 fio (1.32-1) unstable; urgency=low
 
