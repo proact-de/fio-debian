@@ -12,12 +12,15 @@
 typedef unsigned long os_cpu_mask_t;
 typedef unsigned int os_random_state_t;
 
-/*
- * FIXME
- */
 static inline int blockdev_size(int fd, unsigned long long *bytes)
 {
-	return EINVAL;
+	off_t end = lseek(fd, 0, SEEK_END);
+
+	if (end < 0)
+		return errno;
+
+	*bytes = end;
+	return 0;
 }
 
 static inline int blockdev_invalidate_cache(int fd)
@@ -47,5 +50,9 @@ static inline long os_random_long(os_random_state_t *rs)
 	val = rand_r(rs);
 	return val;
 }
+
+#ifdef MADV_FREE
+#define FIO_MADV_FREE	MADV_FREE
+#endif
 
 #endif
