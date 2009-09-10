@@ -2,6 +2,7 @@ fio (1.33.1-2) unstable; urgency=low
 
   * Moved over repository to Alioth/CollabMaint.
   * debian/control: Updated Vcs-Git and Vcs-Browser.
+  * Added debian//gbp.conf with option to always use pristine-tar.
 
  -- Martin Steigerwald <ms@teamix.de>  Thu, 10 Sep 2009 13:34:01 +0200
 
