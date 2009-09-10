@@ -1,4 +1,4 @@
-fio (1.33.1-2) unstable; urgency=low
+fio (1.33.1-2) UNRELEASED; urgency=low
 
   * Moved over repository to Alioth/CollabMaint.
   * debian/control: Updated Vcs-Git and Vcs-Browser.
