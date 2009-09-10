@@ -606,7 +606,8 @@ static void do_io(struct thread_data *td)
 		 * Add verification end_io handler, if asked to verify
 		 * a previously written file.
 		 */
-		if (td->o.verify != VERIFY_NONE && io_u->ddir == DDIR_READ) {
+		if (td->o.verify != VERIFY_NONE && io_u->ddir == DDIR_READ &&
+		    !td_rw(td)) {
 			if (td->o.verify_async)
 				io_u->end_io = verify_io_u_async;
 			else
@@ -1618,12 +1619,6 @@ int main(int argc, char *argv[])
 	if (!getenv("LC_NUMERIC"))
 		setlocale(LC_NUMERIC, "en_US");
 
-	if (parse_options(argc, argv))
-		return 1;
-
-	if (!thread_number)
-		return 0;
-
 	ps = sysconf(_SC_PAGESIZE);
 	if (ps < 0) {
 		log_err("Failed to get page size\n");
@@ -1632,6 +1627,14 @@ int main(int argc, char *argv[])
 
 	page_size = ps;
 	page_mask = ps - 1;
+
+	fio_keywords_init();
+
+	if (parse_options(argc, argv))
+		return 1;
+
+	if (!thread_number)
+		return 0;
 
 	if (write_bw_log) {
 		setup_log(&agg_io_log[DDIR_READ]);
