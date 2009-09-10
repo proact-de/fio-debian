@@ -1,4 +1,4 @@
-fio (1.33.1-1) UNRELEASED; urgency=low
+fio (1.33.1-1) unstable; urgency=low
 
   * arch/arch-alpha.h: Removed my FTBFS on alpha bugfix. Applied upstream.
   * New Upstream Version. (Closes: #545839).
