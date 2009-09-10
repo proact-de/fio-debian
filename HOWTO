@@ -158,6 +158,9 @@ specify:
 
 $ fio --name=random-writers --ioengine=libaio --iodepth=4 --rw=randwrite --bs=32k --direct=0 --size=64m --numjobs=4
 
+4.1 Environment variables
+-------------------------
+
 fio also supports environment variable expansion in job files. Any
 substring of the form "${VARNAME}" as part of an option value (in other
 words, on the right of the `='), will be expanded to the value of the
@@ -187,6 +190,20 @@ numjobs=4
 
 fio ships with a few example job files, you can also look there for
 inspiration.
+
+4.2 Reserved keywords
+---------------------
+
+Additionally, fio has a set of reserved keywords that will be replaced
+internally with the appropriate value. Those keywords are:
+
+$pagesize	The architecture page size of the running system
+$mb_memory	Megabytes of total memory in the system
+$ncpus		Number of online available CPUs
+
+These can be used on the command line or in the job file, and will be
+automatically substituted with the current system values when the job
+is run.
 
 
 5.0 Detailed list of parameters
@@ -243,8 +260,11 @@ filename=str	Fio normally makes up a filename based on the job name,
 		can specify a number of files by separating the names with a
 		':' colon. So if you wanted a job to open /dev/sda and /dev/sdb
 		as the two working files, you would use
-		filename=/dev/sda:/dev/sdb. '-' is a reserved name, meaning
-		stdin or stdout. Which of the two depends on the read/write
+		filename=/dev/sda:/dev/sdb. If the wanted filename does need to
+		include a colon, then escape that with a '\' character. For
+		instance, if the filename is "/dev/dsk/foo@3,0:c", then you would
+		use filename="/dev/dsk/foo@3,0\:c". '-' is a reserved name,
+		meaning stdin or stdout. Which of the two depends on the read/write
 		direction set.
 
 opendir=str	Tell fio to recursively add any file it can find in this
@@ -791,6 +811,8 @@ verify=str	If writing to a file, fio can verify the file contents
 
 			sha256	Use sha256 as the checksum function.
 
+			sha1	Use optimized sha1 as the checksum function.
+
 			meta	Write extra information about each io
 				(timestamp, block number etc.). The block
 				number is verified.
@@ -801,7 +823,11 @@ verify=str	If writing to a file, fio can verify the file contents
 
 		This option can be used for repeated burn-in tests of a
 		system to make sure that the written data is also
-		correctly read back.
+		correctly read back. If the data direction given is
+		a read or random read, fio will assume that it should
+		verify a previously written file. If the data direction
+		includes any form of write, the verify will be of the
+		newly written data.
 
 verifysort=bool	If set, fio will sort written verify blocks when it deems
 		it faster to read them back in a sorted manner. This is
