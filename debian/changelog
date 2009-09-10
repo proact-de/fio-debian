@@ -1,3 +1,10 @@
+fio (1.33.1-2) unstable; urgency=low
+
+  * Moved over repository to Alioth/CollabMaint.
+  * debian/control: Updated Vcs-Git and Vcs-Browser.
+
+ -- Martin Steigerwald <ms@teamix.de>  Thu, 10 Sep 2009 13:34:01 +0200
+
 fio (1.33.1-1) unstable; urgency=low
 
   * arch/arch-alpha.h: Removed my FTBFS on alpha bugfix. Applied upstream.
