@@ -2,9 +2,12 @@ fio (1.33.1-2) UNRELEASED; urgency=low
 
   * Moved over repository to Alioth/CollabMaint.
   * debian/control: Updated Vcs-Git and Vcs-Browser.
-  * Added debian//gbp.conf with option to always use pristine-tar.
+  * Added debian/gbp.conf with option to always use pristine-tar.
+  * debian/gbp.conf: Added option to call git-dch after import.
+    Since git-buildpackage 0.4.57 git-import-orig doesn't add a
+    changelog entry manually anymore.
 
- -- Martin Steigerwald <ms@teamix.de>  Thu, 10 Sep 2009 13:34:01 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Thu, 17 Sep 2009 11:07:00 +0200
 
 fio (1.33.1-1) unstable; urgency=low
 
