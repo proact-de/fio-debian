@@ -6,6 +6,8 @@ fio (1.33.1-2) UNRELEASED; urgency=low
   * debian/gbp.conf: Added option to call git-dch after import.
     Since git-buildpackage 0.4.57 git-import-orig doesn't add a
     changelog entry manually anymore.
+  * Added forgotten pristine-tar delta for fio 1.33.1.
+  * Added tags that I forgot to push. Thanks to Bruno Kleinert for help.
 
  -- Martin Steigerwald <ms@teamix.de>  Thu, 17 Sep 2009 11:07:00 +0200
 
