@@ -203,7 +203,13 @@ $ncpus		Number of online available CPUs
 
 These can be used on the command line or in the job file, and will be
 automatically substituted with the current system values when the job
-is run.
+is run. Simple math is also supported on these keywords, so you can
+perform actions like:
+
+size=8*$mb_memory
+
+and get that properly expanded to 8 times the size of memory in the
+machine.
 
 
 5.0 Detailed list of parameters
@@ -846,13 +852,14 @@ verify_interval=int	Write the verification header at a finer granularity
 			size of header_interval. blocksize should divide this
 			evenly.
 
-verify_pattern=int	If set, fio will fill the io buffers with this
+verify_pattern=str	If set, fio will fill the io buffers with this
 		pattern. Fio defaults to filling with totally random
 		bytes, but sometimes it's interesting to fill with a known
 		pattern for io verification purposes. Depending on the
 		width of the pattern, fio will fill 1/2/3/4 bytes of the
-		buffer at the time. The verify_pattern cannot be larger than
-		a 32-bit quantity.
+		buffer at the time(it can be either a decimal or a hex number).
+		The verify_pattern if larger than a 32-bit quantity has to
+		be a hex number that starts with either "0x" or "0X".
 
 verify_fatal=bool	Normally fio will keep checking the entire contents
 		before quitting on a block verification failure. If this
@@ -987,6 +994,7 @@ gtod_cpu=int	Sometimes it's cheaper to dedicate a single thread of
 		for doing these time calls will be excluded from other
 		uses. Fio will manually clear it from the CPU mask of other
 		jobs.
+
 continue_on_error=bool	Normally fio will exit the job on the first observed
 		failure. If this option is set, fio will continue the job when
 		there is a 'non-fatal error' (EIO or EILSEQ) until the runtime
@@ -996,6 +1004,21 @@ continue_on_error=bool	Normally fio will exit the job on the first observed
 		given in the stats is the first error that was hit during the
 		run.
 
+cgroup=str	Add job to this control group. If it doesn't exist, it will
+		be created. The system must have a mounted cgroup blkio
+		mount point for this to work. If your system doesn't have it
+		mounted, you can do so with:
+
+		# mount -t cgroup -o blkio none /cgroup
+
+cgroup_weight=int	Set the weight of the cgroup to this value. See
+		the documentation that comes with the kernel, allowed values
+		are in the range of 100..1000.
+
+uid=int		Instead of running as the invoking user, set the user ID to
+		this value before the thread/process does any work.
+
+gid=int		Set group ID, see uid.
 
 6.0 Interpreting the output
 ---------------------------

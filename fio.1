@@ -515,7 +515,11 @@ Same as \fBmmap\fR, but use huge files as backing.
 The amount of memory allocated is the maximum allowed \fBblocksize\fR for the
 job multiplied by \fBiodepth\fR.  For \fBshmhuge\fR or \fBmmaphuge\fR to work,
 the system must have free huge pages allocated.  \fBmmaphuge\fR also needs to
-have hugetlbfs mounted, and \fIfile\fR must point there.
+have hugetlbfs mounted, and \fIfile\fR must point there. At least on Linux,
+huge pages must be manually allocated. See \fB/proc/sys/vm/nr_hugehages\fR
+and the documentation for that. Normally you just need to echo an appropriate
+number, eg echoing 8 will ensure that the OS has 8 huge pages ready for
+use.
 .RE
 .TP
 .BI iomem_align \fR=\fPint
@@ -579,9 +583,10 @@ Write extra information about each I/O (timestamp, block number, etc.). The
 block number is verified.
 .TP
 .B pattern
-Fill I/O buffers with a specific pattern that is used to verify.  The pattern is
-specified by appending `:\fIint\fR' to the parameter. \fIint\fR cannot be larger
-than 32-bits. 
+Fill I/O buffers with a specific pattern that is used to verify. If the pattern
+is < 4bytes, it can either be a decimal or a hexadecimal number. If the pattern
+is > 4bytes, currently, it can only be a hexadecimal pattern starting with
+either "0x" or "0X".
 .TP
 .B null
 Pretend to verify.  Used for testing internals.
@@ -720,13 +725,23 @@ entering the kernel with a gettimeofday() call. The CPU set aside for doing
 these time calls will be excluded from other uses. Fio will manually clear it
 from the CPU mask of other jobs.
 .TP
-.BI continue_on_error \fR=\fPbool
-Normally fio will exit the job on the first observed failure. If this option is
-set, fio will continue the job when there is a 'non-fatal error'
-(\fBEIO\fR or \fBEILSEQ\fR) until the runtime is exceeded or the I/O size
-specified is completed. If this option is used, there are two more stats that
-are appended, the total error count and the first error. The error field given
-in the stats is the first error that was hit during the run.
+.BI cgroup \fR=\fPstr
+Add job to this control group. If it doesn't exist, it will be created.
+The system must have a mounted cgroup blkio mount point for this to work. If
+your system doesn't have it mounted, you can do so with:
+
+# mount -t cgroup -o blkio none /cgroup
+.TP
+.BI cgroup_weight \fR=\fPint
+Set the weight of the cgroup to this value. See the documentation that comes
+with the kernel, allowed values are in the range of 100..1000.
+.TP
+.BI uid \fR=\fPint
+Instead of running as the invoking user, set the user ID to this value before
+the thread/process does any work.
+.TP
+.BI gid \fR=\fPint
+Set group ID, see \fBuid\fR.
 .SH OUTPUT
 While running, \fBfio\fR will display the status of the created jobs.  For
 example:

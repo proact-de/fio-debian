@@ -345,7 +345,7 @@ static enum fio_ddir rate_ddir(struct thread_data *td, enum fio_ddir ddir)
 	odir = ddir ^ 1;
 	if (td_rw(td) && __should_check_rate(td, odir))
 		td->rate_pending_usleep[odir] -= usec;
-	
+
 	return ddir;
 }
 
@@ -413,7 +413,6 @@ void put_io_u(struct thread_data *td, struct io_u *io_u)
 {
 	td_io_u_lock(td);
 
-	assert((io_u->flags & IO_U_F_FREE) == 0);
 	io_u->flags |= IO_U_F_FREE;
 	io_u->flags &= ~IO_U_F_FREE_DEF;
 
@@ -421,9 +420,10 @@ void put_io_u(struct thread_data *td, struct io_u *io_u)
 		put_file_log(td, io_u->file);
 
 	io_u->file = NULL;
+	if (io_u->flags & IO_U_F_IN_CUR_DEPTH)
+		td->cur_depth--;
 	flist_del_init(&io_u->list);
 	flist_add(&io_u->list, &td->io_u_freelist);
-	td->cur_depth--;
 	td_io_u_unlock(td);
 	td_io_u_free_notify(td);
 }
@@ -447,10 +447,10 @@ void requeue_io_u(struct thread_data *td, struct io_u **io_u)
 		td->io_issues[__io_u->ddir]--;
 
 	__io_u->flags &= ~IO_U_F_FLIGHT;
-
+	if (__io_u->flags & IO_U_F_IN_CUR_DEPTH)
+		td->cur_depth--;
 	flist_del(&__io_u->list);
 	flist_add_tail(&__io_u->list, &td->io_u_requeues);
-	td->cur_depth--;
 	td_io_u_unlock(td);
 	*io_u = NULL;
 }
@@ -754,7 +754,8 @@ static struct fio_file *get_next_file_rr(struct thread_data *td, int goodf,
 			opened = 1;
 		}
 
-		dprint(FD_FILE, "goodf=%x, badf=%x, ff=%x\n", goodf, badf, f->flags);
+		dprint(FD_FILE, "goodf=%x, badf=%x, ff=%x\n", goodf, badf,
+								f->flags);
 		if ((!goodf || (f->flags & goodf)) && !(f->flags & badf))
 			break;
 
@@ -823,7 +824,8 @@ static int set_io_u_file(struct thread_data *td, struct io_u *io_u)
 		io_u->file = NULL;
 		fio_file_set_done(f);
 		td->nr_done_files++;
-		dprint(FD_FILE, "%s: is done (%d of %d)\n", f->file_name, td->nr_done_files, td->o.nr_files);
+		dprint(FD_FILE, "%s: is done (%d of %d)\n", f->file_name,
+					td->nr_done_files, td->o.nr_files);
 	} while (1);
 
 	return 0;
@@ -858,13 +860,13 @@ again:
 
 	if (io_u) {
 		assert(io_u->flags & IO_U_F_FREE);
-		io_u->flags &= ~IO_U_F_FREE;
-		io_u->flags &= ~IO_U_F_FREE_DEF;
+		io_u->flags &= ~(IO_U_F_FREE | IO_U_F_FREE_DEF);
 
 		io_u->error = 0;
 		flist_del(&io_u->list);
 		flist_add(&io_u->list, &td->io_u_busylist);
 		td->cur_depth++;
+		io_u->flags |= IO_U_F_IN_CUR_DEPTH;
 	}
 
 	td_io_u_unlock(td);
@@ -967,8 +969,10 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 
 	dprint_io_u(io_u, "io complete");
 
+	td_io_u_lock(td);
 	assert(io_u->flags & IO_U_F_FLIGHT);
 	io_u->flags &= ~IO_U_F_FLIGHT;
+	td_io_u_unlock(td);
 
 	if (ddir_sync(io_u->ddir)) {
 		td->last_was_sync = 1;
@@ -980,6 +984,7 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 	if (!io_u->error) {
 		unsigned int bytes = io_u->buflen - io_u->resid;
 		const enum fio_ddir idx = io_u->ddir;
+		const enum fio_ddir odx = io_u->ddir ^ 1;
 		int ret;
 
 		td->io_blocks[idx]++;
@@ -988,14 +993,9 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 
 		if (ramp_time_over(td)) {
 			unsigned long uninitialized_var(lusec);
-			unsigned long uninitialized_var(rusec);
 
 			if (!td->o.disable_clat || !td->o.disable_bw)
 				lusec = utime_since(&io_u->issue_time,
-							&icd->time);
-			if (__should_check_rate(td, idx) ||
-			    __should_check_rate(td, idx ^ 1))
-				rusec = utime_since(&io_u->start_time,
 							&icd->time);
 
 			if (!td->o.disable_clat) {
@@ -1005,11 +1005,16 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 			if (!td->o.disable_bw)
 				add_bw_sample(td, idx, bytes, &icd->time);
 			if (__should_check_rate(td, idx)) {
-				td->rate_pending_usleep[idx] +=
-					(long) td->rate_usec_cycle[idx] - rusec;
+				td->rate_pending_usleep[idx] =
+					((td->this_io_bytes[idx] *
+					  td->rate_nsec_cycle[idx]) / 1000 -
+					 utime_since_now(&td->start));
 			}
 			if (__should_check_rate(td, idx ^ 1))
-				td->rate_pending_usleep[idx ^ 1] -= rusec;
+				td->rate_pending_usleep[odx] =
+					((td->this_io_bytes[odx] *
+					  td->rate_nsec_cycle[odx]) / 1000 -
+					 utime_since_now(&td->start));
 		}
 
 		if (td_write(td) && idx == DDIR_WRITE &&

@@ -20,7 +20,7 @@
 #include "filehash.h"
 #include "verify.h"
 
-static char fio_version_string[] = "fio 1.33.1";
+static char fio_version_string[] = "fio 1.36";
 
 #define FIO_RANDSEED		(0xb1899bedUL)
 
@@ -127,8 +127,33 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 		.val		= 'a',
 	},
 	{
+		.name		= "profile",
+		.has_arg	= required_argument,
+		.val		= 'p',
+	},
+	{
 		.name		= NULL,
 	},
+};
+
+static const char *tiobench_opts[] = {
+	"buffered=0", "size=4*1024*$mb_memory", "bs=4k", "timeout=600",
+	"numjobs=4", "group_reporting", "thread", "overwrite=1",
+	"filename=.fio.tio.1:.fio.tio.2:.fio.tio.3:.fio.tio.4",
+	"name=seqwrite", "rw=write", "end_fsync=1",
+	"name=randwrite", "stonewall", "rw=randwrite", "end_fsync=1",
+	"name=seqread", "stonewall", "rw=read",
+	"name=randread", "stonewall", "rw=randread", NULL,
+};
+
+static const char **fio_prof_strings[PROFILE_END] = {
+	NULL,
+	tiobench_opts,
+};
+
+static const char *profiles[PROFILE_END] = {
+	"none",
+	"tiobench",
 };
 
 FILE *get_f_out()
@@ -156,6 +181,8 @@ static struct thread_data *get_new_job(int global, struct thread_data *parent)
 	td = &threads[thread_number++];
 	*td = *parent;
 
+	td->o.uid = td->o.gid = -1U;
+
 	dup_files(td, parent);
 	options_mem_dupe(td);
 
@@ -178,21 +205,19 @@ static void put_job(struct thread_data *td)
 static int __setup_rate(struct thread_data *td, enum fio_ddir ddir)
 {
 	unsigned int bs = td->o.min_bs[ddir];
-	unsigned long long rate;
-	unsigned long ios_per_msec;
+	unsigned long long bytes_per_sec;
 
-	if (td->o.rate[ddir]) {
-		rate = td->o.rate[ddir];
-		ios_per_msec = (rate * 1000LL) / bs;
-	} else
-		ios_per_msec = td->o.rate_iops[ddir] * 1000UL;
+	if (td->o.rate[ddir])
+		bytes_per_sec = td->o.rate[ddir];
+	else
+		bytes_per_sec = td->o.rate_iops[ddir] * bs;
 
-	if (!ios_per_msec) {
+	if (!bytes_per_sec) {
 		log_err("rate lower than supported\n");
 		return -1;
 	}
 
-	td->rate_usec_cycle[ddir] = 1000000000ULL / ios_per_msec;
+	td->rate_nsec_cycle[ddir] = 1000000000ULL / bytes_per_sec;
 	td->rate_pending_usleep[ddir] = 0;
 	return 0;
 }
@@ -992,6 +1017,57 @@ static int set_debug(const char *string)
 }
 #endif
 
+static int load_profile(const char *profile)
+{
+	struct thread_data *td, *td_parent;
+	const char **o;
+	int i, in_global = 1;
+	char jobname[32];
+
+	dprint(FD_PARSE, "loading profile %s\n", profile);
+
+	for (i = 0; i < PROFILE_END; i++) {
+		if (!strcmp(profile, profiles[i]))
+			break;
+	}
+
+	if (i == PROFILE_END) {
+		log_err("fio: unknown profile %s\n", profile);
+		return 1;
+	}
+
+	o = fio_prof_strings[i];
+	if (!o)
+		return 0;
+
+	i = 0;
+	td_parent = td = NULL;
+	while (o[i]) {
+		if (!strncmp(o[i], "name", 4)) {
+			in_global = 0;
+			if (td)
+				add_job(td, jobname, 0);
+			td = NULL;
+			sprintf(jobname, "%s", o[i] + 5);
+		}
+		if (in_global && !td_parent)
+			td_parent = get_new_job(1, &def_thread);
+		else if (!in_global && !td) {
+			if (!td_parent)
+				td_parent = &def_thread;
+			td = get_new_job(0, td_parent);
+		}
+		if (in_global)
+			fio_options_parse(td_parent, (char **) &o[i], 1);
+		else
+			fio_options_parse(td, (char **) &o[i], 1);
+		i++;
+	}
+	if (td)
+		add_job(td, jobname, 0);
+	return 0;
+}
+
 static int parse_cmd_line(int argc, char *argv[])
 {
 	struct thread_data *td = NULL;
@@ -1057,6 +1133,10 @@ static int parse_cmd_line(int argc, char *argv[])
 			if (job_section)
 				free(job_section);
 			job_section = strdup(optarg);
+			break;
+		case 'p':
+			if (load_profile(optarg))
+				do_exit++;
 			break;
 		case FIO_GETOPT_JOB: {
 			const char *opt = l_opts[lidx].name;

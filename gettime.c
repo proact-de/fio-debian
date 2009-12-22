@@ -10,7 +10,7 @@
 
 #include "hash.h"
 
-static int clock_gettime_works;
+static int clock_gettime_works = 0;
 static struct timeval last_tv;
 static int last_tv_valid;
 
@@ -130,7 +130,7 @@ gtod:
 	} else {
 		struct timespec ts;
 
-		if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+		if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
 			clock_gettime_works = 0;
 			goto gtod;
 		}

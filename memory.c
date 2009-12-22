@@ -65,14 +65,18 @@ static int alloc_mem_shm(struct thread_data *td, unsigned int total_mem)
 {
 	int flags = IPC_CREAT | SHM_R | SHM_W;
 
-	if (td->o.mem_type == MEM_SHMHUGE)
+	if (td->o.mem_type == MEM_SHMHUGE) {
+		unsigned long mask = td->o.hugepage_size - 1;
+
 		flags |= SHM_HUGETLB;
+		total_mem = (total_mem + mask) & ~mask;
+	}
 
 	td->shm_id = shmget(IPC_PRIVATE, total_mem, flags);
 	dprint(FD_MEM, "shmget %u, %d\n", total_mem, td->shm_id);
 	if (td->shm_id < 0) {
 		td_verror(td, errno, "shmget");
-		if (geteuid() != 0 && errno == ENOMEM)
+		if (geteuid() != 0 && (errno == ENOMEM || errno == EPERM))
 			log_err("fio: you may need to run this job as root\n");
 		if (td->o.mem_type == MEM_SHMHUGE) {
 			if (errno == EINVAL) {

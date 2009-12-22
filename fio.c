@@ -39,6 +39,7 @@
 #include "smalloc.h"
 #include "verify.h"
 #include "diskutil.h"
+#include "cgroup.h"
 
 unsigned long page_mask;
 unsigned long page_size;
@@ -60,6 +61,8 @@ static volatile int fio_abort;
 static int exit_value;
 static struct itimerval itimer;
 static pthread_t gtod_thread;
+static struct flist_head *cgroup_list;
+static char *cgroup_mnt;
 
 struct io_log *agg_io_log[2];
 
@@ -536,7 +539,8 @@ sync_done:
 		 */
 		full = queue_full(td) || ret == FIO_Q_BUSY;
 		if (full || !td->o.iodepth_batch_complete) {
-			min_events = td->o.iodepth_batch_complete;
+			min_events = min(td->o.iodepth_batch_complete,
+					 td->cur_depth);
 			if (full && !min_events)
 				min_events = 1;
 
@@ -581,7 +585,8 @@ static void do_io(struct thread_data *td)
 	else
 		td_set_runstate(td, TD_RUNNING);
 
-	while ((td->this_io_bytes[0] + td->this_io_bytes[1]) < td->o.size) {
+	while ( (td->o.read_iolog_file && !flist_empty(&td->io_log_list)) ||
+	        ((td->this_io_bytes[0] + td->this_io_bytes[1]) < td->o.size) ) {
 		struct timeval comp_time;
 		unsigned long bytes_done[2] = { 0, 0 };
 		int min_evts = 0;
@@ -687,7 +692,8 @@ sync_done:
 		 */
 		full = queue_full(td) || ret == FIO_Q_BUSY;
 		if (full || !td->o.iodepth_batch_complete) {
-			min_evts = td->o.iodepth_batch_complete;
+			min_evts = min(td->o.iodepth_batch_complete,
+					td->cur_depth);
 			if (full && !min_evts)
 				min_evts = 1;
 
@@ -1035,6 +1041,15 @@ static void *thread_main(void *data)
 	 */
 	fio_mutex_remove(td->mutex);
 
+	if (td->o.uid != -1U && setuid(td->o.uid)) {
+		td_verror(td, errno, "setuid");
+		goto err;
+	}
+	if (td->o.gid != -1U && setgid(td->o.gid)) {
+		td_verror(td, errno, "setgid");
+		goto err;
+	}
+
 	/*
 	 * May alter parameters that init_io_u() will use, so we need to
 	 * do this first.
@@ -1071,6 +1086,9 @@ static void *thread_main(void *data)
 			goto err;
 		}
 	}
+
+	if (td->o.cgroup_weight && cgroup_setup(td, cgroup_list, &cgroup_mnt))
+		goto err;
 
 	if (nice(td->o.nice) == -1) {
 		td_verror(td, errno, "nice");
@@ -1194,18 +1212,20 @@ err:
 	if (td->error)
 		printf("fio: pid=%d, err=%d/%s\n", (int) td->pid, td->error,
 							td->verror);
+
+	if (td->o.verify_async)
+		verify_async_exit(td);
+
 	close_and_free_files(td);
 	close_ioengine(td);
 	cleanup_io_u(td);
+	cgroup_shutdown(td, &cgroup_mnt);
 
 	if (td->o.cpumask_set) {
 		int ret = fio_cpuset_exit(&td->o.cpumask);
 
 		td_verror(td, ret, "fio_cpuset_exit");
 	}
-
-	if (td->o.verify_async)
-		verify_async_exit(td);
 
 	/*
 	 * do this very late, it will log file closing as well
@@ -1648,6 +1668,9 @@ int main(int argc, char *argv[])
 
 	status_timer_arm();
 
+	cgroup_list = smalloc(sizeof(*cgroup_list));
+	INIT_FLIST_HEAD(cgroup_list);
+
 	run_threads();
 
 	if (!fio_abort) {
@@ -1658,6 +1681,11 @@ int main(int argc, char *argv[])
 					"agg-write_bw.log");
 		}
 	}
+
+	cgroup_kill(cgroup_list);
+	sfree(cgroup_list);
+	if (cgroup_mnt)
+		sfree(cgroup_mnt);
 
 	fio_mutex_remove(startup_mutex);
 	fio_mutex_remove(writeout_mutex);
