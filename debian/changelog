@@ -1,4 +1,4 @@
-fio (1.36-1) UNRELEASED; urgency=low
+fio (1.36-1) unstable; urgency=low
 
   * New upstream version.
   * Doesn't build on sh4 / sh4a / sh5 at the moment. Fix is being
