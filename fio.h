@@ -28,6 +28,8 @@
 #include "io_ddir.h"
 #include "ioengine.h"
 #include "iolog.h"
+#include "profiles.h"
+#include "helpers.h"
 
 #ifdef FIO_HAVE_GUASI
 #include <guasi.h>
@@ -62,6 +64,8 @@ enum fio_memtype {
 #define FIO_IO_U_MAP_NR	8
 #define FIO_IO_U_LAT_U_NR 10
 #define FIO_IO_U_LAT_M_NR 12
+
+#define MAX_PATTERN_SIZE 512
 
 struct thread_stat {
 	char *name;
@@ -175,7 +179,7 @@ struct thread_options {
 	unsigned int verifysort;
 	unsigned int verify_interval;
 	unsigned int verify_offset;
-	unsigned int verify_pattern;
+	char verify_pattern[MAX_PATTERN_SIZE];
 	unsigned int verify_pattern_bytes;
 	unsigned int verify_fatal;
 	unsigned int verify_async;
@@ -262,6 +266,20 @@ struct thread_options {
 	 * I/O Error handling
 	 */
 	unsigned int continue_on_error;
+
+	/*
+	 * Benchmark profile type
+	 */
+	unsigned int profile;
+
+	/*
+	 * blkio cgroup support
+	 */
+	char *cgroup;
+	unsigned int cgroup_weight;
+
+	unsigned int uid;
+	unsigned int gid;
 };
 
 #define FIO_VERROR_SIZE	128
@@ -341,7 +359,7 @@ struct thread_data {
 	/*
 	 * Rate state
 	 */
-	unsigned long rate_usec_cycle[2];
+	unsigned long rate_nsec_cycle[2];
 	long rate_pending_usleep[2];
 	unsigned long rate_bytes[2];
 	unsigned long rate_blocks[2];

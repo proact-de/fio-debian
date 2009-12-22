@@ -33,6 +33,26 @@ static char *get_opt_postfix(const char *str)
 	return strdup(p);
 }
 
+static int converthexchartoint(char a)
+{
+	int base;
+
+	switch(a) {
+	case '0'...'9':
+		base = '0';
+		break;
+	case 'A'...'F':
+		base = 'A' - 10;
+		break;
+	case 'a'...'f':
+		base = 'a' - 10;
+		break;
+	default:
+		base = 0;
+	}
+	return (a - base);
+}
+
 static int bs_cmp(const void *p1, const void *p2)
 {
 	const struct bssplit *bsp1 = p1;
@@ -82,7 +102,7 @@ static int bssplit_ddir(struct thread_data *td, int ddir, char *str)
 		} else
 			perc = -1;
 
-		if (str_to_decimal(fname, &val, 1, &td)) {
+		if (str_to_decimal(fname, &val, 1, td)) {
 			log_err("fio: bssplit conversion failed\n");
 			free(td->o.bssplit);
 			return 1;
@@ -356,7 +376,7 @@ static int set_cpus_allowed(struct thread_data *td, os_cpu_mask_t *mask,
 				ret = 1;
 				break;
 			}
-	
+
 			dprint(FD_PARSE, "set cpu allowed %d\n", icpu);
 			fio_cpu_set(mask, icpu);
 			icpu++;
@@ -566,22 +586,45 @@ static int str_verify_offset_cb(void *data, unsigned int *off)
 	return 0;
 }
 
-static int str_verify_pattern_cb(void *data, unsigned int *off)
+static int str_verify_pattern_cb(void *data, const char *input)
 {
 	struct thread_data *td = data;
-	unsigned int msb;
+	long off;
+	int i = 0, j = 0, len, k, base = 10;
+	char* loc1, * loc2;
 
-	msb = __fls(*off);
-	if (msb <= 8)
-		td->o.verify_pattern_bytes = 1;
-	else if (msb <= 16)
-		td->o.verify_pattern_bytes = 2;
-	else if (msb <= 24)
-		td->o.verify_pattern_bytes = 3;
-	else
-		td->o.verify_pattern_bytes = 4;
-
-	td->o.verify_pattern = *off;
+	loc1 = strstr(input, "0x");
+	loc2 = strstr(input, "0X");
+	if (loc1 || loc2)
+		base = 16;
+	off = strtol(input, NULL, base);
+	if (off != LONG_MAX || errno != ERANGE) {
+		while (off) {
+			td->o.verify_pattern[i] = off & 0xff;
+			off >>= 8;
+			i++;
+		}
+	} else {
+		len = strlen(input);
+		k = len - 1;
+		if (base == 16) {
+			if (loc1)
+				j = loc1 - input + 2;
+			else
+				j = loc2 - input + 2;
+		} else
+			return 1;
+		if (len - j < MAX_PATTERN_SIZE * 2) {
+			while (k >= j) {
+				off = converthexchartoint(input[k--]);
+				if (k >= j)
+					off += (converthexchartoint(input[k--])
+						* 16);
+				td->o.verify_pattern[i++] = (char) off;
+			}
+		}
+	}
+	td->o.verify_pattern_bytes = i;
 	return 0;
 }
 
@@ -1263,7 +1306,7 @@ static struct fio_option options[] = {
 	},
 	{
 		.name	= "verify_pattern",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_STR,
 		.cb	= str_verify_pattern_cb,
 		.help	= "Fill pattern for IO buffers",
 		.parent	= "verify",
@@ -1498,7 +1541,7 @@ static struct fio_option options[] = {
 		.help	= "Create files when they are opened for IO",
 		.def	= "0",
 	},
- 	{
+	{
 		.name	= "pre_read",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(pre_read),
@@ -1672,6 +1715,44 @@ static struct fio_option options[] = {
 		.def	= "0",
 	},
 	{
+		.name	= "profile",
+		.type	= FIO_OPT_STR,
+		.off1	= td_var_offset(profile),
+		.posval = {
+			  { .ival = "tiobench",
+			    .oval = PROFILE_TIOBENCH,
+			    .help = "Perform tiobench like test",
+			  },
+		},
+		.help	= "Select a specific builtin performance test",
+	},
+	{
+		.name	= "cgroup",
+		.type	= FIO_OPT_STR_STORE,
+		.off1	= td_var_offset(cgroup),
+		.help	= "Add job to cgroup of this name",
+	},
+	{
+		.name	= "cgroup_weight",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(cgroup_weight),
+		.help	= "Use given weight for cgroup",
+		.minval = 100,
+		.maxval	= 1000,
+	},
+	{
+		.name	= "uid",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(uid),
+		.help	= "Run job with this user ID",
+	},
+	{
+		.name	= "gid",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(gid),
+		.help	= "Run job with this group ID",
+	},
+	{
 		.name = NULL,
 	},
 };
@@ -1745,6 +1826,62 @@ void fio_keywords_init(void)
 	fio_keywords[2].replace = strdup(buf);
 }
 
+#define BC_APP		"bc"
+
+static char *bc_calc(char *str)
+{
+	char *buf, *tmp, opt[80];
+	FILE *f;
+	int ret;
+
+	/*
+	 * No math, just return string
+	 */
+	if (!strchr(str, '+') && !strchr(str, '-') && !strchr(str, '*') &&
+	    !strchr(str, '/'))
+		return str;
+
+	/*
+	 * Split option from value, we only need to calculate the value
+	 */
+	tmp = strchr(str, '=');
+	if (!tmp)
+		return str;
+
+	tmp++;
+	memset(opt, 0, sizeof(opt));
+	strncpy(opt, str, tmp - str);
+
+	buf = malloc(128);
+
+	sprintf(buf, "which %s > /dev/null", BC_APP);
+	if (system(buf)) {
+		log_err("fio: bc is needed for performing math\n");
+		free(buf);
+		return NULL;
+	}
+
+	sprintf(buf, "echo %s | %s", tmp, BC_APP);
+	f = popen(buf, "r");
+	if (!f) {
+		free(buf);
+		return NULL;
+	}
+
+	ret = fread(buf, 1, 128, f);
+	if (ret <= 0) {
+		free(buf);
+		return NULL;
+	}
+
+	buf[ret - 1] = '\0';
+	strcat(opt, buf);
+	strcpy(buf, opt);
+	pclose(f);
+	free(str);
+	return buf;
+}
+
 /*
  * Look for reserved variable names and replace them with real values
  */
@@ -1781,7 +1918,12 @@ static char *fio_keyword_replace(char *opt)
 			 * replace opt and free the old opt
 			 */
 			opt = new;
-			free(o_org);
+			//free(o_org);
+
+			/*
+			 * Check for potential math and invoke bc, if possible
+			 */
+			opt = bc_calc(opt);
 		}
 	}
 

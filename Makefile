@@ -6,7 +6,8 @@ PROGS	= fio
 SCRIPTS = fio_generate_plots
 OBJS = gettime.o fio.o ioengines.o init.o stat.o log.o time.o filesetup.o \
 	eta.o verify.o memory.o io_u.o parse.o mutex.o options.o \
-	rbtree.o diskutil.o fifo.o blktrace.o smalloc.o filehash.o
+	rbtree.o diskutil.o fifo.o blktrace.o smalloc.o filehash.o helpers.o \
+	cgroup.o
 
 OBJS += crc/crc7.o
 OBJS += crc/crc16.o
@@ -39,9 +40,9 @@ endif
 endif
 
 INSTALL = install
-prefix = /usr
+prefix = /usr/local
 bindir = $(prefix)/bin
-mandir = $(prefix)/share/man
+mandir = $(prefix)/man
 
 %.o: %.c
 	$(QUIET_CC)$(CC) -o $*.o -c $(CFLAGS) $<
