@@ -40,7 +40,7 @@ endif
 endif
 
 INSTALL = install
-prefix = /usr/local
+prefix = /usr
 bindir = $(prefix)/bin
 mandir = $(prefix)/man
 
