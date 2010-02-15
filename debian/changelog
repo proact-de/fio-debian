@@ -3,8 +3,9 @@ fio (1.36-1) unstable; urgency=low
   * New upstream version.
   * Doesn't build on sh4 / sh4a / sh5 at the moment. Fix is being
     worked on: See debian bug #561891.
+  * Updated Standards-Version to 3.8.4, no changes.
 
- -- Martin Steigerwald <ms@teamix.de>  Tue, 22 Dec 2009 10:50:22 +0100
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 15 Feb 2010 15:17:22 +0100
 
 fio (1.33.1-2) UNRELEASED; urgency=low
 
