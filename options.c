@@ -14,8 +14,7 @@
 #include "verify.h"
 #include "parse.h"
 #include "lib/fls.h"
-
-#define td_var_offset(var)	((size_t) &((struct thread_options *)0)->var)
+#include "options.h"
 
 /*
  * Check if mmap/mmaphuge has a :/foo/bar/file at the end. If so, return that.
@@ -430,6 +429,22 @@ static int str_fst_cb(void *data, const char *str)
 	return 0;
 }
 
+#ifdef FIO_HAVE_SYNC_FILE_RANGE
+static int str_sfr_cb(void *data, const char *str)
+{
+	struct thread_data *td = data;
+	char *nr = get_opt_postfix(str);
+
+	td->sync_file_range_nr = 1;
+	if (nr) {
+		td->sync_file_range_nr = atoi(nr);
+		free(nr);
+	}
+
+	return 0;
+}
+#endif
+
 static int check_dir(struct thread_data *td, char *fname)
 {
 	char file[PATH_MAX], *dir;
@@ -735,7 +750,7 @@ static int kb_base_verify(struct fio_option *o, void *data)
 /*
  * Map of job/command line options
  */
-static struct fio_option options[] = {
+static struct fio_option options[FIO_MAX_OPTS] = {
 	{
 		.name	= "description",
 		.type	= FIO_OPT_STR_STORE,
@@ -1081,6 +1096,15 @@ static struct fio_option options[] = {
 		},
 		.parent = "nrfiles",
 	},
+#ifdef FIO_HAVE_FALLOCATE
+	{
+		.name	= "fallocate",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(fallocate),
+		.help	= "Use fallocate() when laying out files",
+		.def	= "1",
+	},
+#endif
 	{
 		.name	= "fadvise_hint",
 		.type	= FIO_OPT_BOOL,
@@ -1102,6 +1126,33 @@ static struct fio_option options[] = {
 		.help	= "Issue fdatasync for writes every given number of blocks",
 		.def	= "0",
 	},
+#ifdef FIO_HAVE_SYNC_FILE_RANGE
+	{
+		.name	= "sync_file_range",
+		.posval	= {
+			  { .ival = "wait_before",
+			    .oval = SYNC_FILE_RANGE_WAIT_BEFORE,
+			    .help = "SYNC_FILE_RANGE_WAIT_BEFORE",
+			    .or	  = 1,
+			  },
+			  { .ival = "write",
+			    .oval = SYNC_FILE_RANGE_WRITE,
+			    .help = "SYNC_FILE_RANGE_WRITE",
+			    .or	  = 1,
+			  },
+			  {
+			    .ival = "wait_after",
+			    .oval = SYNC_FILE_RANGE_WAIT_AFTER,
+			    .help = "SYNC_FILE_RANGE_WAIT_AFTER",
+			    .or	  = 1,
+			  },
+		},
+		.type	= FIO_OPT_STR_MULTI,
+		.cb	= str_sfr_cb,
+		.off1	= td_var_offset(sync_file_range),
+		.help	= "Use sync_file_range()",
+	},
+#endif
 	{
 		.name	= "direct",
 		.type	= FIO_OPT_BOOL,
@@ -1716,14 +1767,8 @@ static struct fio_option options[] = {
 	},
 	{
 		.name	= "profile",
-		.type	= FIO_OPT_STR,
+		.type	= FIO_OPT_STR_STORE,
 		.off1	= td_var_offset(profile),
-		.posval = {
-			  { .ival = "tiobench",
-			    .oval = PROFILE_TIOBENCH,
-			    .help = "Perform tiobench like test",
-			  },
-		},
 		.help	= "Select a specific builtin performance test",
 	},
 	{
@@ -1757,6 +1802,16 @@ static struct fio_option options[] = {
 	},
 };
 
+static void add_to_lopt(struct option *lopt, struct fio_option *o)
+{
+	lopt->name = (char *) o->name;
+	lopt->val = FIO_GETOPT_JOB;
+	if (o->type == FIO_OPT_STR_SET)
+		lopt->has_arg = no_argument;
+	else
+		lopt->has_arg = required_argument;
+}
+
 void fio_options_dup_and_init(struct option *long_options)
 {
 	struct fio_option *o;
@@ -1770,12 +1825,7 @@ void fio_options_dup_and_init(struct option *long_options)
 
 	o = &options[0];
 	while (o->name) {
-		long_options[i].name = (char *) o->name;
-		long_options[i].val = FIO_GETOPT_JOB;
-		if (o->type == FIO_OPT_STR_SET)
-			long_options[i].has_arg = no_argument;
-		else
-			long_options[i].has_arg = required_argument;
+		add_to_lopt(&long_options[i], o);
 
 		i++;
 		o++;
@@ -1809,16 +1859,15 @@ static struct fio_keyword fio_keywords[] = {
 
 void fio_keywords_init(void)
 {
-	unsigned long mb_memory;
+	unsigned long long mb_memory;
 	char buf[128];
 	long l;
 
 	sprintf(buf, "%lu", page_size);
 	fio_keywords[0].replace = strdup(buf);
 
-	l = sysconf(_SC_PHYS_PAGES);
-	mb_memory = l * (page_size / 1024UL);
-	sprintf(buf, "%lu", mb_memory);
+	mb_memory = os_phys_mem() / page_size;
+	sprintf(buf, "%llu", mb_memory);
 	fio_keywords[1].replace = strdup(buf);
 
 	l = sysconf(_SC_NPROCESSORS_ONLN);
@@ -2008,4 +2057,72 @@ unsigned int fio_get_kb_base(void *data)
 		kb_base = 1024;
 
 	return kb_base;
+}
+
+int add_option(struct fio_option *o)
+{
+	struct fio_option *__o;
+	int opt_index = 0;
+
+	__o = options;
+	while (__o->name) {
+		opt_index++;
+		__o++;
+	}
+
+	memcpy(&options[opt_index], o, sizeof(*o));
+	return 0;
+}
+
+void invalidate_profile_options(const char *prof_name)
+{
+	struct fio_option *o;
+
+	o = options;
+	while (o->name) {
+		if (o->prof_name && !strcmp(o->prof_name, prof_name)) {
+			o->type = FIO_OPT_INVALID;
+			o->prof_name = NULL;
+		}
+		o++;
+	}
+}
+
+void add_opt_posval(const char *optname, const char *ival, const char *help)
+{
+	struct fio_option *o;
+	unsigned int i;
+
+	o = find_option(options, optname);
+	if (!o)
+		return;
+
+	for (i = 0; i < PARSE_MAX_VP; i++) {
+		if (o->posval[i].ival)
+			continue;
+
+		o->posval[i].ival = ival;
+		o->posval[i].help = help;
+		break;
+	}
+}
+
+void del_opt_posval(const char *optname, const char *ival)
+{
+	struct fio_option *o;
+	unsigned int i;
+
+	o = find_option(options, optname);
+	if (!o)
+		return;
+
+	for (i = 0; i < PARSE_MAX_VP; i++) {
+		if (!o->posval[i].ival)
+			continue;
+		if (strcmp(o->posval[i].ival, ival))
+			continue;
+
+		o->posval[i].ival = NULL;
+		o->posval[i].help = NULL;
+	}
 }

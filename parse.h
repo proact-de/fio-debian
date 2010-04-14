@@ -1,11 +1,15 @@
 #ifndef FIO_PARSE_H
 #define FIO_PARSE_H
 
+#include "flist.h"
+
 /*
  * Option types
  */
 enum fio_opt_type {
-	FIO_OPT_STR = 0,
+	FIO_OPT_INVALID = 0,
+	FIO_OPT_STR,
+	FIO_OPT_STR_MULTI,
 	FIO_OPT_STR_VAL,
 	FIO_OPT_STR_VAL_TIME,
 	FIO_OPT_STR_STORE,
@@ -23,9 +27,10 @@ struct value_pair {
 	const char *ival;		/* string option */
 	unsigned int oval;		/* output value */
 	const char *help;		/* help text for sub option */
+	int or;				/* OR value */
 };
 
-#define OPT_LEN_MAX 	1024
+#define OPT_LEN_MAX 	4096
 #define PARSE_MAX_VP	16
 
 /*
@@ -39,6 +44,7 @@ struct fio_option {
 	unsigned int off2;
 	unsigned int off3;
 	unsigned int off4;
+	void *roff1, *roff2, *roff3, *roff4;
 	unsigned int maxval;		/* max and min value */
 	int minval;
 	int neg;			/* negate value stored */
@@ -46,9 +52,10 @@ struct fio_option {
 	void *cb;			/* callback */
 	const char *help;		/* help text for option */
 	const char *def;		/* default setting */
-	const struct value_pair posval[PARSE_MAX_VP];/* possible values */
+	struct value_pair posval[PARSE_MAX_VP];/* possible values */
 	const char *parent;		/* parent option */
 	int (*verify)(struct fio_option *, void *);
+	const char *prof_name;		/* only valid for specific profile */
 };
 
 typedef int (str_cb_fn)(void *, char *);
@@ -58,6 +65,7 @@ extern void sort_options(char **, struct fio_option *, int);
 extern int parse_cmd_option(const char *t, const char *l, struct fio_option *, void *);
 extern int show_cmd_help(struct fio_option *, const char *);
 extern void fill_default_options(void *, struct fio_option *);
+extern void option_init(struct fio_option *);
 extern void options_init(struct fio_option *);
 
 extern void strip_blank_front(char **);

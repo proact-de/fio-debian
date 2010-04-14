@@ -16,6 +16,7 @@ enum {
 	FD_DISKUTIL,
 	FD_JOB,
 	FD_MUTEX,
+	FD_PROFILE,
 	FD_DEBUG_MAX,
 };
 
@@ -31,23 +32,20 @@ extern struct debug_level debug_levels[];
 
 extern unsigned long fio_debug;
 
-#define dprint(type, str, args...)				\
-	do {							\
-		pid_t pid = getpid();				\
-		assert(type < FD_DEBUG_MAX);			\
-		if ((((1 << type)) & fio_debug) == 0)		\
-			break;					\
-		if (fio_debug_jobp && *fio_debug_jobp != -1U	\
-		    && pid != *fio_debug_jobp)			\
-			break;					\
-		log_info("%-8s ", debug_levels[(type)].name);	\
-		log_info("%-5u ", (int) pid);			\
-		log_info(str, ##args);				\
-	} while (0)
+void __dprint(int type, const char *str, ...);
+
+#define dprint(type, str, args...)			\
+	do {						\
+		if ((((1 << type)) & fio_debug) == 0)	\
+			break;				\
+		__dprint((type), (str), ##args);	\
+	} while (0)					\
 
 #else
 
-#define dprint(type, str, args...)
+static inline void dprint(int type, const char *str, ...)
+{
+}
 #endif
 
 #endif

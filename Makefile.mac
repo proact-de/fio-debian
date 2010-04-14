@@ -1,7 +1,7 @@
 CC	= gcc
 DEBUGFLAGS = -D_FORTIFY_SOURCE=2 -DFIO_INC_DEBUG
 OPTFLAGS= -O2 -g $(EXTFLAGS)
-CFLAGS	= -Wwrite-strings -Wall -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 $(OPTFLAGS) $(DEBUGFLAGS) -rdynamic
+CFLAGS	= -Wwrite-strings -Wall -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 $(OPTFLAGS) $(DEBUGFLAGS) -rdynamic -arch i386 -arch x86_64 -arch ppc
 PROGS	= fio
 SCRIPTS = fio_generate_plots
 OBJS = gettime.o fio.o ioengines.o init.o stat.o log.o time.o filesetup.o \
@@ -30,8 +30,7 @@ SOURCE = eta.c filehash.c filesetup.c fio.c gettime.c init.c ioengines.c \
 	 io_u.c log.c memory.c mutex.c options.c parse.c rbtree.c smalloc.c \
 	 stat.c parse.c crc/*.c engines/cpu.c engines/mmap.c \
 	 engines/posixaio.c engines/sync.c engines/null.c engines/net.c \
-	 *.h arch/*.h compiler/*.h crc/*.h lib/*.h \
-	 os/indirect.h os/kcompat.h os/os-freebsd.h os/os.h os/syslet.h
+	 *.h */*.h
 
 ifneq ($(findstring $(MAKEFLAGS),s),s)
 ifndef V

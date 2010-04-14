@@ -1,17 +1,26 @@
-#ifndef FIO_OS_FREEBSD_H
-#define FIO_OS_FREEBSD_H
+#ifndef FIO_OS_APPLE_H
+#define FIO_OS_APPLE_H
 
 #include <errno.h>
 #include <sys/sysctl.h>
 
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
+
+#ifndef CLOCK_REALTIME
+#define CLOCK_REALTIME 1
+#endif
+
 #define FIO_HAVE_POSIXAIO
-#define FIO_HAVE_ODIRECT
 #define FIO_USE_GENERIC_BDEV_SIZE
 #define FIO_USE_GENERIC_RAND
 
 #define OS_MAP_ANON		MAP_ANON
 
 typedef unsigned long os_cpu_mask_t;
+typedef unsigned int clockid_t;
+typedef off_t off64_t;
 
 static inline int blockdev_invalidate_cache(int fd)
 {
@@ -27,9 +36,4 @@ static inline unsigned long long os_phys_mem(void)
 	sysctl(mib, 2, &mem, &len, NULL, 0);
 	return mem;
 }
-
-#ifdef MADV_FREE
-#define FIO_MADV_FREE	MADV_FREE
-#endif
-
 #endif

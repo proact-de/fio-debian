@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sched.h>
 #include <linux/unistd.h>
 #include <linux/raw.h>
 #include <linux/major.h>
@@ -32,6 +33,8 @@
 #define FIO_HAVE_PSHARED_MUTEX
 #define FIO_HAVE_CL_SIZE
 #define FIO_HAVE_CGROUPS
+#define FIO_HAVE_FDATASYNC
+#define FIO_HAVE_SYNC_FILE_RANGE
 
 #define OS_MAP_ANON		MAP_ANONYMOUS
 

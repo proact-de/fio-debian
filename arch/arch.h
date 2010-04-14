@@ -17,13 +17,17 @@ enum {
 	arch_sparc,
 	arch_sparc64,
 	arch_arm,
+	arch_sh,
+	arch_hppa,
+
+	arch_generic,
 };
 
 #if defined(__i386__)
 #include "arch-x86.h"
 #elif defined(__x86_64__)
 #include "arch-x86_64.h"
-#elif defined(__powerpc__) || defined(__powerpc64__)
+#elif defined(__powerpc__) || defined(__powerpc64__) || defined(__ppc__)
 #include "arch-ppc.h"
 #elif defined(__ia64__)
 #include "arch-ia64.h"
@@ -39,8 +43,13 @@ enum {
 #include "arch-arm.h"
 #elif defined(__mips__) || defined(__mips64__)
 #include "arch-mips.h"
+#elif defined(__sh__)
+#include "arch-sh.h"
+#elif defined(__hppa__)
+#include "arch-hppa.h"
 #else
-#error "Unsupported arch"
+#warning "Unknown architecture, attempting to use generic model."
+#include "arch-generic.h"
 #endif
 
 #ifdef ARCH_HAVE_FFZ

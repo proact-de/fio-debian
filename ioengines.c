@@ -207,6 +207,9 @@ int td_io_getevents(struct thread_data *td, unsigned int min, unsigned int max,
 out:
 	if (r >= 0)
 		io_u_mark_complete(td, r);
+	else
+		td_verror(td, r, "get_events");
+
 	dprint(FD_IO, "getevents: %d\n", r);
 	return r;
 }
@@ -314,6 +317,8 @@ int td_io_init(struct thread_data *td)
 
 int td_io_commit(struct thread_data *td)
 {
+	int ret;
+
 	dprint(FD_IO, "calling ->commit(), depth %d\n", td->cur_depth);
 
 	if (!td->cur_depth || !td->io_u_queued)
@@ -322,8 +327,11 @@ int td_io_commit(struct thread_data *td)
 	io_u_mark_depth(td, td->io_u_queued);
 	td->io_u_queued = 0;
 
-	if (td->io_ops->commit)
-		return td->io_ops->commit(td);
+	if (td->io_ops->commit) {
+		ret = td->io_ops->commit(td);
+		if (ret)
+			td_verror(td, -ret, "io commit");
+	}
 
 	return 0;
 }
@@ -430,4 +438,43 @@ int td_io_get_file_size(struct thread_data *td, struct fio_file *f)
 		return 0;
 
 	return td->io_ops->get_file_size(td, f);
+}
+
+static int do_sync_file_range(struct thread_data *td, struct fio_file *f)
+{
+	off64_t offset, nbytes;
+
+	offset = f->first_write;
+	nbytes = f->last_write - f->first_write;
+
+	if (!nbytes)
+		return 0;
+
+	return sync_file_range(f->fd, offset, nbytes, td->o.sync_file_range);
+}
+
+int do_io_u_sync(struct thread_data *td, struct io_u *io_u)
+{
+	int ret;
+
+	if (io_u->ddir == DDIR_SYNC) {
+		ret = fsync(io_u->file->fd);
+	} else if (io_u->ddir == DDIR_DATASYNC) {
+#ifdef FIO_HAVE_FDATASYNC
+		ret = fdatasync(io_u->file->fd);
+#else
+		ret = io_u->xfer_buflen;
+		io_u->error = EINVAL;
+#endif
+	} else if (io_u->ddir == DDIR_SYNC_FILE_RANGE)
+		ret = do_sync_file_range(td, io_u->file);
+	else {
+		ret = io_u->xfer_buflen;
+		io_u->error = EINVAL;
+	}
+
+	if (ret < 0)
+		io_u->error = errno;
+
+	return ret;
 }
