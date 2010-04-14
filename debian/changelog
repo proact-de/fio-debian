@@ -1,3 +1,9 @@
+fio (1.38-1) unstable; urgency=low
+
+  * New Upstream Version.
+
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 14 Apr 2010 15:38:14 +0200
+
 fio (1.36-1) unstable; urgency=low
 
   * New upstream version.
