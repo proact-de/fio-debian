@@ -40,6 +40,7 @@
 #include "verify.h"
 #include "diskutil.h"
 #include "cgroup.h"
+#include "profile.h"
 
 unsigned long page_mask;
 unsigned long page_size;
@@ -134,7 +135,7 @@ static void sig_quit(int sig)
 static void sig_int(int sig)
 {
 	if (threads) {
-		printf("\nfio: terminating on signal %d\n", sig);
+		log_info("\nfio: terminating on signal %d\n", sig);
 		fflush(stdout);
 		terminate_threads(TERMINATE_ALL);
 	}
@@ -432,6 +433,8 @@ static void do_verify(struct thread_data *td)
 	int ret, min_events;
 	unsigned int i;
 
+	dprint(FD_VERIFY, "starting loop\n");
+
 	/*
 	 * sync io first and invalidate cache, to make sure we really
 	 * read from disk.
@@ -569,6 +572,8 @@ sync_done:
 		cleanup_pending_aio(td);
 
 	td_set_runstate(td, TD_RUNNING);
+
+	dprint(FD_VERIFY, "exiting loop\n");
 }
 
 /*
@@ -1210,7 +1215,7 @@ static void *thread_main(void *data)
 
 err:
 	if (td->error)
-		printf("fio: pid=%d, err=%d/%s\n", (int) td->pid, td->error,
+		log_info("fio: pid=%d, err=%d/%s\n", (int) td->pid, td->error,
 							td->verror);
 
 	if (td->o.verify_async)
@@ -1412,17 +1417,17 @@ static void run_threads(void)
 		return;
 
 	if (!terse_output) {
-		printf("Starting ");
+		log_info("Starting ");
 		if (nr_thread)
-			printf("%d thread%s", nr_thread,
+			log_info("%d thread%s", nr_thread,
 						nr_thread > 1 ? "s" : "");
 		if (nr_process) {
 			if (nr_thread)
 				printf(" and ");
-			printf("%d process%s", nr_process,
+			log_info("%d process%s", nr_process,
 						nr_process > 1 ? "es" : "");
 		}
-		printf("\n");
+		log_info("\n");
 		fflush(stdout);
 	}
 
@@ -1651,6 +1656,9 @@ int main(int argc, char *argv[])
 	fio_keywords_init();
 
 	if (parse_options(argc, argv))
+		return 1;
+
+	if (exec_profile && load_profile(exec_profile))
 		return 1;
 
 	if (!thread_number)

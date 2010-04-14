@@ -2,6 +2,7 @@
 #define FIO_OS_SOLARIS_H
 
 #include <errno.h>
+#include <malloc.h>
 #include <sys/types.h>
 #include <sys/fcntl.h>
 #include <sys/pset.h>
@@ -13,6 +14,7 @@
 #define FIO_HAVE_CPU_AFFINITY
 #define FIO_HAVE_PSHARED_MUTEX
 #define FIO_USE_GENERIC_BDEV_SIZE
+#define FIO_HAVE_FDATASYNC
 
 #define OS_MAP_ANON		MAP_ANON
 #define OS_RAND_MAX		2147483648UL

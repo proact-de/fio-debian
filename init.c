@@ -19,8 +19,9 @@
 #include "smalloc.h"
 #include "filehash.h"
 #include "verify.h"
+#include "profile.h"
 
-static char fio_version_string[] = "fio 1.36";
+static char fio_version_string[] = "fio 1.38";
 
 #define FIO_RANDSEED		(0xb1899bedUL)
 
@@ -38,6 +39,7 @@ unsigned long long mlock_size = 0;
 FILE *f_out = NULL;
 FILE *f_err = NULL;
 char *job_section = NULL;
+char *exec_profile = NULL;
 
 int write_bw_log = 0;
 int read_only = 0;
@@ -136,26 +138,6 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 	},
 };
 
-static const char *tiobench_opts[] = {
-	"buffered=0", "size=4*1024*$mb_memory", "bs=4k", "timeout=600",
-	"numjobs=4", "group_reporting", "thread", "overwrite=1",
-	"filename=.fio.tio.1:.fio.tio.2:.fio.tio.3:.fio.tio.4",
-	"name=seqwrite", "rw=write", "end_fsync=1",
-	"name=randwrite", "stonewall", "rw=randwrite", "end_fsync=1",
-	"name=seqread", "stonewall", "rw=read",
-	"name=randread", "stonewall", "rw=randread", NULL,
-};
-
-static const char **fio_prof_strings[PROFILE_END] = {
-	NULL,
-	tiobench_opts,
-};
-
-static const char *profiles[PROFILE_END] = {
-	"none",
-	"tiobench",
-};
-
 FILE *get_f_out()
 {
 	return f_out;
@@ -186,6 +168,8 @@ static struct thread_data *get_new_job(int global, struct thread_data *parent)
 	dup_files(td, parent);
 	options_mem_dupe(td);
 
+	profile_add_hooks(td);
+
 	td->thread_number = thread_number;
 	return td;
 }
@@ -194,6 +178,8 @@ static void put_job(struct thread_data *td)
 {
 	if (td == &def_thread)
 		return;
+	
+	profile_td_exit(td);
 
 	if (td->error)
 		log_info("fio: %s\n", td->verror);
@@ -250,11 +236,11 @@ static int fixup_options(struct thread_data *td)
 	struct thread_options *o = &td->o;
 
 #ifndef FIO_HAVE_PSHARED_MUTEX
-	if (!td->o.use_thread) {
+	if (!o->use_thread) {
 		log_info("fio: this platform does not support process shared"
 			 " mutexes, forcing use of threads. Use the 'thread'"
 			 " option to get rid of this warning.\n");
-		td->o.use_thread = 1;
+		o->use_thread = 1;
 	}
 #endif
 
@@ -297,9 +283,9 @@ static int fixup_options(struct thread_data *td)
 
 	if ((o->ba[DDIR_READ] != o->min_bs[DDIR_READ] ||
 	    o->ba[DDIR_WRITE] != o->min_bs[DDIR_WRITE]) &&
-	    !td->o.norandommap) {
+	    !o->norandommap) {
 		log_err("fio: Any use of blockalign= turns off randommap\n");
-		td->o.norandommap = 1;
+		o->norandommap = 1;
 	}
 
 	if (!o->file_size_high)
@@ -368,19 +354,34 @@ static int fixup_options(struct thread_data *td)
 	if (o->fill_device && !o->size)
 		o->size = -1ULL;
 
-	if (td_rw(td) && td->o.verify != VERIFY_NONE)
+	if (td_rw(td) && o->verify != VERIFY_NONE)
 		log_info("fio: mixed read/write workload with verify. May not "
 		 "work as expected, unless you pre-populated the file\n");
 
-	if (td->o.verify != VERIFY_NONE)
-		td->o.refill_buffers = 1;
+	if (o->verify != VERIFY_NONE) {
+		o->refill_buffers = 1;
+		if (o->max_bs[DDIR_WRITE] != o->min_bs[DDIR_WRITE] &&
+		    !o->verify_interval)
+			o->verify_interval = o->min_bs[DDIR_WRITE];
+	}
 
-	if (td->o.pre_read) {
-		td->o.invalidate_cache = 0;
+	if (o->pre_read) {
+		o->invalidate_cache = 0;
 		if (td->io_ops->flags & FIO_PIPEIO)
 			log_info("fio: cannot pre-read files with an IO engine"
 				 " that isn't seekable. Pre-read disabled.\n");
 	}
+
+#ifndef FIO_HAVE_FDATASYNC
+	if (o->fdatasync_blocks) {
+		log_info("fio: this platform does not support fdatasync()"
+			 " falling back to using fsync().  Use the 'fsync'"
+			 " option instead of 'fdatasync' to get rid of"
+			 " this warning\n");
+		o->fsync_blocks = o->fdatasync_blocks;
+		o->fdatasync_blocks = 0;
+	}
+#endif
 
 	return 0;
 }
@@ -506,6 +507,9 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num)
 		put_job(td);
 		return 0;
 	}
+
+	if (profile_td_init(td))
+		return 1;
 
 	engine = get_engine_name(td->o.ioengine);
 	td->io_ops = load_ioengine(td, engine);
@@ -642,6 +646,43 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num)
 err:
 	put_job(td);
 	return -1;
+}
+
+/*
+ * Parse as if 'o' was a command line
+ */
+void add_job_opts(const char **o)
+{
+	struct thread_data *td, *td_parent;
+	int i, in_global = 1;
+	char jobname[32];
+
+	i = 0;
+	td_parent = td = NULL;
+	while (o[i]) {
+		if (!strncmp(o[i], "name", 4)) {
+			in_global = 0;
+			if (td)
+				add_job(td, jobname, 0);
+			td = NULL;
+			sprintf(jobname, "%s", o[i] + 5);
+		}
+		if (in_global && !td_parent)
+			td_parent = get_new_job(1, &def_thread);
+		else if (!in_global && !td) {
+			if (!td_parent)
+				td_parent = &def_thread;
+			td = get_new_job(0, td_parent);
+		}
+		if (in_global)
+			fio_options_parse(td_parent, (char **) &o[i], 1);
+		else
+			fio_options_parse(td, (char **) &o[i], 1);
+		i++;
+	}
+
+	if (td)
+		add_job(td, jobname, 0);
 }
 
 static int skip_this_section(const char *name)
@@ -950,6 +991,7 @@ struct debug_level debug_levels[] = {
 	{ .name = "diskutil",	.shift = FD_DISKUTIL },
 	{ .name = "job",	.shift = FD_JOB },
 	{ .name = "mutex",	.shift = FD_MUTEX },
+	{ .name	= "profile",	.shift = FD_PROFILE },
 	{ .name = NULL, },
 };
 
@@ -1016,57 +1058,6 @@ static int set_debug(const char *string)
 	return 1;
 }
 #endif
-
-static int load_profile(const char *profile)
-{
-	struct thread_data *td, *td_parent;
-	const char **o;
-	int i, in_global = 1;
-	char jobname[32];
-
-	dprint(FD_PARSE, "loading profile %s\n", profile);
-
-	for (i = 0; i < PROFILE_END; i++) {
-		if (!strcmp(profile, profiles[i]))
-			break;
-	}
-
-	if (i == PROFILE_END) {
-		log_err("fio: unknown profile %s\n", profile);
-		return 1;
-	}
-
-	o = fio_prof_strings[i];
-	if (!o)
-		return 0;
-
-	i = 0;
-	td_parent = td = NULL;
-	while (o[i]) {
-		if (!strncmp(o[i], "name", 4)) {
-			in_global = 0;
-			if (td)
-				add_job(td, jobname, 0);
-			td = NULL;
-			sprintf(jobname, "%s", o[i] + 5);
-		}
-		if (in_global && !td_parent)
-			td_parent = get_new_job(1, &def_thread);
-		else if (!in_global && !td) {
-			if (!td_parent)
-				td_parent = &def_thread;
-			td = get_new_job(0, td_parent);
-		}
-		if (in_global)
-			fio_options_parse(td_parent, (char **) &o[i], 1);
-		else
-			fio_options_parse(td, (char **) &o[i], 1);
-		i++;
-	}
-	if (td)
-		add_job(td, jobname, 0);
-	return 0;
-}
 
 static int parse_cmd_line(int argc, char *argv[])
 {
@@ -1135,8 +1126,7 @@ static int parse_cmd_line(int argc, char *argv[])
 			job_section = strdup(optarg);
 			break;
 		case 'p':
-			if (load_profile(optarg))
-				do_exit++;
+			exec_profile = strdup(optarg);
 			break;
 		case FIO_GETOPT_JOB: {
 			const char *opt = l_opts[lidx].name;
@@ -1224,6 +1214,8 @@ int parse_options(int argc, char *argv[])
 
 	if (!thread_number) {
 		if (dump_cmdline)
+			return 0;
+		if (exec_profile)
 			return 0;
 
 		log_err("No jobs defined(s)\n\n");

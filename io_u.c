@@ -187,7 +187,7 @@ static int get_next_rand_offset(struct thread_data *td, struct fio_file *f,
  * until we find a free one. For sequential io, just return the end of
  * the last io issued.
  */
-static int get_next_offset(struct thread_data *td, struct io_u *io_u)
+static int __get_next_offset(struct thread_data *td, struct io_u *io_u)
 {
 	struct fio_file *f = io_u->file;
 	unsigned long long b;
@@ -231,7 +231,17 @@ static int get_next_offset(struct thread_data *td, struct io_u *io_u)
 	return 0;
 }
 
-static unsigned int get_next_buflen(struct thread_data *td, struct io_u *io_u)
+static int get_next_offset(struct thread_data *td, struct io_u *io_u)
+{
+	struct prof_io_ops *ops = &td->prof_io_ops;
+
+	if (ops->fill_io_u_off)
+		return ops->fill_io_u_off(td, io_u);
+
+	return __get_next_offset(td, io_u);
+}
+
+static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u)
 {
 	const int ddir = io_u->ddir;
 	unsigned int uninitialized_var(buflen);
@@ -274,6 +284,16 @@ static unsigned int get_next_buflen(struct thread_data *td, struct io_u *io_u)
 	}
 
 	return buflen;
+}
+
+static unsigned int get_next_buflen(struct thread_data *td, struct io_u *io_u)
+{
+	struct prof_io_ops *ops = &td->prof_io_ops;
+
+	if (ops->fill_io_u_size)
+		return ops->fill_io_u_size(td, io_u);
+
+	return __get_next_buflen(td, io_u);
 }
 
 static void set_rwmix_bytes(struct thread_data *td)
@@ -373,6 +393,14 @@ static enum fio_ddir get_rw_ddir(struct thread_data *td)
 	   !(td->io_issues[DDIR_WRITE] % td->o.fdatasync_blocks) &&
 	     td->io_issues[DDIR_WRITE] && should_fsync(td))
 		return DDIR_DATASYNC;
+
+	/*
+	 * see if it's time to sync_file_range
+	 */
+	if (td->sync_file_range_nr &&
+	   !(td->io_issues[DDIR_WRITE] % td->sync_file_range_nr) &&
+	     td->io_issues[DDIR_WRITE] && should_fsync(td))
+		return DDIR_SYNC_FILE_RANGE;
 
 	if (td_rw(td)) {
 		/*
@@ -769,7 +797,7 @@ static struct fio_file *get_next_file_rr(struct thread_data *td, int goodf,
 	return f;
 }
 
-static struct fio_file *get_next_file(struct thread_data *td)
+static struct fio_file *__get_next_file(struct thread_data *td)
 {
 	struct fio_file *f;
 
@@ -802,6 +830,16 @@ static struct fio_file *get_next_file(struct thread_data *td)
 out:
 	dprint(FD_FILE, "get_next_file: %p [%s]\n", f, f->file_name);
 	return f;
+}
+
+static struct fio_file *get_next_file(struct thread_data *td)
+{
+	struct prof_io_ops *ops = &td->prof_io_ops;
+
+	if (ops->get_next_file)
+		return ops->get_next_file(td);
+
+	return __get_next_file(td);
 }
 
 static int set_io_u_file(struct thread_data *td, struct io_u *io_u)
@@ -850,14 +888,6 @@ again:
 		io_u->end_io = NULL;
 	}
 
-	/*
-	 * We ran out, wait for async verify threads to finish and return one
-	 */
-	if (!io_u && td->o.verify_async) {
-		pthread_cond_wait(&td->free_cond, &td->io_u_lock);
-		goto again;
-	}
-
 	if (io_u) {
 		assert(io_u->flags & IO_U_F_FREE);
 		io_u->flags &= ~(IO_U_F_FREE | IO_U_F_FREE_DEF);
@@ -867,6 +897,13 @@ again:
 		flist_add(&io_u->list, &td->io_u_busylist);
 		td->cur_depth++;
 		io_u->flags |= IO_U_F_IN_CUR_DEPTH;
+	} else if (td->o.verify_async) {
+		/*
+		 * We ran out, wait for async verify threads to finish and
+		 * return one
+		 */
+		pthread_cond_wait(&td->free_cond, &td->io_u_lock);
+		goto again;
 	}
 
 	td_io_u_unlock(td);
@@ -966,6 +1003,7 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 	 * initialized, silence that warning.
 	 */
 	unsigned long uninitialized_var(usec);
+	struct fio_file *f;
 
 	dprint_io_u(io_u, "io complete");
 
@@ -976,6 +1014,11 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 
 	if (ddir_sync(io_u->ddir)) {
 		td->last_was_sync = 1;
+		f = io_u->file;
+		if (f) {
+			f->first_write = -1ULL;
+			f->last_write = -1ULL;
+		}
 		return;
 	}
 
@@ -990,6 +1033,18 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 		td->io_blocks[idx]++;
 		td->io_bytes[idx] += bytes;
 		td->this_io_bytes[idx] += bytes;
+
+		if (idx == DDIR_WRITE) {
+			f = io_u->file;
+			if (f) {
+				if (f->first_write == -1ULL ||
+				    io_u->offset < f->first_write)
+					f->first_write = io_u->offset;
+				if (f->last_write == -1ULL ||
+				    ((io_u->offset + bytes) > f->last_write))
+					f->last_write = io_u->offset + bytes;
+			}
+		}
 
 		if (ramp_time_over(td)) {
 			unsigned long uninitialized_var(lusec);

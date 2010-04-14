@@ -1,13 +1,12 @@
 CC	= gcc
 DEBUGFLAGS = -D_FORTIFY_SOURCE=2 -DFIO_INC_DEBUG
 OPTFLAGS= -O2 -g $(EXTFLAGS)
-CFLAGS	= -Wwrite-strings -Wall -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 $(OPTFLAGS) $(DEBUGFLAGS) -fno-omit-frame-pointer -rdynamic
+CFLAGS	= -Wwrite-strings -Wall -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 $(OPTFLAGS) $(DEBUGFLAGS) -rdynamic -arch i386 -arch x86_64 -arch ppc
 PROGS	= fio
 SCRIPTS = fio_generate_plots
 OBJS = gettime.o fio.o ioengines.o init.o stat.o log.o time.o filesetup.o \
 	eta.o verify.o memory.o io_u.o parse.o mutex.o options.o \
-	rbtree.o diskutil.o fifo.o blktrace.o smalloc.o filehash.o helpers.o \
-	cgroup.o profile.o debug.o
+	rbtree.o smalloc.o filehash.o helpers.o profile.o debug.o
 
 OBJS += crc/crc7.o
 OBJS += crc/crc16.o
@@ -21,18 +20,17 @@ OBJS += crc/sha512.o
 OBJS += crc/md5.o
 
 OBJS += engines/cpu.o
-OBJS += engines/libaio.o
 OBJS += engines/mmap.o
 OBJS += engines/posixaio.o
-OBJS += engines/sg.o
-OBJS += engines/splice.o
 OBJS += engines/sync.o
 OBJS += engines/null.o
 OBJS += engines/net.o
-OBJS += engines/syslet-rw.o
-OBJS += engines/guasi.o
 
-OBJS += profiles/tiobench.o
+SOURCE = eta.c filehash.c filesetup.c fio.c gettime.c init.c ioengines.c \
+	 io_u.c log.c memory.c mutex.c options.c parse.c rbtree.c smalloc.c \
+	 stat.c parse.c crc/*.c engines/cpu.c engines/mmap.c \
+	 engines/posixaio.c engines/sync.c engines/null.c engines/net.c \
+	 *.h */*.h
 
 ifneq ($(findstring $(MAKEFLAGS),s),s)
 ifndef V
@@ -49,10 +47,10 @@ mandir = $(prefix)/man
 %.o: %.c
 	$(QUIET_CC)$(CC) -o $*.o -c $(CFLAGS) $<
 fio: $(OBJS)
-	$(QUIET_CC)$(CC) $(CFLAGS) -o $@ $(filter %.o,$^) $(EXTLIBS) -lpthread -lm -ldl -laio -lrt
+	$(QUIET_CC)$(CC) $(CFLAGS) -o $@ $(filter %.o,$^) $(EXTLIBS) -lpthread -lm
 
 depend:
-	$(QUIET_DEP)$(CC) -MM $(ALL_CFLAGS) *.c engines/*.c crc/*.c 1> .depend
+	$(QUIET_DEP)$(CC) -MM $(ALL_CFLAGS) $(SOURCE) 1> .depend
 
 $(PROGS): depend
 

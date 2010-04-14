@@ -28,8 +28,9 @@
 #include "io_ddir.h"
 #include "ioengine.h"
 #include "iolog.h"
-#include "profiles.h"
 #include "helpers.h"
+#include "options.h"
+#include "profile.h"
 
 #ifdef FIO_HAVE_GUASI
 #include <guasi.h>
@@ -227,6 +228,7 @@ struct thread_options {
 	unsigned int file_service_type;
 	unsigned int group_reporting;
 	unsigned int fadvise_hint;
+	unsigned int fallocate;
 	unsigned int zero_buffers;
 	unsigned int refill_buffers;
 	unsigned int time_based;
@@ -270,7 +272,7 @@ struct thread_options {
 	/*
 	 * Benchmark profile type
 	 */
-	unsigned int profile;
+	char *profile;
 
 	/*
 	 * blkio cgroup support
@@ -280,6 +282,8 @@ struct thread_options {
 
 	unsigned int uid;
 	unsigned int gid;
+
+	unsigned int sync_file_range;
 };
 
 #define FIO_VERROR_SIZE	128
@@ -415,6 +419,8 @@ struct thread_data {
 	unsigned int file_service_left;
 	struct fio_file *file_service_file;
 
+	unsigned int sync_file_range_nr;
+
 	/*
 	 * For generating file sizes
 	 */
@@ -425,6 +431,12 @@ struct thread_data {
 	 */
 	unsigned int total_err_count;
 	int first_error;
+
+	/*
+	 * Can be overloaded by profiles
+	 */
+	struct prof_io_ops prof_io_ops;
+	void *prof_data;
 };
 
 /*
@@ -537,8 +549,9 @@ extern void fio_options_dup_and_init(struct option *);
 extern void options_mem_dupe(struct thread_data *);
 extern void options_mem_free(struct thread_data *);
 extern void td_fill_rand_seeds(struct thread_data *);
+extern void add_job_opts(const char **);
 #define FIO_GETOPT_JOB		0x89988998
-#define FIO_NR_OPTIONS		128
+#define FIO_NR_OPTIONS		(FIO_MAX_OPTS + 128)
 
 /*
  * ETA/status stuff

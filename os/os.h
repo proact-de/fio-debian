@@ -1,12 +1,17 @@
 #ifndef FIO_OS_H
 #define FIO_OS_H
 
+#include <sys/types.h>
+#include <unistd.h>
+
 #if defined(__linux__)
 #include "os-linux.h"
 #elif defined(__FreeBSD__)
 #include "os-freebsd.h"
 #elif defined(__sun__)
 #include "os-solaris.h"
+#elif defined(__APPLE__)
+#include "os-mac.h"
 #else
 #error "unsupported os"
 #endif
@@ -109,13 +114,33 @@ static inline int os_cache_line_size(void)
 #ifdef FIO_USE_GENERIC_BDEV_SIZE
 static inline int blockdev_size(int fd, unsigned long long *bytes)
 {
-	off_t end = lseek(fd, 0, SEEK_END);
+	off_t end;
 
+	*bytes = 0;
+
+	end = lseek(fd, 0, SEEK_END);
 	if (end < 0)
 		return errno;
 
 	*bytes = end;
 	return 0;
+}
+#endif
+
+#ifdef FIO_USE_GENERIC_RAND
+typedef unsigned int os_random_state_t;
+
+static inline void os_random_seed(unsigned long seed, os_random_state_t *rs)
+{
+	srand(seed);
+}
+
+static inline long os_random_long(os_random_state_t *rs)
+{
+	long val;
+
+	val = rand_r(rs);
+	return val;
 }
 #endif
 
