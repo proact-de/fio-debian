@@ -1,7 +1,7 @@
 fio (1.38-1) unstable; urgency=low
 
   * New Upstream Version:
-    * Should build on ARMv7 now, thanks Jamie Bennett (Closes #573027).
+    * Should build on ARMv7 now, thanks Jamie Bennett (Closes: #573027).
 
  -- Martin Steigerwald <ms@teamix.de>  Wed, 14 Apr 2010 18:23:14 +0200
 
