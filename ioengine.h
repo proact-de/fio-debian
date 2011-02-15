@@ -1,13 +1,16 @@
 #ifndef FIO_IOENGINE_H
 #define FIO_IOENGINE_H
 
-#define FIO_IOOPS_VERSION	11
+#define FIO_IOOPS_VERSION	12
 
 enum {
 	IO_U_F_FREE		= 1 << 0,
 	IO_U_F_FLIGHT		= 1 << 1,
 	IO_U_F_FREE_DEF		= 1 << 2,
 	IO_U_F_IN_CUR_DEPTH	= 1 << 3,
+	IO_U_F_BUSY_OK		= 1 << 4,
+	IO_U_F_TRIMMED		= 1 << 5,
+	IO_U_F_BARRIER		= 1 << 6,
 };
 
 /*
@@ -30,6 +33,9 @@ struct io_u {
 #ifdef FIO_HAVE_SOLARISAIO
 		aio_result_t resultp;
 #endif
+#ifdef FIO_HAVE_BINJECT
+		struct b_user_cmd buc;
+#endif
 		void *mmap_data;
 	};
 	struct timeval start_time;
@@ -43,11 +49,22 @@ struct io_u {
 	unsigned long long offset;
 
 	/*
+	 * Initial seed for generating the buffer contents
+	 */
+	unsigned long rand_seed;
+
+	/*
 	 * IO engine state, may be different from above when we get
 	 * partial transfers / residual data counts
 	 */
 	void *xfer_buf;
 	unsigned long xfer_buflen;
+
+	/*
+	 * Parameter related to pre-filled buffers and
+	 * their size to handle variable block sizes.
+	 */
+	unsigned long buf_filled_len;
 
 	unsigned int resid;
 	unsigned int error;
@@ -113,8 +130,10 @@ enum fio_ioengine_flags {
 	FIO_NODISKUTIL  = 1 << 4,       /* diskutil can't handle filename */
 	FIO_UNIDIR	= 1 << 5,	/* engine is uni-directional */
 	FIO_NOIO	= 1 << 6,	/* thread does only pseudo IO */
-	FIO_SIGQUIT	= 1 << 7,	/* needs SIGQUIT to exit */
+	FIO_SIGTERM	= 1 << 7,	/* needs SIGTERM to exit */
 	FIO_PIPEIO	= 1 << 8,	/* input/output no seekable */
+	FIO_BARRIER	= 1 << 9,	/* engine supports barriers */
+	FIO_MEMALIGN	= 1 << 10,	/* engine wants aligned memory */
 };
 
 /*
@@ -154,6 +173,7 @@ void io_u_mark_complete(struct thread_data *, unsigned int);
 void io_u_mark_submit(struct thread_data *, unsigned int);
 
 int do_io_u_sync(struct thread_data *, struct io_u *);
+int do_io_u_trim(struct thread_data *, struct io_u *);
 
 #ifdef FIO_INC_DEBUG
 static inline void dprint_io_u(struct io_u *io_u, const char *p)

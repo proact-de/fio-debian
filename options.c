@@ -3,7 +3,6 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <string.h>
-#include <getopt.h>
 #include <assert.h>
 #include <libgen.h>
 #include <fcntl.h>
@@ -15,6 +14,8 @@
 #include "parse.h"
 #include "lib/fls.h"
 #include "options.h"
+
+#include "crc/crc32c.h"
 
 /*
  * Check if mmap/mmaphuge has a :/foo/bar/file at the end. If so, return that.
@@ -201,9 +202,9 @@ static int str_rw_cb(void *data, const char *str)
 	struct thread_data *td = data;
 	char *nr = get_opt_postfix(str);
 
-	td->o.ddir_nr = 1;
+	td->o.ddir_seq_nr = 1;
 	if (nr) {
-		td->o.ddir_nr = atoi(nr);
+		td->o.ddir_seq_nr = atoi(nr);
 		free(nr);
 	}
 
@@ -225,13 +226,37 @@ static int str_mem_cb(void *data, const char *mem)
 	return 0;
 }
 
-static int str_lockmem_cb(void fio_unused *data, unsigned long *val)
+static int str_verify_cb(void *data, const char *mem)
+{
+	struct thread_data *td = data;
+
+	if (td->o.verify != VERIFY_CRC32C_INTEL)
+		return 0;
+
+	if (!crc32c_intel_works()) {
+		log_info("fio: System does not support hw accelerated crc32c. Falling back to sw crc32c.\n");
+		td->o.verify = VERIFY_CRC32C;
+	}
+
+	return 0;
+}
+
+static int fio_clock_source_cb(void *data, const char *str)
+{
+	struct thread_data *td = data;
+
+	fio_clock_source = td->o.clocksource;
+	fio_time_init();
+	return 0;
+}
+
+static int str_lockmem_cb(void fio_unused *data, unsigned long long *val)
 {
 	mlock_size = *val;
 	return 0;
 }
 
-static int str_rwmix_read_cb(void *data, unsigned int *val)
+static int str_rwmix_read_cb(void *data, unsigned long long *val)
 {
 	struct thread_data *td = data;
 
@@ -240,7 +265,7 @@ static int str_rwmix_read_cb(void *data, unsigned int *val)
 	return 0;
 }
 
-static int str_rwmix_write_cb(void *data, unsigned int *val)
+static int str_rwmix_write_cb(void *data, unsigned long long *val)
 {
 	struct thread_data *td = data;
 
@@ -250,7 +275,7 @@ static int str_rwmix_write_cb(void *data, unsigned int *val)
 }
 
 #ifdef FIO_HAVE_IOPRIO
-static int str_prioclass_cb(void *data, unsigned int *val)
+static int str_prioclass_cb(void *data, unsigned long long *val)
 {
 	struct thread_data *td = data;
 	unsigned short mask;
@@ -266,7 +291,7 @@ static int str_prioclass_cb(void *data, unsigned int *val)
 	return 0;
 }
 
-static int str_prio_cb(void *data, unsigned int *val)
+static int str_prio_cb(void *data, unsigned long long *val)
 {
 	struct thread_data *td = data;
 
@@ -290,7 +315,7 @@ static int str_exitall_cb(void)
 }
 
 #ifdef FIO_HAVE_CPU_AFFINITY
-static int str_cpumask_cb(void *data, unsigned int *val)
+static int str_cpumask_cb(void *data, unsigned long long *val)
 {
 	struct thread_data *td = data;
 	unsigned int i;
@@ -412,6 +437,16 @@ static int str_verify_cpus_allowed_cb(void *data, const char *input)
 		td->o.verify_cpumask_set = 1;
 
 	return ret;
+}
+#endif
+
+#ifdef FIO_HAVE_TRIM
+static int str_verify_trim_cb(void *data, unsigned long long *val)
+{
+	struct thread_data *td = data;
+
+	td->o.trim_percentage = *val;
+	return 0;
 }
 #endif
 
@@ -588,7 +623,7 @@ static int str_opendir_cb(void *data, const char fio_unused *str)
 	return add_dir_files(td, td->o.opendir);
 }
 
-static int str_verify_offset_cb(void *data, unsigned int *off)
+static int str_verify_offset_cb(void *data, unsigned long long *off)
 {
 	struct thread_data *td = data;
 
@@ -640,6 +675,11 @@ static int str_verify_pattern_cb(void *data, const char *input)
 		}
 	}
 	td->o.verify_pattern_bytes = i;
+	/*
+	 * VERIFY_META could already be set
+	 */
+	if (td->o.verify == VERIFY_NONE)
+		td->o.verify = VERIFY_PATTERN;
 	return 0;
 }
 
@@ -684,6 +724,7 @@ static int str_gtod_reduce_cb(void *data, int *il)
 	struct thread_data *td = data;
 	int val = *il;
 
+	td->o.disable_lat = !!val;
 	td->o.disable_clat = !!val;
 	td->o.disable_slat = !!val;
 	td->o.disable_bw = !!val;
@@ -693,7 +734,7 @@ static int str_gtod_reduce_cb(void *data, int *il)
 	return 0;
 }
 
-static int str_gtod_cpu_cb(void *data, int *il)
+static int str_gtod_cpu_cb(void *data, long long *il)
 {
 	struct thread_data *td = data;
 	int val = *il;
@@ -855,11 +896,29 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		},
 	},
 	{
+		.name	= "rw_sequencer",
+		.type	= FIO_OPT_STR,
+		.off1	= td_var_offset(rw_seq),
+		.help	= "IO offset generator modifier",
+		.def	= "sequential",
+		.posval = {
+			  { .ival = "sequential",
+			    .oval = RW_SEQ_SEQ,
+			    .help = "Generate sequential offsets",
+			  },
+			  { .ival = "identical",
+			    .oval = RW_SEQ_IDENT,
+			    .help = "Generate identical offsets",
+			  },
+		},
+	},
+
+	{
 		.name	= "ioengine",
 		.type	= FIO_OPT_STR_STORE,
 		.off1	= td_var_offset(ioengine),
 		.help	= "IO engine to use",
-		.def	= "sync",
+		.def	= FIO_PREFERRED_ENGINE,
 		.posval	= {
 			  { .ival = "sync",
 			    .help = "Use read/write",
@@ -868,7 +927,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 			    .help = "Use pread/pwrite",
 			  },
 			  { .ival = "vsync",
-			     .help = "Use readv/writev",
+			    .help = "Use readv/writev",
 			  },
 #ifdef FIO_HAVE_LIBAIO
 			  { .ival = "libaio",
@@ -885,8 +944,13 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 			    .help = "Solaris native asynchronous IO",
 			  },
 #endif
+#ifdef FIO_HAVE_WINDOWSAIO
+			  { .ival = "windowsaio",
+			    .help = "Windows native asynchronous IO"
+		  	  },
+#endif
 			  { .ival = "mmap",
-			    .help = "Memory mapped IO",
+			    .help = "Memory mapped IO"
 			  },
 #ifdef FIO_HAVE_SPLICE
 			  { .ival = "splice",
@@ -913,11 +977,16 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 			  },
 #endif
 			  { .ival = "cpuio",
-			    .help = "CPU cycler burner engine",
+			    .help = "CPU cycle burner engine",
 			  },
 #ifdef FIO_HAVE_GUASI
 			  { .ival = "guasi",
 			    .help = "GUASI IO engine",
+			  },
+#endif
+#ifdef FIO_HAVE_BINJECT
+			  { .ival = "binject",
+			    .help = "binject direct inject block engine",
 			  },
 #endif
 			  { .ival = "external",
@@ -929,7 +998,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.name	= "iodepth",
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(iodepth),
-		.help	= "Amount of IO buffers to keep in flight",
+		.help	= "Number of IO buffers to keep in flight",
 		.minval = 1,
 		.def	= "1",
 	},
@@ -968,6 +1037,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 	},
 	{
 		.name	= "fill_device",
+		.alias	= "fill_fs",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(fill_device),
 		.help	= "Write until an ENOSPC error occurs",
@@ -1062,6 +1132,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 	},
 	{
 		.name	= "nrfiles",
+		.alias	= "nr_files",
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(nr_files),
 		.help	= "Split job workload between this number of files",
@@ -1124,6 +1195,13 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(fdatasync_blocks),
 		.help	= "Issue fdatasync for writes every given number of blocks",
+		.def	= "0",
+	},
+	{
+		.name	= "write_barrier",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(barrier_blocks),
+		.help	= "Make every Nth write a barrier write",
 		.def	= "0",
 	},
 #ifdef FIO_HAVE_SYNC_FILE_RANGE
@@ -1191,7 +1269,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 	},
 	{
 		.name	= "startdelay",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_STR_VAL_TIME,
 		.off1	= td_var_offset(start_delay),
 		.help	= "Only start job when this period has passed",
 		.def	= "0",
@@ -1215,6 +1293,29 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_STR_VAL_TIME,
 		.off1	= td_var_offset(ramp_time),
 		.help	= "Ramp up time before measuring performance",
+	},
+	{
+		.name	= "clocksource",
+		.type	= FIO_OPT_STR,
+		.cb	= fio_clock_source_cb,
+		.off1	= td_var_offset(clocksource),
+		.help	= "What type of timing source to use",
+		.posval	= {
+			  { .ival = "gettimeofday",
+			    .oval = CS_GTOD,
+			    .help = "Use gettimeofday(2) for timing",
+			  },
+			  { .ival = "clock_gettime",
+			    .oval = CS_CGETTIME,
+			    .help = "Use clock_gettime(2) for timing",
+			  },
+#ifdef ARCH_HAVE_CPU_CLOCK
+			  { .ival = "cpu",
+			    .oval = CS_CPUCLOCK,
+			    .help = "Use CPU private clock",
+			  },
+#endif
+		},
 	},
 	{
 		.name	= "mem",
@@ -1266,6 +1367,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_STR,
 		.off1	= td_var_offset(verify),
 		.help	= "Verify data written",
+		.cb	= str_verify_cb,
 		.def	= "0",
 		.posval = {
 			  { .ival = "0",
@@ -1371,11 +1473,33 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.parent = "verify",
 	},
 	{
+		.name	= "verify_dump",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(verify_dump),
+		.def	= "1",
+		.help	= "Dump contents of good and bad blocks on failure",
+		.parent = "verify",
+	},
+	{
 		.name	= "verify_async",
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(verify_async),
 		.def	= "0",
 		.help	= "Number of async verifier threads to use",
+		.parent	= "verify",
+	},
+	{
+		.name	= "verify_backlog",
+		.type	= FIO_OPT_STR_VAL,
+		.off1	= td_var_offset(verify_backlog),
+		.help	= "Verify after this number of blocks are written",
+		.parent	= "verify",
+	},
+	{
+		.name	= "verify_backlog_batch",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(verify_batch),
+		.help	= "Verify this number of IO blocks",
 		.parent	= "verify",
 	},
 #ifdef FIO_HAVE_CPU_AFFINITY
@@ -1385,6 +1509,39 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.cb	= str_verify_cpus_allowed_cb,
 		.help	= "Set CPUs allowed for async verify threads",
 		.parent	= "verify_async",
+	},
+#endif
+#ifdef FIO_HAVE_TRIM
+	{
+		.name	= "trim_percentage",
+		.type	= FIO_OPT_INT,
+		.cb	= str_verify_trim_cb,
+		.maxval = 100,
+		.help	= "Number of verify blocks to discard/trim",
+		.parent	= "verify",
+		.def	= "0",
+	},
+	{
+		.name	= "trim_verify_zero",
+		.type	= FIO_OPT_INT,
+		.help	= "Verify that trim/discarded blocks are returned as zeroes",
+		.off1	= td_var_offset(trim_zero),
+		.parent	= "trim_percentage",
+		.def	= "1",
+	},
+	{
+		.name	= "trim_backlog",
+		.type	= FIO_OPT_STR_VAL,
+		.off1	= td_var_offset(trim_backlog),
+		.help	= "Trim after this number of blocks are written",
+		.parent	= "trim_percentage",
+	},
+	{
+		.name	= "trim_backlog_batch",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(trim_batch),
+		.help	= "Trim this number of IO blocks",
+		.parent	= "trim_percentage",
 	},
 #endif
 	{
@@ -1398,6 +1555,21 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_STR_STORE,
 		.off1	= td_var_offset(read_iolog_file),
 		.help	= "Playback IO pattern from file",
+	},
+	{
+		.name	= "replay_no_stall",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(no_stall),
+		.def	= "0",
+		.parent	= "read_iolog",
+		.help	= "Playback IO pattern file as fast as possible without stalls",
+	},
+	{
+		.name	= "replay_redirect",
+		.type	= FIO_OPT_STR_STORE,
+		.off1	= td_var_offset(replay_redirect),
+		.parent	= "read_iolog",
+		.help	= "Replay all I/O onto this device, regardless of trace device",
 	},
 	{
 		.name	= "exec_prerun",
@@ -1537,7 +1709,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(rate_iops_min[0]),
 		.off2	= td_var_offset(rate_iops_min[1]),
-		.help	= "Job must meet this rate or it will be shutdown",
+		.help	= "Job must meet this rate or it will be shut down",
 		.parent	= "rate_iops",
 	},
 	{
@@ -1582,7 +1754,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.name	= "create_fsync",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(create_fsync),
-		.help	= "Fsync file after creation",
+		.help	= "fsync file after creation",
 		.def	= "1",
 	},
 	{
@@ -1596,7 +1768,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.name	= "pre_read",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(pre_read),
-		.help	= "Preread files before starting official testing",
+		.help	= "Pre-read files before starting official testing",
 		.def	= "0",
 	},
 	{
@@ -1728,6 +1900,14 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.def	= "0",
 	},
 	{
+		.name	= "disable_lat",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(disable_lat),
+		.help	= "Disable latency numbers",
+		.parent	= "gtod_reduce",
+		.def	= "0",
+	},
+	{
 		.name	= "disable_clat",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(disable_clat),
@@ -1739,7 +1919,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.name	= "disable_slat",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(disable_slat),
-		.help	= "Disable submissionn latency numbers",
+		.help	= "Disable submission latency numbers",
 		.parent	= "gtod_reduce",
 		.def	= "0",
 	},
@@ -1755,14 +1935,14 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.name	= "gtod_cpu",
 		.type	= FIO_OPT_INT,
 		.cb	= str_gtod_cpu_cb,
-		.help	= "Setup dedicated gettimeofday() thread on this CPU",
+		.help	= "Set up dedicated gettimeofday() thread on this CPU",
 		.verify	= gtod_cpu_verify,
 	},
 	{
 		.name	= "continue_on_error",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(continue_on_error),
-		.help	= "Continue on non-fatal errors during I/O",
+		.help	= "Continue on non-fatal errors during IO",
 		.def	= "0",
 	},
 	{
@@ -1786,6 +1966,13 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.maxval	= 1000,
 	},
 	{
+		.name	= "cgroup_nodelete",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(cgroup_nodelete),
+		.help	= "Do not delete cgroups after job completion",
+		.def	= "0",
+	},
+	{
 		.name	= "uid",
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(uid),
@@ -1802,9 +1989,10 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 	},
 };
 
-static void add_to_lopt(struct option *lopt, struct fio_option *o)
+static void add_to_lopt(struct option *lopt, struct fio_option *o,
+			const char *name)
 {
-	lopt->name = (char *) o->name;
+	lopt->name = (char *) name;
 	lopt->val = FIO_GETOPT_JOB;
 	if (o->type == FIO_OPT_STR_SET)
 		lopt->has_arg = no_argument;
@@ -1825,7 +2013,11 @@ void fio_options_dup_and_init(struct option *long_options)
 
 	o = &options[0];
 	while (o->name) {
-		add_to_lopt(&long_options[i], o);
+		add_to_lopt(&long_options[i], o, o->name);
+		if (o->alias) {
+			i++;
+			add_to_lopt(&long_options[i], o, o->alias);
+		}
 
 		i++;
 		o++;

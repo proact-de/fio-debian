@@ -34,8 +34,6 @@ static int fio_libaio_prep(struct thread_data fio_unused *td, struct io_u *io_u)
 		io_prep_pwrite(&io_u->iocb, f->fd, io_u->xfer_buf, io_u->xfer_buflen, io_u->offset);
 	else if (ddir_sync(io_u->ddir))
 		io_prep_fsync(&io_u->iocb, f->fd);
-	else
-		return 1;
 
 	return 0;
 }
@@ -102,6 +100,14 @@ static int fio_libaio_queue(struct thread_data *td, struct io_u *io_u)
 			return FIO_Q_BUSY;
 
 		do_io_u_sync(td, io_u);
+		return FIO_Q_COMPLETED;
+	}
+
+	if (io_u->ddir == DDIR_TRIM) {
+		if (ld->iocbs_nr)
+			return FIO_Q_BUSY;
+
+		do_io_u_trim(td, io_u);
 		return FIO_Q_COMPLETED;
 	}
 
@@ -234,7 +240,7 @@ static struct ioengine_ops ioengine = {
  */
 static int fio_libaio_init(struct thread_data fio_unused *td)
 {
-	fprintf(stderr, "fio: libaio not available\n");
+	log_err("fio: libaio not available\n");
 	return 1;
 }
 

@@ -2,16 +2,24 @@
 #define FIO_OS_H
 
 #include <sys/types.h>
+#include <pthread.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 #if defined(__linux__)
 #include "os-linux.h"
 #elif defined(__FreeBSD__)
 #include "os-freebsd.h"
+#elif defined(__NetBSD__)
+#include "os-netbsd.h"
 #elif defined(__sun__)
 #include "os-solaris.h"
 #elif defined(__APPLE__)
 #include "os-mac.h"
+#elif defined(_AIX)
+#include "os-aix.h"
+#elif defined(__CYGWIN__)
+#include "os-windows.h"
 #else
 #error "unsupported os"
 #endif
@@ -33,8 +41,12 @@
 #include "../lib/strsep.h"
 #endif
 
+#ifdef MSG_DONTWAIT
+#define OS_MSG_DONTWAIT	MSG_DONTWAIT
+#endif
+
 #ifndef FIO_HAVE_FADVISE
-#define fadvise(fd, off, len, advice)	(0)
+#define posix_fadvise(fd, off, len, advice)	(0)
 
 #ifndef POSIX_FADV_DONTNEED
 #define POSIX_FADV_DONTNEED	(0)
@@ -48,6 +60,7 @@
 #define fio_getaffinity(pid, mask)	do { } while (0)
 #define fio_cpu_clear(mask, cpu)	do { } while (0)
 #define fio_cpuset_exit(mask)		(-1)
+typedef unsigned long os_cpu_mask_t;
 #endif
 
 #ifndef FIO_HAVE_IOPRIO
@@ -79,8 +92,18 @@
 #define OS_RAND_MAX			RAND_MAX
 #endif
 
+#ifdef FIO_HAVE_CLOCK_MONOTONIC
+#define FIO_TIMER_CLOCK CLOCK_MONOTONIC
+#else
+#define FIO_TIMER_CLOCK CLOCK_REALTIME
+#endif
+
 #ifndef FIO_HAVE_RAWBIND
 #define fio_lookup_raw(dev, majdev, mindev)	1
+#endif
+
+#ifndef FIO_PREFERRED_ENGINE
+#define FIO_PREFERRED_ENGINE	"sync"
 #endif
 
 #ifndef FIO_HAVE_BLKTRACE
@@ -112,13 +135,13 @@ static inline int os_cache_line_size(void)
 }
 
 #ifdef FIO_USE_GENERIC_BDEV_SIZE
-static inline int blockdev_size(int fd, unsigned long long *bytes)
+static inline int blockdev_size(struct fio_file *f, unsigned long long *bytes)
 {
 	off_t end;
 
 	*bytes = 0;
 
-	end = lseek(fd, 0, SEEK_END);
+	end = lseek(f->fd, 0, SEEK_END);
 	if (end < 0)
 		return errno;
 
@@ -141,6 +164,13 @@ static inline long os_random_long(os_random_state_t *rs)
 
 	val = rand_r(rs);
 	return val;
+}
+#endif
+
+#ifndef FIO_HAVE_FS_STAT
+static inline unsigned long long get_fs_size(const char *path)
+{
+	return 0;
 }
 #endif
 

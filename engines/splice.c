@@ -223,6 +223,8 @@ static int fio_spliceio_queue(struct thread_data *td, struct io_u *io_u)
 			ret = fio_splice_read_old(td, io_u);
 	} else if (io_u->ddir == DDIR_WRITE)
 		ret = fio_splice_write(td, io_u);
+	else if (io_u->ddir == DDIR_TRIM)
+		ret = do_io_u_trim(td, io_u);
 	else
 		ret = do_io_u_sync(td, io_u);
 
@@ -309,7 +311,7 @@ static struct ioengine_ops ioengine = {
  */
 static int fio_spliceio_init(struct thread_data fio_unused *td)
 {
-	fprintf(stderr, "fio: splice not available\n");
+	log_err("fio: splice not available\n");
 	return 1;
 }
 

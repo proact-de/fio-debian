@@ -33,6 +33,10 @@ struct fio_mutex *fio_mutex_init(int value)
 		return NULL;
 	}
 
+#ifdef FIO_HAVE_FALLOCATE
+	posix_fallocate(fd, 0, sizeof(struct fio_mutex));
+#endif
+
 	if (ftruncate(fd, sizeof(struct fio_mutex)) < 0) {
 		perror("ftruncate mutex");
 		goto err;
@@ -65,14 +69,18 @@ struct fio_mutex *fio_mutex_init(int value)
 		log_err("pthread_mutexattr_init: %s\n", strerror(ret));
 		goto err;
 	}
+#ifdef FIO_HAVE_PSHARED_MUTEX
 	ret = pthread_mutexattr_setpshared(&attr, mflag);
 	if (ret) {
 		log_err("pthread_mutexattr_setpshared: %s\n", strerror(ret));
 		goto err;
 	}
+#endif
 
 	pthread_condattr_init(&cond);
+#ifdef FIO_HAVE_PSHARED_MUTEX
 	pthread_condattr_setpshared(&cond, mflag);
+#endif
 	pthread_cond_init(&mutex->cond, &cond);
 
 	ret = pthread_mutex_init(&mutex->lock, &attr);
@@ -80,6 +88,9 @@ struct fio_mutex *fio_mutex_init(int value)
 		log_err("pthread_mutex_init: %s\n", strerror(ret));
 		goto err;
 	}
+
+	pthread_condattr_destroy(&cond);
+	pthread_mutexattr_destroy(&attr);
 
 	return mutex;
 err:

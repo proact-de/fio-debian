@@ -3,17 +3,40 @@
 
 #include <errno.h>
 #include <sys/sysctl.h>
+#include <sys/disk.h>
+
+#include "../file.h"
 
 #define FIO_HAVE_POSIXAIO
 #define FIO_HAVE_ODIRECT
-#define FIO_USE_GENERIC_BDEV_SIZE
+#define FIO_HAVE_STRSEP
 #define FIO_USE_GENERIC_RAND
+#define FIO_HAVE_CHARDEV_SIZE
+#define FIO_HAVE_CLOCK_MONOTONIC
 
 #define OS_MAP_ANON		MAP_ANON
 
-typedef unsigned long os_cpu_mask_t;
+typedef off_t off64_t;
 
-static inline int blockdev_invalidate_cache(int fd)
+static inline int blockdev_size(struct fio_file *f, unsigned long long *bytes)
+{
+	off_t size;
+
+	if (!ioctl(f->fd, DIOCGMEDIASIZE, &size)) {
+		*bytes = size;
+		return 0;
+	}
+
+	*bytes = 0;
+	return errno;
+}
+
+static inline int chardev_size(struct fio_file *f, unsigned long long *bytes)
+{
+	return blockdev_size(f, bytes);
+}
+
+static inline int blockdev_invalidate_cache(struct fio_file *f)
 {
 	return EINVAL;
 }

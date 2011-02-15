@@ -3,6 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #include <dirent.h>
+#include <libgen.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -10,6 +11,7 @@
 #include "fio.h"
 #include "smalloc.h"
 #include "filehash.h"
+#include "os/os.h"
 
 static int root_warn;
 
@@ -70,13 +72,13 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 							f->real_file_size);
 
 		r = posix_fallocate(f->fd, 0, f->real_file_size);
-		if (r < 0) {
+		if (r > 0) {
 			log_err("fio: posix_fallocate fails: %s\n",
-					strerror(-r));
+					strerror(r));
 		}
 	}
 #endif
-	
+
 	if (!new_layout)
 		goto done;
 
@@ -231,7 +233,7 @@ static int file_size(struct thread_data *td, struct fio_file *f)
 
 static int bdev_size(struct thread_data *td, struct fio_file *f)
 {
-	unsigned long long bytes;
+	unsigned long long bytes = 0;
 	int r;
 
 	if (td->io_ops->open_file(td, f)) {
@@ -240,9 +242,10 @@ static int bdev_size(struct thread_data *td, struct fio_file *f)
 		return 1;
 	}
 
-	r = blockdev_size(f->fd, &bytes);
+	r = blockdev_size(f, &bytes);
 	if (r) {
 		td_verror(td, r, "blockdev_size");
+		printf("fd is %d\n", f->fd);
 		goto err;
 	}
 
@@ -259,6 +262,41 @@ err:
 	return 1;
 }
 
+static int char_size(struct thread_data *td, struct fio_file *f)
+{
+#ifdef FIO_HAVE_CHARDEV_SIZE
+	unsigned long long bytes = 0;
+	int r;
+
+	if (td->io_ops->open_file(td, f)) {
+		log_err("fio: failed opening blockdev %s for size check\n",
+			f->file_name);
+		return 1;
+	}
+
+	r = chardev_size(f, &bytes);
+	if (r) {
+		td_verror(td, r, "chardev_size");
+		goto err;
+	}
+
+	if (!bytes) {
+		log_err("%s: zero sized char device?\n", f->file_name);
+		goto err;
+	}
+
+	f->real_file_size = bytes;
+	td->io_ops->close_file(td, f);
+	return 0;
+err:
+	td->io_ops->close_file(td, f);
+	return 1;
+#else
+	f->real_file_size = -1ULL;
+	return 0;
+#endif
+}
+
 static int get_file_size(struct thread_data *td, struct fio_file *f)
 {
 	int ret = 0;
@@ -270,6 +308,8 @@ static int get_file_size(struct thread_data *td, struct fio_file *f)
 		ret = file_size(td, f);
 	else if (f->filetype == FIO_TYPE_BD)
 		ret = bdev_size(td, f);
+	else if (f->filetype == FIO_TYPE_CHAR)
+		ret = char_size(td, f);
 	else
 		f->real_file_size = -1;
 
@@ -277,7 +317,7 @@ static int get_file_size(struct thread_data *td, struct fio_file *f)
 		return ret;
 
 	if (f->file_offset > f->real_file_size) {
-		log_err("%s: offset extends end (%Lu > %Lu)\n", td->o.name,
+		log_err("%s: offset extends end (%llu > %llu)\n", td->o.name,
 					f->file_offset, f->real_file_size);
 		return 1;
 	}
@@ -307,14 +347,14 @@ static int __file_invalidate_cache(struct thread_data *td, struct fio_file *f,
 	 * FIXME: add blockdev flushing too
 	 */
 	if (f->mmap_ptr) {
-		ret = madvise(f->mmap_ptr, f->mmap_sz, MADV_DONTNEED);
+		ret = posix_madvise(f->mmap_ptr, f->mmap_sz, POSIX_MADV_DONTNEED);
 #ifdef FIO_MADV_FREE
-		(void) madvise(f->mmap_ptr, f->mmap_sz, FIO_MADV_FREE);
+		(void) posix_madvise(f->mmap_ptr, f->mmap_sz, FIO_MADV_FREE);
 #endif
 	} else if (f->filetype == FIO_TYPE_FILE) {
-		ret = fadvise(f->fd, off, len, POSIX_FADV_DONTNEED);
+		ret = posix_fadvise(f->fd, off, len, POSIX_FADV_DONTNEED);
 	} else if (f->filetype == FIO_TYPE_BD) {
-		ret = blockdev_invalidate_cache(f->fd);
+		ret = blockdev_invalidate_cache(f);
 		if (ret < 0 && errno == EACCES && geteuid()) {
 			if (!root_warn) {
 				log_err("fio: only root may flush block "
@@ -503,6 +543,81 @@ static int get_file_sizes(struct thread_data *td)
 	return err;
 }
 
+struct fio_mount {
+	struct flist_head list;
+	const char *base;
+	char __base[256];
+	unsigned int key;
+};
+
+/*
+ * Get free number of bytes for each file on each unique mount.
+ */
+static unsigned long long get_fs_free_counts(struct thread_data *td)
+{
+	struct flist_head *n, *tmp;
+	unsigned long long ret = 0;
+	struct fio_mount *fm;
+	FLIST_HEAD(list);
+	struct fio_file *f;
+	unsigned int i;
+
+	for_each_file(td, f, i) {
+		struct stat sb;
+		char buf[256];
+
+		if (f->filetype == FIO_TYPE_BD || f->filetype == FIO_TYPE_CHAR) {
+			if (f->real_file_size != -1ULL)
+				ret += f->real_file_size;
+			continue;
+		} else if (f->filetype != FIO_TYPE_FILE)
+			continue;
+
+		strcpy(buf, f->file_name);
+
+		if (stat(buf, &sb) < 0) {
+			if (errno != ENOENT)
+				break;
+			strcpy(buf, ".");
+			if (stat(buf, &sb) < 0)
+				break;
+		}
+
+		fm = NULL;
+		flist_for_each(n, &list) {
+			fm = flist_entry(n, struct fio_mount, list);
+			if (fm->key == sb.st_dev)
+				break;
+
+			fm = NULL;
+		}
+
+		if (fm)
+			continue;
+
+		fm = malloc(sizeof(*fm));
+		strcpy(fm->__base, buf);
+		fm->base = basename(fm->__base);
+		fm->key = sb.st_dev;
+		flist_add(&fm->list, &list);
+	}
+
+	flist_for_each_safe(n, tmp, &list) {
+		unsigned long long sz;
+
+		fm = flist_entry(n, struct fio_mount, list);
+		flist_del(&fm->list);
+
+		sz = get_fs_size(fm->base);
+		if (sz && sz != -1ULL)
+			ret += sz;
+
+		free(fm);
+	}
+
+	return ret;
+}
+
 /*
  * Open the files and setup files sizes, creating files if necessary.
  */
@@ -542,6 +657,9 @@ int setup_files(struct thread_data *td)
 		else
 			total_size += f->real_file_size;
 	}
+
+	if (td->o.fill_device)
+		td->fill_device_size = get_fs_free_counts(td);
 
 	/*
 	 * device/file sizes are zero and no size given, punt
@@ -617,7 +735,7 @@ int setup_files(struct thread_data *td)
 		temp_stall_ts = 1;
 		if (!terse_output)
 			log_info("%s: Laying out IO file(s) (%u file(s) /"
-				 " %LuMB)\n", td->o.name, need_extend,
+				 " %lluMB)\n", td->o.name, need_extend,
 					extend_size >> 20);
 
 		for_each_file(td, f, i) {
@@ -746,11 +864,8 @@ void close_and_free_files(struct thread_data *td)
 
 		sfree(f->file_name);
 		f->file_name = NULL;
-
-		if (f->file_map) {
-			sfree(f->file_map);
-			f->file_map = NULL;
-		}
+		sfree(f->file_map);
+		f->file_map = NULL;
 		sfree(f);
 	}
 
@@ -771,7 +886,9 @@ static void get_file_type(struct fio_file *f)
 		f->filetype = FIO_TYPE_FILE;
 
 	if (!stat(f->file_name, &sb)) {
-		if (S_ISBLK(sb.st_mode))
+		/* \\.\ is the device namespace in Windows, where every file is
+		 * a block device */
+		if (S_ISBLK(sb.st_mode) || strncmp(f->file_name, "\\\\.\\", 4) == 0)
 			f->filetype = FIO_TYPE_BD;
 		else if (S_ISCHR(sb.st_mode))
 			f->filetype = FIO_TYPE_CHAR;
@@ -796,6 +913,7 @@ int add_file(struct thread_data *td, const char *fname)
 	}
 
 	f->fd = -1;
+	fio_file_reset(f);
 
 	if (td->files_size <= td->files_index) {
 		int new_size = td->o.nr_files + 1;
@@ -847,6 +965,19 @@ int add_file(struct thread_data *td, const char *fname)
 							cur_files);
 
 	return cur_files;
+}
+
+int add_file_exclusive(struct thread_data *td, const char *fname)
+{
+	struct fio_file *f;
+	unsigned int i;
+
+	for_each_file(td, f, i) {
+		if (!strcmp(f->file_name, fname))
+			return i;
+	}
+
+	return add_file(td, fname);
 }
 
 void get_file(struct fio_file *f)
@@ -1023,6 +1154,7 @@ void dup_files(struct thread_data *td, struct thread_data *org)
 			assert(0);
 		}
 		__f->fd = -1;
+		fio_file_reset(__f);
 
 		if (f->file_name) {
 			__f->file_name = smalloc_strdup(f->file_name);

@@ -1,4 +1,10 @@
 #include <inttypes.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include "crc32c.h"
 
 /*
@@ -12,7 +18,7 @@
  * Volume 2A: Instruction Set Reference, A-M
  */
 
-#ifdef ARCH_HAVE_SSE
+#ifdef ARCH_HAVE_SSE4_2
 
 #if BITS_PER_LONG == 64
 #define REX_PRE "0x48, "
@@ -68,5 +74,30 @@ uint32_t crc32c_intel(unsigned char const *data, unsigned long length)
 	return crc;
 }
 
-#endif /* ARCH_HAVE_SSE */
+static void do_cpuid(unsigned int *eax, unsigned int *ebx, unsigned int *ecx,
+		     unsigned int *edx)
+{
+	int id = *eax;
 
+	asm("movl %4, %%eax;"
+	    "cpuid;"
+	    "movl %%eax, %0;"
+	    "movl %%ebx, %1;"
+	    "movl %%ecx, %2;"
+	    "movl %%edx, %3;"
+		: "=r" (*eax), "=r" (*ebx), "=r" (*ecx), "=r" (*edx)
+		: "r" (id)
+		: "eax", "ebx", "ecx", "edx");
+}
+
+int crc32c_intel_works(void)
+{
+	unsigned int eax, ebx, ecx, edx;
+
+	eax = 1;
+
+	do_cpuid(&eax, &ebx, &ecx, &edx);
+	return (ecx & (1 << 20)) != 0;
+}
+
+#endif /* ARCH_HAVE_SSE */

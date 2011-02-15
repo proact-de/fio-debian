@@ -79,6 +79,7 @@ static void show_option_help(struct fio_option *o, FILE *out)
 	const char *typehelp[] = {
 		"invalid",
 		"string (opt=bla)",
+		"string (opt=bla)",
 		"string with possible k/m/g postfix (opt=4k)",
 		"string with time postfix (opt=10s)",
 		"string (opt=bla)",
@@ -117,33 +118,73 @@ static unsigned long get_mult_time(char c)
 	}
 }
 
-static unsigned long long get_mult_bytes(char c, void *data)
+static unsigned long long __get_mult_bytes(const char *p, void *data)
 {
 	unsigned int kb_base = fio_get_kb_base(data);
 	unsigned long long ret = 1;
+	unsigned int i, pow = 0, mult = kb_base;
+	char *c;
 
-	switch (c) {
-	default:
-		break;
-	case 'p':
-	case 'P':
-		ret *= (unsigned long long) kb_base;
-	case 't':
-	case 'T':
-		ret *= (unsigned long long) kb_base;
-	case 'g':
-	case 'G':
-		ret *= (unsigned long long) kb_base;
-	case 'm':
-	case 'M':
-		ret *= (unsigned long long) kb_base;
-	case 'k':
-	case 'K':
-		ret *= (unsigned long long) kb_base;
-		break;
-	}
+	if (!p)
+		return 1;
 
+	c = strdup(p);
+
+	for (i = 0; i < strlen(c); i++)
+		c[i] = tolower(c[i]);
+
+	if (!strcmp("pib", c)) {
+		pow = 5;
+		mult = 1000;
+	} else if (!strcmp("tib", c)) {
+		pow = 4;
+		mult = 1000;
+	} else if (!strcmp("gib", c)) {
+		pow = 3;
+		mult = 1000;
+	} else if (!strcmp("mib", c)) {
+		pow = 2;
+		mult = 1000;
+	} else if (!strcmp("kib", c)) {
+		pow = 1;
+		mult = 1000;
+	} else if (!strcmp("p", c) || !strcmp("pb", c))
+		pow = 5;
+	else if (!strcmp("t", c) || !strcmp("tb", c))
+		pow = 4;
+	else if (!strcmp("g", c) || !strcmp("gb", c))
+		pow = 3;
+	else if (!strcmp("m", c) || !strcmp("mb", c))
+		pow = 2;
+	else if (!strcmp("k", c) || !strcmp("kb", c))
+		pow = 1;
+
+	while (pow--)
+		ret *= (unsigned long long) mult;
+
+	free(c);
 	return ret;
+}
+
+static unsigned long long get_mult_bytes(const char *str, int len, void *data)
+{
+	const char *p;
+
+	if (len < 2)
+		return __get_mult_bytes(str, data);
+
+	/*
+	 * if the last char is 'b' or 'B', the user likely used
+	 * "1gb" instead of just "1g". If the second to last is also
+	 * a letter, adjust.
+	 */
+	p = str + len - 1;
+	while (isalpha(*(p - 1)))
+		p--;
+	if (!isalpha(*p))
+		p = NULL;
+
+	return __get_mult_bytes(p, data);
 }
 
 /*
@@ -166,19 +207,9 @@ int str_to_decimal(const char *str, long long *val, int kilo, void *data)
 	if (*val == LONG_MAX && errno == ERANGE)
 		return 1;
 
-	if (kilo) {
-		const char *p;
-		/*
-		 * if the last char is 'b' or 'B', the user likely used
-		 * "1gb" instead of just "1g". If the second to last is also
-		 * a letter, adjust.
-		 */
-		p = str + len - 1;
-		if ((*p == 'b' || *p == 'B') && isalpha(*(p - 1)))
-			--p;
-
-		*val *= get_mult_bytes(*p, data);
-	} else
+	if (kilo)
+		*val *= get_mult_bytes(str, len, data);
+	else
 		*val *= get_mult_time(str[len - 1]);
 
 	return 0;
@@ -226,18 +257,12 @@ void strip_blank_end(char *p)
 
 static int check_range_bytes(const char *str, long *val, void *data)
 {
-	char suffix;
+	long long __val;
 
-	if (!strlen(str))
-		return 1;
-
-	if (sscanf(str, "%lu%c", val, &suffix) == 2) {
-		*val *= get_mult_bytes(suffix, data);
+	if (!str_to_decimal(str, &__val, 1, data)) {
+		*val = __val;
 		return 0;
 	}
-
-	if (sscanf(str, "%lu", val) == 1)
-		return 0;
 
 	return 1;
 }
@@ -255,6 +280,17 @@ static int check_int(const char *p, int *val)
 	}
 
 	return 1;
+}
+
+static int opt_len(const char *str)
+{
+	char *postfix;
+
+	postfix = strchr(str, ':');
+	if (!postfix)
+		return strlen(str);
+
+	return (int)(postfix - str);
 }
 
 #define val_store(ptr, val, off, or, data)		\
@@ -299,7 +335,7 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 			if (!vp->ival || vp->ival[0] == '\0')
 				continue;
 			all_skipped = 0;
-			if (!strncmp(vp->ival, ptr, strlen(vp->ival))) {
+			if (!strncmp(vp->ival, ptr, opt_len(ptr))) {
 				ret = 0;
 				if (o->roff1) {
 					if (vp->or)
@@ -837,7 +873,7 @@ static void print_option(struct fio_option *o)
 int show_cmd_help(struct fio_option *options, const char *name)
 {
 	struct fio_option *o, *closest;
-	unsigned int best_dist;
+	unsigned int best_dist = -1U;
 	int found = 0;
 	int show_all = 0;
 
@@ -890,7 +926,12 @@ int show_cmd_help(struct fio_option *options, const char *name)
 		return 0;
 
 	printf("No such command: %s", name);
-	if (closest) {
+
+	/*
+	 * Only print an appropriately close option, one where the edit
+	 * distance isn't too big. Otherwise we get crazy matches.
+	 */
+	if (closest && best_dist < 3) {
 		printf(" - showing closest match\n");
 		printf("%20s: %s\n", closest->name, closest->help);
 		show_option_help(closest, stdout);
