@@ -10,9 +10,11 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <limits.h>
+#include <fcntl.h>
 
 #include "mutex.h"
 #include "arch/arch.h"
+#include "os/os.h"
 
 #define SMALLOC_REDZONE		/* define to detect memory corruption */
 
@@ -199,6 +201,10 @@ static int add_pool(struct pool *pool, unsigned int alloc_size)
 
 	pool->nr_blocks = bitmap_blocks;
 	pool->free_blocks = bitmap_blocks * SMALLOC_BPB;
+
+#ifdef FIO_HAVE_FALLOCATE
+	posix_fallocate(fd, 0, alloc_size);
+#endif
 
 	if (ftruncate(fd, alloc_size) < 0)
 		goto out_unlink;

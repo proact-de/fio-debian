@@ -1,7 +1,10 @@
 #ifndef FIO_FILE_H
 #define FIO_FILE_H
 
+#include <string.h>
+#include "compiler/compiler.h"
 #include "io_ddir.h"
+#include "flist.h"
 
 /*
  * The type of object we are working on
@@ -47,13 +50,12 @@ struct fio_file {
 	struct flist_head hash_list;
 	enum fio_filetype filetype;
 
-	/*
-	 * A file may not be a file descriptor, let the io engine decide
-	 */
-	union {
-		unsigned long file_data;
-		int fd;
-	};
+	void *file_data;
+	int fd;
+#ifdef __CYGWIN__
+	HANDLE hFile;
+	HANDLE ioCP;
+#endif
 
 	/*
 	 * filename and possible memory mapping
@@ -73,6 +75,7 @@ struct fio_file {
 	unsigned long long io_size;
 
 	unsigned long long last_pos;
+	unsigned long long last_start;
 
 	unsigned long long first_write;
 	unsigned long long last_write;
@@ -139,6 +142,7 @@ extern int __must_check generic_close_file(struct thread_data *, struct fio_file
 extern int __must_check generic_get_file_size(struct thread_data *, struct fio_file *);
 extern int __must_check pre_read_files(struct thread_data *);
 extern int add_file(struct thread_data *, const char *);
+extern int add_file_exclusive(struct thread_data *, const char *);
 extern void get_file(struct fio_file *);
 extern int __must_check put_file(struct thread_data *, struct fio_file *);
 extern void put_file_log(struct thread_data *, struct fio_file *);
@@ -155,6 +159,7 @@ static inline void fio_file_reset(struct fio_file *f)
 {
 	f->last_free_lookup = 0;
 	f->last_pos = f->file_offset;
+	f->last_start = -1ULL;
 	f->file_pos = -1ULL;
 	if (f->file_map)
 		memset(f->file_map, 0, f->num_maps * sizeof(int));

@@ -1,38 +1,54 @@
 CC	= gcc
 DEBUGFLAGS = -D_FORTIFY_SOURCE=2 -DFIO_INC_DEBUG
-OPTFLAGS= -O2 -g $(EXTFLAGS)
-CFLAGS	= -Wwrite-strings -Wall -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 $(OPTFLAGS) $(DEBUGFLAGS) -fno-omit-frame-pointer -rdynamic
+CPPFLAGS= -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 \
+	$(DEBUGFLAGS)
+OPTFLAGS= -O2 -fno-omit-frame-pointer -g $(EXTFLAGS)
+CFLAGS	= -std=gnu99 -Wwrite-strings -Wall $(OPTFLAGS)
+LIBS	= -lm
 PROGS	= fio
 SCRIPTS = fio_generate_plots
-OBJS = gettime.o fio.o ioengines.o init.o stat.o log.o time.o filesetup.o \
-	eta.o verify.o memory.o io_u.o parse.o mutex.o options.o \
-	rbtree.o diskutil.o fifo.o blktrace.o smalloc.o filehash.o helpers.o \
-	cgroup.o profile.o debug.o
+UNAME  := $(shell uname)
 
-OBJS += crc/crc7.o
-OBJS += crc/crc16.o
-OBJS += crc/crc32.o
-OBJS += crc/crc32c.o
-OBJS += crc/crc32c-intel.o
-OBJS += crc/crc64.o
-OBJS += crc/sha1.o
-OBJS += crc/sha256.o
-OBJS += crc/sha512.o
-OBJS += crc/md5.o
+SOURCE = gettime.c fio.c ioengines.c init.c stat.c log.c time.c filesetup.c \
+		eta.c verify.c memory.c io_u.c parse.c mutex.c options.c \
+		rbtree.c smalloc.c filehash.c profile.c debug.c lib/rand.c \
+		lib/num2str.c $(wildcard crc/*.c) engines/cpu.c \
+		engines/mmap.c engines/sync.c engines/null.c engines/net.c
 
-OBJS += engines/cpu.o
-OBJS += engines/libaio.o
-OBJS += engines/mmap.o
-OBJS += engines/posixaio.o
-OBJS += engines/sg.o
-OBJS += engines/splice.o
-OBJS += engines/sync.o
-OBJS += engines/null.o
-OBJS += engines/net.o
-OBJS += engines/syslet-rw.o
-OBJS += engines/guasi.o
+ifeq ($(UNAME), Linux)
+  SOURCE += diskutil.c fifo.c blktrace.c helpers.c cgroup.c trim.c \
+		engines/libaio.c engines/posixaio.c engines/sg.c \
+		engines/splice.c engines/syslet-rw.c engines/guasi.c \
+		engines/binject.c profiles/tiobench.c
+  LIBS += -lpthread -ldl -lrt -laio
+  CFLAGS += -rdynamic
+else ifeq ($(UNAME), SunOS)
+  SOURCE += fifo.c lib/strsep.c helpers.c solaris.c engines/posixaio.c \
+		engines/solarisaio.c
+  LIBS	 += -lpthread -ldl -laio -lrt -lnsl -lsocket
+  CPPFLAGS += -D__EXTENSIONS__
+else ifeq ($(UNAME), FreeBSD)
+  SOURCE += helpers.c engines/posixaio.c
+  LIBS	 += -lpthread -lrt
+  CFLAGS += -rdynamic
+else ifeq ($(UNAME), NetBSD)
+  SOURCE += helpers.c engines/posixaio.c
+  LIBS	 += -lpthread -lrt
+  CFLAGS += -rdynamic
+else ifeq ($(UNAME), AIX)
+  SOURCE += fifo.c helpers.c lib/getopt_long.c engines/posixaio.c
+  LIBS	 += -lpthread -ldl -lrt
+  CFLAGS += -rdynamic
+  CPPFLAGS += -D_LARGE_FILES -D__ppc__
+else ifeq ($(UNAME), Darwin)
+  SOURCE += helpers.c engines/posixaio.c
+  LIBS	 += -lpthread -ldl
+else ifneq (,$(findstring CYGWIN,$(UNAME)))
+  SOURCE += engines/windowsaio.c
+  LIBS	 += -lpthread -lrt
+endif
 
-OBJS += profiles/tiobench.o
+OBJS = $(SOURCE:.c=.o)
 
 ifneq ($(findstring $(MAKEFLAGS),s),s)
 ifndef V
@@ -46,23 +62,24 @@ prefix = /usr/local
 bindir = $(prefix)/bin
 mandir = $(prefix)/man
 
-%.o: %.c
-	$(QUIET_CC)$(CC) -o $*.o -c $(CFLAGS) $<
+.c.o:
+	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<
+	
 fio: $(OBJS)
-	$(QUIET_CC)$(CC) $(CFLAGS) -o $@ $(filter %.o,$^) $(EXTLIBS) -lpthread -lm -ldl -laio -lrt
+	$(QUIET_CC)$(CC) $(CFLAGS) -o $@ $(LIBS) $(OBJS)
 
 depend:
-	$(QUIET_DEP)$(CC) -MM $(ALL_CFLAGS) *.c engines/*.c crc/*.c 1> .depend
+	$(QUIET_DEP)$(CC) -MM $(CFLAGS) $(CPPFLAGS) $(SOURCE) 1> .depend
 
 $(PROGS): depend
 
 all: depend $(PROGS) $(SCRIPTS)
 
 clean:
-	-rm -f .depend cscope.out $(OBJS) $(PROGS) core.* core
+	-rm -f .depend $(OBJS) $(PROGS) core.* core
 
 cscope:
-	@cscope -b
+	@cscope -b -R
 
 install: $(PROGS) $(SCRIPTS)
 	$(INSTALL) -m755 -d $(DESTDIR)$(bindir)

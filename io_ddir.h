@@ -8,6 +8,7 @@ enum fio_ddir {
 	DDIR_DATASYNC,
 	DDIR_SYNC_FILE_RANGE,
 	DDIR_WAIT,
+	DDIR_TRIM,
 	DDIR_INVAL = -1,
 };
 
@@ -31,6 +32,11 @@ static inline int ddir_sync(enum fio_ddir ddir)
 {
 	return ddir == DDIR_SYNC || ddir == DDIR_DATASYNC ||
 	       ddir == DDIR_SYNC_FILE_RANGE;
+}
+
+static inline int ddir_rw(enum fio_ddir ddir)
+{
+	return ddir == DDIR_READ || ddir == DDIR_WRITE;
 }
 
 #endif

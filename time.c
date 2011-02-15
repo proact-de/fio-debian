@@ -150,9 +150,11 @@ int ramp_time_over(struct thread_data *td)
 	return 0;
 }
 
-static void fio_init time_init(void)
+void fio_time_init(void)
 {
 	int i;
+
+	fio_clock_init();
 
 	/*
 	 * Check the granularity of the nanosleep function
