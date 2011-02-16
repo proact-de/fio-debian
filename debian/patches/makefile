@@ -1,17 +1,8 @@
-Description: Upstream changes introduced in version 1.50-1
- This patch has been created by dpkg-source during the package build.
- Here's the last changelog entry, hopefully it gives details on why
- those changes were made:
- .
- fio (1.50-1) unstable; urgency=low
- .
-   * Thanks for importing, Ritesh. Found my mistake.
-   * New upstream version 1.5.0 (Closes: #613432).
-   * Updated to Standards-Version to 3.9.1, no changes needed.
- .
- The person named in the Author field signed this changelog entry.
+Description: Change makefile to build in correct locations.
+  This patch changes the makefile to build in /usr instead of
+  /usr/local. Also change manpage build dir to /usr/share/man
+  instead of /usr/man.
 Author: Martin Steigerwald <ms@teamix.de>
-Bug-Debian: http://bugs.debian.org/613432
 
 ---
 The information above should follow the Patch Tagging Guidelines, please
