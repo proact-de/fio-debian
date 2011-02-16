@@ -1,12 +1,13 @@
 fio (1.50-1) unstable; urgency=low
 
-  * Thanks for importing, Ritesh. Found my mistake.
+  * Thanks for importing, Ritesh. Found my mistake with
+    help of Sebastian Harl. Thanks.
   * New upstream version 1.5.0 (Closes: #613432).
   * Updated to Standards-Version to 3.9.1, no changes needed.
   * Patch to fix spelling errors in manpage. Forwarded upstream.
   * Updated upstream copyright.
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 16 Feb 2011 10:50:56 +0100
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 16 Feb 2011 11:57:56 +0100
 
 fio (1.50-1~1.gbpa4517a) UNRELEASED; urgency=low
 
