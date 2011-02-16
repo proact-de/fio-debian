@@ -58,9 +58,9 @@ endif
 endif
 
 INSTALL = install
-prefix = /usr
+prefix = /usr/local
 bindir = $(prefix)/bin
-mandir = $(prefix)/share/man
+mandir = $(prefix)/man
 
 .c.o:
 	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<

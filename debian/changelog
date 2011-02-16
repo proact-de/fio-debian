@@ -1,6 +1,14 @@
+fio (1.50-1) unstable; urgency=low
+
+  * Thanks for importing, Ritesh. Found my mistake.
+  * New upstream version 1.5.0 (Closes: #613432).
+  * Updated to Standards-Version to 3.9.1, no changes needed.
+
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 16 Feb 2011 10:50:56 +0100
+
 fio (1.50-1~1.gbpa4517a) UNRELEASED; urgency=low
 
-  * Imported Upstream version 1.50
+  * Imported Upstream version 1.50.
 
  -- Ritesh Raj Sarraf <rrs@debian.org>  Tue, 15 Feb 2011 19:19:14 +0530
 
