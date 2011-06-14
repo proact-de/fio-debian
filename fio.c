@@ -45,6 +45,7 @@
 #include "cgroup.h"
 #include "profile.h"
 #include "lib/rand.h"
+#include "memalign.h"
 
 unsigned long page_mask;
 unsigned long page_size;
@@ -113,18 +114,12 @@ static void terminate_threads(int group_id)
 	}
 }
 
-/*
- * Happens on thread runs with ctrl-c, ignore our own SIGQUIT
- */
-static void sig_quit(int sig)
-{
-}
-
 static void sig_int(int sig)
 {
 	if (threads) {
 		log_info("\nfio: terminating on signal %d\n", sig);
 		fflush(stdout);
+		exit_value = 128;
 		terminate_threads(TERMINATE_ALL);
 	}
 }
@@ -176,7 +171,7 @@ static void set_sig_handlers(void)
 	sigaction(SIGINT, &act, NULL);
 
 	memset(&act, 0, sizeof(act));
-	act.sa_handler = sig_quit;
+	act.sa_handler = sig_int;
 	act.sa_flags = SA_RESTART;
 	sigaction(SIGTERM, &act, NULL);
 }
@@ -796,7 +791,7 @@ static void cleanup_io_u(struct thread_data *td)
 		io_u = flist_entry(entry, struct io_u, list);
 
 		flist_del(&io_u->list);
-		free(io_u);
+		fio_memfree(io_u, sizeof(*io_u));
 	}
 
 	free_io_mem(td);
@@ -843,8 +838,9 @@ static int init_io_u(struct thread_data *td)
 		if (td->terminate)
 			return 1;
 
-		if (posix_memalign(&ptr, cl_align, sizeof(*io_u))) {
-			log_err("fio: posix_memalign=%s\n", strerror(errno));
+		ptr = fio_memalign(cl_align, sizeof(*io_u));
+		if (!ptr) {
+			log_err("fio: unable to allocate aligned memory\n");
 			break;
 		}
 
