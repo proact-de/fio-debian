@@ -22,7 +22,7 @@
 
 #include "lib/getopt.h"
 
-static char fio_version_string[] = "fio 1.50";
+static char fio_version_string[] = "fio 1.55";
 
 #define FIO_RANDSEED		(0xb1899bedUL)
 
@@ -39,7 +39,8 @@ int eta_print;
 unsigned long long mlock_size = 0;
 FILE *f_out = NULL;
 FILE *f_err = NULL;
-char *job_section = NULL;
+char **job_sections = NULL;
+int nr_job_sections = 0;
 char *exec_profile = NULL;
 int warnings_fatal = 0;
 
@@ -63,82 +64,82 @@ static char cmd_optstr[256];
  */
 static struct option l_opts[FIO_NR_OPTIONS] = {
 	{
-		.name		= "output",
+		.name		= (char *) "output",
 		.has_arg	= required_argument,
 		.val		= 'o',
 	},
 	{
-		.name		= "timeout",
+		.name		= (char *) "timeout",
 		.has_arg	= required_argument,
 		.val		= 't',
 	},
 	{
-		.name		= "latency-log",
+		.name		= (char *) "latency-log",
 		.has_arg	= required_argument,
 		.val		= 'l',
 	},
 	{
-		.name		= "bandwidth-log",
+		.name		= (char *) "bandwidth-log",
 		.has_arg	= required_argument,
 		.val		= 'b',
 	},
 	{
-		.name		= "minimal",
+		.name		= (char *) "minimal",
 		.has_arg	= optional_argument,
 		.val		= 'm',
 	},
 	{
-		.name		= "version",
+		.name		= (char *) "version",
 		.has_arg	= no_argument,
 		.val		= 'v',
 	},
 	{
-		.name		= "help",
+		.name		= (char *) "help",
 		.has_arg	= no_argument,
 		.val		= 'h',
 	},
 	{
-		.name		= "cmdhelp",
+		.name		= (char *) "cmdhelp",
 		.has_arg	= optional_argument,
 		.val		= 'c',
 	},
 	{
-		.name		= "showcmd",
+		.name		= (char *) "showcmd",
 		.has_arg	= no_argument,
 		.val		= 's',
 	},
 	{
-		.name		= "readonly",
+		.name		= (char *) "readonly",
 		.has_arg	= no_argument,
 		.val		= 'r',
 	},
 	{
-		.name		= "eta",
+		.name		= (char *) "eta",
 		.has_arg	= required_argument,
 		.val		= 'e',
 	},
 	{
-		.name		= "debug",
+		.name		= (char *) "debug",
 		.has_arg	= required_argument,
 		.val		= 'd',
 	},
 	{
-		.name		= "section",
+		.name		= (char *) "section",
 		.has_arg	= required_argument,
 		.val		= 'x',
 	},
 	{
-		.name		= "alloc-size",
+		.name		= (char *) "alloc-size",
 		.has_arg	= required_argument,
 		.val		= 'a',
 	},
 	{
-		.name		= "profile",
+		.name		= (char *) "profile",
 		.has_arg	= required_argument,
 		.val		= 'p',
 	},
 	{
-		.name		= "warnings-fatal",
+		.name		= (char *) "warnings-fatal",
 		.has_arg	= no_argument,
 		.val		= 'w',
 	},
@@ -190,7 +191,7 @@ static void put_job(struct thread_data *td)
 {
 	if (td == &def_thread)
 		return;
-	
+
 	profile_td_exit(td);
 
 	if (td->error)
@@ -375,12 +376,6 @@ static int fixup_options(struct thread_data *td)
 		o->size = -1ULL;
 
 	if (o->verify != VERIFY_NONE) {
-		if (td_rw(td)) {
-			log_info("fio: mixed read/write workload with verify. "
-				"May not work as expected, unless you "
-				"pre-populated the file\n");
-			ret = warnings_fatal;
-		}
 		if (td_write(td) && o->do_verify && o->numjobs > 1) {
 			log_info("Multiple writers may overwrite blocks that "
 				"belong to other jobs. This can cause "
@@ -468,7 +463,7 @@ static int exists_and_not_file(const char *filename)
 	return 1;
 }
 
-void td_fill_rand_seeds(struct thread_data *td)
+static void td_fill_rand_seeds_os(struct thread_data *td)
 {
 	os_random_seed(td->rand_seeds[0], &td->bsrange_state);
 	os_random_seed(td->rand_seeds[1], &td->verify_state);
@@ -487,6 +482,35 @@ void td_fill_rand_seeds(struct thread_data *td)
 		td->rand_seeds[4] = FIO_RANDSEED * td->thread_number;
 
 	os_random_seed(td->rand_seeds[4], &td->random_state);
+}
+
+static void td_fill_rand_seeds_internal(struct thread_data *td)
+{
+	init_rand_seed(&td->__bsrange_state, td->rand_seeds[0]);
+	init_rand_seed(&td->__verify_state, td->rand_seeds[1]);
+	init_rand_seed(&td->__rwmix_state, td->rand_seeds[2]);
+
+	if (td->o.file_service_type == FIO_FSERVICE_RANDOM)
+		init_rand_seed(&td->__next_file_state, td->rand_seeds[3]);
+
+	init_rand_seed(&td->__file_size_state, td->rand_seeds[5]);
+	init_rand_seed(&td->__trim_state, td->rand_seeds[6]);
+
+	if (!td_random(td))
+		return;
+
+	if (td->o.rand_repeatable)
+		td->rand_seeds[4] = FIO_RANDSEED * td->thread_number;
+
+	init_rand_seed(&td->__random_state, td->rand_seeds[4]);
+}
+
+void td_fill_rand_seeds(struct thread_data *td)
+{
+	if (td->o.use_os_rand)
+		td_fill_rand_seeds_os(td);
+	else
+		td_fill_rand_seeds_internal(td);
 }
 
 /*
@@ -544,7 +568,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num)
 	}
 
 	if (profile_td_init(td))
-		return 1;
+		goto err;
 
 	engine = get_engine_name(td->o.ioengine);
 	td->io_ops = load_ioengine(td, engine);
@@ -724,12 +748,18 @@ void add_job_opts(const char **o)
 
 static int skip_this_section(const char *name)
 {
-	if (!job_section)
+	int i;
+
+	if (!nr_job_sections)
 		return 0;
 	if (!strncmp(name, "global", 6))
 		return 0;
 
-	return strcmp(job_section, name);
+	for (i = 0; i < nr_job_sections; i++)
+		if (!strcmp(job_sections[i], name))
+			return 0;
+
+	return 1;
 }
 
 static int is_empty_or_comment(char *line)
@@ -805,7 +835,7 @@ static int parse_jobs_ini(char *file, int stonewall_flag)
 
 		if (is_empty_or_comment(p))
 			continue;
-		if (sscanf(p, "[%255s]", name) != 1) {
+		if (sscanf(p, "[%255[^\n]]", name) != 1) {
 			if (inside_skip)
 				continue;
 			log_err("fio: option <%s> outside of [] job section\n",
@@ -1167,7 +1197,9 @@ static int parse_cmd_line(int argc, char *argv[])
 			if (set_debug(optarg))
 				do_exit++;
 			break;
-		case 'x':
+		case 'x': {
+			size_t new_size;
+
 			if (!strcmp(optarg, "global")) {
 				log_err("fio: can't use global as only "
 					"section\n");
@@ -1175,10 +1207,12 @@ static int parse_cmd_line(int argc, char *argv[])
 				exit_val = 1;
 				break;
 			}
-			if (job_section)
-				free(job_section);
-			job_section = strdup(optarg);
+			new_size = (nr_job_sections + 1) * sizeof(char *);
+			job_sections = realloc(job_sections, new_size);
+			job_sections[nr_job_sections] = strdup(optarg);
+			nr_job_sections++;
 			break;
+			}
 		case 'p':
 			exec_profile = strdup(optarg);
 			break;
@@ -1188,10 +1222,8 @@ static int parse_cmd_line(int argc, char *argv[])
 
 			if (!strncmp(opt, "name", 4) && td) {
 				ret = add_job(td, td->o.name ?: "fio", 0);
-				if (ret) {
-					put_job(td);
+				if (ret)
 					return 0;
-				}
 				td = NULL;
 			}
 			if (!td) {
@@ -1228,8 +1260,6 @@ static int parse_cmd_line(int argc, char *argv[])
 	if (td) {
 		if (!ret)
 			ret = add_job(td, td->o.name ?: "fio", 0);
-		if (ret)
-			put_job(td);
 	}
 
 	while (optind < argc) {

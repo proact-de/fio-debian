@@ -208,11 +208,18 @@ static int pre_read_file(struct thread_data *td, struct fio_file *f)
 static unsigned long long get_rand_file_size(struct thread_data *td)
 {
 	unsigned long long ret, sized;
-	long r;
+	unsigned long r;
 
-	r = os_random_long(&td->file_size_state);
-	sized = td->o.file_size_high - td->o.file_size_low;
-	ret = (unsigned long long) ((double) sized * (r / (OS_RAND_MAX + 1.0)));
+	if (td->o.use_os_rand) {
+		r = os_random_long(&td->file_size_state);
+		sized = td->o.file_size_high - td->o.file_size_low;
+		ret = (unsigned long long) ((double) sized * (r / (OS_RAND_MAX + 1.0)));
+	} else {
+		r = __rand(&td->__file_size_state);
+		sized = td->o.file_size_high - td->o.file_size_low;
+		ret = (unsigned long long) ((double) sized * (r / (FRAND_MAX + 1.0)));
+	}
+
 	ret += td->o.file_size_low;
 	ret -= (ret % td->o.rw_min_bs);
 	return ret;
@@ -497,7 +504,7 @@ open_again:
 
 	if (!from_hash && f->fd != -1) {
 		if (add_file_hash(f)) {
-			int ret;
+			int fio_unused ret;
 
 			/*
 			 * OK to ignore, we haven't done anything with it
@@ -812,7 +819,7 @@ int init_random_map(struct thread_data *td)
 				(unsigned long long) td->o.rw_min_bs;
 		num_maps = (blocks + BLOCKS_PER_MAP - 1) /
 				(unsigned long long) BLOCKS_PER_MAP;
-		f->file_map = smalloc(num_maps * sizeof(int));
+		f->file_map = smalloc(num_maps * sizeof(unsigned long));
 		if (f->file_map) {
 			f->num_maps = num_maps;
 			continue;

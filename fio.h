@@ -34,6 +34,7 @@ struct thread_data;
 #include "profile.h"
 #include "time.h"
 #include "lib/getopt.h"
+#include "lib/rand.h"
 
 #ifdef FIO_HAVE_GUASI
 #include <guasi.h>
@@ -206,6 +207,7 @@ struct thread_options {
 	unsigned int do_disk_util;
 	unsigned int override_sync;
 	unsigned int rand_repeatable;
+	unsigned int use_os_rand;
 	unsigned int write_lat_log;
 	unsigned int write_bw_log;
 	unsigned int norandommap;
@@ -334,6 +336,7 @@ struct thread_data {
 	union {
 		unsigned int next_file;
 		os_random_state_t next_file_state;
+		struct frand_state __next_file_state;
 	};
 	int error;
 	int done;
@@ -357,9 +360,18 @@ struct thread_data {
 
 	unsigned long rand_seeds[7];
 
-	os_random_state_t bsrange_state;
-	os_random_state_t verify_state;
-	os_random_state_t trim_state;
+	union {
+		os_random_state_t bsrange_state;
+		struct frand_state __bsrange_state;
+	};
+	union {
+		os_random_state_t verify_state;
+		struct frand_state __verify_state;
+	};
+	union {
+		os_random_state_t trim_state;
+		struct frand_state __trim_state;
+	};
 
 	unsigned int verify_batch;
 	unsigned int trim_batch;
@@ -415,7 +427,10 @@ struct thread_data {
 	/*
 	 * State for random io, a bitmap of blocks done vs not done
 	 */
-	os_random_state_t random_state;
+	union {
+		os_random_state_t random_state;
+		struct frand_state __random_state;
+	};
 
 	struct timeval start;	/* start of this loop */
 	struct timeval epoch;	/* time job was started */
@@ -428,7 +443,10 @@ struct thread_data {
 	/*
 	 * read/write mixed workload state
 	 */
-	os_random_state_t rwmix_state;
+	union {
+		os_random_state_t rwmix_state;
+		struct frand_state __rwmix_state;
+	};
 	unsigned long rwmix_issues;
 	enum fio_ddir rwmix_ddir;
 	unsigned int ddir_seq_nr;
@@ -464,7 +482,10 @@ struct thread_data {
 	/*
 	 * For generating file sizes
 	 */
-	os_random_state_t file_size_state;
+	union {
+		os_random_state_t file_size_state;
+		struct frand_state __file_size_state;
+	};
 
 	/*
 	 * Error counts
@@ -531,12 +552,12 @@ static inline void fio_ro_check(struct thread_data *td, struct io_u *io_u)
 	assert(!(io_u->ddir == DDIR_WRITE && !td_write(td)));
 }
 
-#define BLOCKS_PER_MAP		(8 * sizeof(int))
+#define BLOCKS_PER_MAP		(8 * sizeof(unsigned long))
 #define TO_MAP_BLOCK(f, b)	(b)
 #define RAND_MAP_IDX(f, b)	(TO_MAP_BLOCK(f, b) / BLOCKS_PER_MAP)
 #define RAND_MAP_BIT(f, b)	(TO_MAP_BLOCK(f, b) & (BLOCKS_PER_MAP - 1))
 
-#define MAX_JOBS	(1024)
+#define MAX_JOBS	(2048)
 
 #define td_non_fatal_error(e)	((e) == EIO || (e) == EILSEQ)
 
@@ -645,7 +666,7 @@ extern int load_blktrace(struct thread_data *, const char *);
 	if (!(cond)) {			\
 		int *__foo = NULL;	\
 		fprintf(stderr, "file:%s:%d, assert %s failed\n", __FILE__, __LINE__, #cond);	\
-		(td)->runstate = TD_EXITED;	\
+		td_set_runstate((td), TD_EXITED);	\
 		(td)->error = EFAULT;		\
 		*__foo = 0;			\
 	}	\

@@ -482,6 +482,7 @@ static int str_sfr_cb(void *data, const char *str)
 
 static int check_dir(struct thread_data *td, char *fname)
 {
+#if 0
 	char file[PATH_MAX], *dir;
 	int elen = 0;
 
@@ -494,7 +495,6 @@ static int check_dir(struct thread_data *td, char *fname)
 	sprintf(file + elen, "%s", fname);
 	dir = dirname(file);
 
-#if 0
 	{
 	struct stat sb;
 	/*
@@ -1113,6 +1113,14 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.off1	= td_var_offset(rand_repeatable),
 		.help	= "Use repeatable random IO pattern",
 		.def	= "1",
+		.parent = "rw",
+	},
+	{
+		.name	= "use_os_rand",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(use_os_rand),
+		.help	= "Set to use OS random generator",
+		.def	= "0",
 		.parent = "rw",
 	},
 	{

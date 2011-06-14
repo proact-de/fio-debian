@@ -30,7 +30,7 @@ static int random_map_free(struct fio_file *f, const unsigned long long block)
 
 	dprint(FD_RANDOM, "free: b=%llu, idx=%u, bit=%u\n", block, idx, bit);
 
-	return (f->file_map[idx] & (1 << bit)) == 0;
+	return (f->file_map[idx] & (1UL << bit)) == 0;
 }
 
 /*
@@ -50,8 +50,8 @@ static void mark_random_map(struct thread_data *td, struct io_u *io_u)
 	busy_check = !(io_u->flags & IO_U_F_BUSY_OK);
 
 	while (nr_blocks) {
-		unsigned int this_blocks, mask;
 		unsigned int idx, bit;
+		unsigned long mask, this_blocks;
 
 		/*
 		 * If we have a mixed random workload, we may
@@ -75,9 +75,9 @@ static void mark_random_map(struct thread_data *td, struct io_u *io_u)
 
 		do {
 			if (this_blocks == BLOCKS_PER_MAP)
-				mask = -1U;
+				mask = -1UL;
 			else
-				mask = ((1U << this_blocks) - 1) << bit;
+				mask = ((1UL << this_blocks) - 1) << bit;
 	
 			if (!(f->file_map[idx] & mask))
 				break;
@@ -126,7 +126,7 @@ static unsigned long long last_block(struct thread_data *td, struct fio_file *f,
 static int get_next_free_block(struct thread_data *td, struct fio_file *f,
 			       enum fio_ddir ddir, unsigned long long *b)
 {
-	unsigned long long min_bs = td->o.rw_min_bs, lastb;
+	unsigned long long block, min_bs = td->o.rw_min_bs, lastb;
 	int i;
 
 	lastb = last_block(td, f, ddir);
@@ -134,18 +134,19 @@ static int get_next_free_block(struct thread_data *td, struct fio_file *f,
 		return 1;
 
 	i = f->last_free_lookup;
-	*b = (i * BLOCKS_PER_MAP);
-	while ((*b) * min_bs < f->real_file_size &&
-		(*b) * min_bs < f->io_size) {
-		if (f->file_map[i] != (unsigned int) -1) {
-			*b += ffz(f->file_map[i]);
-			if (*b > lastb)
+	block = i * BLOCKS_PER_MAP;
+	while (block * min_bs < f->real_file_size &&
+		block * min_bs < f->io_size) {
+		if (f->file_map[i] != -1UL) {
+			block += ffz(f->file_map[i]);
+			if (block > lastb)
 				break;
 			f->last_free_lookup = i;
+			*b = block;
 			return 0;
 		}
 
-		*b += BLOCKS_PER_MAP;
+		block += BLOCKS_PER_MAP;
 		i++;
 	}
 
@@ -163,26 +164,39 @@ static int get_next_rand_offset(struct thread_data *td, struct fio_file *f,
 	if (!lastb)
 		return 1;
 
+	if (f->failed_rands >= 200)
+		goto ffz;
+
 	do {
-		r = os_random_long(&td->random_state);
+		if (td->o.use_os_rand) {
+			r = os_random_long(&td->random_state);
+			*b = (lastb - 1) * (r / ((unsigned long long) OS_RAND_MAX + 1.0));
+		} else {
+			r = __rand(&td->__random_state);
+			*b = (lastb - 1) * (r / ((unsigned long long) FRAND_MAX + 1.0));
+		}
+
 		dprint(FD_RANDOM, "off rand %llu\n", r);
-		*b = (lastb - 1) * (r / ((unsigned long long) OS_RAND_MAX + 1.0));
+
 
 		/*
 		 * if we are not maintaining a random map, we are done.
 		 */
 		if (!file_randommap(td, f))
-			return 0;
+			goto ret_good;
 
 		/*
 		 * calculate map offset and check if it's free
 		 */
 		if (random_map_free(f, *b))
-			return 0;
+			goto ret_good;
 
 		dprint(FD_RANDOM, "get_next_rand_offset: offset %llu busy\n",
 									*b);
 	} while (--loops);
+
+	if (!f->failed_rands++)
+		f->last_free_lookup = 0;
 
 	/*
 	 * we get here, if we didn't suceed in looking up a block. generate
@@ -194,16 +208,27 @@ static int get_next_rand_offset(struct thread_data *td, struct fio_file *f,
 		f->last_free_lookup = (f->num_maps - 1) *
 					(r / (OS_RAND_MAX + 1.0));
 		if (!get_next_free_block(td, f, ddir, b))
-			return 0;
+			goto ret;
 
-		r = os_random_long(&td->random_state);
+		if (td->o.use_os_rand)
+			r = os_random_long(&td->random_state);
+		else
+			r = __rand(&td->__random_state);
 	} while (--loops);
 
 	/*
 	 * that didn't work either, try exhaustive search from the start
 	 */
 	f->last_free_lookup = 0;
+ffz:
+	if (!get_next_free_block(td, f, ddir, b))
+		return 0;
+	f->last_free_lookup = 0;
 	return get_next_free_block(td, f, ddir, b);
+ret_good:
+	f->failed_rands = 0;
+ret:
+	return 0;
 }
 
 static int get_next_rand_block(struct thread_data *td, struct fio_file *f,
@@ -316,12 +341,20 @@ static int get_next_offset(struct thread_data *td, struct io_u *io_u)
 	return __get_next_offset(td, io_u);
 }
 
+static inline int io_u_fits(struct thread_data *td, struct io_u *io_u,
+			    unsigned int buflen)
+{
+	struct fio_file *f = io_u->file;
+
+	return io_u->offset + buflen <= f->io_size + td->o.start_offset;
+}
+
 static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u)
 {
 	const int ddir = io_u->ddir;
 	unsigned int uninitialized_var(buflen);
 	unsigned int minbs, maxbs;
-	long r;
+	unsigned long r, rand_max;
 
 	assert(ddir_rw(ddir));
 
@@ -329,12 +362,22 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u)
 	maxbs = td->o.max_bs[ddir];
 
 	if (minbs == maxbs)
-		buflen = minbs;
-	else {
-		r = os_random_long(&td->bsrange_state);
+		return minbs;
+
+	if (td->o.use_os_rand)
+		rand_max = OS_RAND_MAX;
+	else
+		rand_max = FRAND_MAX;
+
+	do {
+		if (td->o.use_os_rand)
+			r = os_random_long(&td->bsrange_state);
+		else
+			r = __rand(&td->__bsrange_state);
+
 		if (!td->o.bssplit_nr[ddir]) {
 			buflen = 1 + (unsigned int) ((double) maxbs *
-					(r / (OS_RAND_MAX + 1.0)));
+					(r / (rand_max + 1.0)));
 			if (buflen < minbs)
 				buflen = minbs;
 		} else {
@@ -346,19 +389,16 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u)
 
 				buflen = bsp->bs;
 				perc += bsp->perc;
-				if (r <= ((OS_RAND_MAX / 100L) * perc))
+				if ((r <= ((rand_max / 100L) * perc)) &&
+				    io_u_fits(td, io_u, buflen))
 					break;
 			}
 		}
+
 		if (!td->o.bs_unaligned && is_power_of_2(minbs))
 			buflen = (buflen + minbs - 1) & ~(minbs - 1);
-	}
 
-	if (io_u->offset + buflen > io_u->file->real_file_size) {
-		dprint(FD_IO, "lower buflen %u -> %u (ddir=%d)\n", buflen,
-						minbs, ddir);
-		buflen = minbs;
-	}
+	} while (!io_u_fits(td, io_u, buflen));
 
 	return buflen;
 }
@@ -389,10 +429,16 @@ static void set_rwmix_bytes(struct thread_data *td)
 static inline enum fio_ddir get_rand_ddir(struct thread_data *td)
 {
 	unsigned int v;
-	long r;
+	unsigned long r;
 
-	r = os_random_long(&td->rwmix_state);
-	v = 1 + (int) (100.0 * (r / (OS_RAND_MAX + 1.0)));
+	if (td->o.use_os_rand) {
+		r = os_random_long(&td->rwmix_state);
+		v = 1 + (int) (100.0 * (r / (OS_RAND_MAX + 1.0)));
+	} else {
+		r = __rand(&td->__rwmix_state);
+		v = 1 + (int) (100.0 * (r / (FRAND_MAX + 1.0)));
+	}
+
 	if (v <= td->o.rwmix[DDIR_READ])
 		return DDIR_READ;
 
@@ -808,11 +854,19 @@ static struct fio_file *get_next_file_rand(struct thread_data *td,
 	int fno;
 
 	do {
-		long r = os_random_long(&td->next_file_state);
 		int opened = 0;
+		unsigned long r;
 
-		fno = (unsigned int) ((double) td->o.nr_files
-			* (r / (OS_RAND_MAX + 1.0)));
+		if (td->o.use_os_rand) {
+			r = os_random_long(&td->next_file_state);
+			fno = (unsigned int) ((double) td->o.nr_files
+				* (r / (OS_RAND_MAX + 1.0)));
+		} else {
+			r = __rand(&td->__next_file_state);
+			fno = (unsigned int) ((double) td->o.nr_files
+				* (r / (FRAND_MAX + 1.0)));
+		}
+
 		f = td->files[fno];
 		if (fio_file_done(f))
 			continue;
