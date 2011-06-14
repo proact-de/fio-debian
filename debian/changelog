@@ -1,3 +1,11 @@
+fio (1.55-1) unstable; urgency=low
+
+  * Corrected debian/watch file, thanks Ilya Barygin (Closes: #629174).
+  * Imported Upstream version 1.55.
+  * Updated to Standards-Version to 3.9.2, no changes needed.
+
+ -- Martin Steigerwald <ms@teamix.de>  Tue, 14 Jun 2011 16:46:46 +0200
+
 fio (1.50-1) unstable; urgency=low
 
   * Thanks for importing, Ritesh. Found my mistake with
