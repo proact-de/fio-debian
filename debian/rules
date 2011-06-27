@@ -9,7 +9,13 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
-build: build-stamp
+build: build-arch build-indep
+
+build-arch: build-stamp
+
+build-indep:
+# Since there are no architecture independent packages we
+# have nothing to build by default.
 
 build-stamp:
 	dh_testdir
@@ -29,7 +35,11 @@ clean:
 
 	dh_clean
 
-install: build
+install-indep:
+# Since there are no architecture independent packages we have
+# nothing to install by default.
+
+install-arch: build-arch
 	dh_testdir
 	dh_testroot
 	dh_prep
@@ -38,13 +48,15 @@ install: build
 	# Add here commands to install the package into debian/fio.
 	$(MAKE) DESTDIR=$(CURDIR)/debian/fio install
 
+install: install-arch install-indep
 
 # Build architecture-independent files here.
-binary-indep: build install
-# We have nothing to do by default.
+binary-indep: build-indep install-indep
+# Since there are no architecture independent packages We have
+# nothing to do by default.
 
 # Build architecture-dependent files here.
-binary-arch: build install
+binary-arch: build-arch install-arch
 	dh_testdir
 	dh_testroot
 	dh_installchangelogs

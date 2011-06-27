@@ -8,6 +8,11 @@ fio (1.55-1) unstable; urgency=low
   * Updated to Standards-Version to 3.9.2, no changes needed.
   * debian/watch: Removed template to fix lintian warning
     debian-watch-contains-dh_make-template.
+  * debian/rules: Added build-arch and build-indep as targets as
+    recommened by lintian 2.5.1 in order to prepare for a future
+    policy change.
+    * build-indep does nothing as there are no architecture
+      indepedent packages for now.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 27 Jun 2011 12:16:05 +0200
 
