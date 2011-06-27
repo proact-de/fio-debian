@@ -14,7 +14,7 @@ fio (1.55-1) unstable; urgency=low
     * build-indep does nothing as there are no architecture
       indepedent packages for now.
 
- -- Martin Steigerwald <ms@teamix.de>  Mon, 27 Jun 2011 12:16:05 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 27 Jun 2011 14:32:05 +0200
 
 fio (1.50-1) unstable; urgency=low
 
