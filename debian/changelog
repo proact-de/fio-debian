@@ -5,6 +5,7 @@ fio (1.55-1) unstable; urgency=low
   * Updated to Standards-Version to 3.9.2, no changes needed.
   * Added patch debian/linkorder from Ilya Barygin to fix build
     failure with --as-needed linker option, thanks (Closes: #631690).
+  * Adapted this patch to fio 1.55.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 27 Jun 2011 12:16:05 +0200
 
