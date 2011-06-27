@@ -65,15 +65,15 @@ endif
 endif
 
 INSTALL = install
-prefix = /usr
+prefix = /usr/local
 bindir = $(prefix)/bin
-mandir = $(prefix)/share/man
+mandir = $(prefix)/man
 
 .c.o:
 	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<
 
 fio: $(OBJS)
-	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(LIBS) $(OBJS)
 
 depend:
 	$(QUIET_DEP)$(CC) -MM $(CFLAGS) $(CPPFLAGS) $(SOURCE) 1> .depend
