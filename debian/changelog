@@ -2,10 +2,10 @@ fio (1.55-1) unstable; urgency=low
 
   * Corrected debian/watch file, thanks Ilya Barygin (Closes: #629174).
   * Imported Upstream version 1.55.
+    * Includes commit e52947d15cf0d7d31c30ccdc43450a10081976da
+      that fixes build failure with --as-needed linker option
+      (Closes: #631690).
   * Updated to Standards-Version to 3.9.2, no changes needed.
-  * Added patch debian/linkorder from Ilya Barygin to fix build
-    failure with --as-needed linker option, thanks (Closes: #631690).
-  * Adapted this patch to fio 1.55.
   * debian/watch: Removed template to fix lintian warning
     debian-watch-contains-dh_make-template.
 
