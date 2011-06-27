@@ -6,6 +6,8 @@ fio (1.55-1) unstable; urgency=low
   * Added patch debian/linkorder from Ilya Barygin to fix build
     failure with --as-needed linker option, thanks (Closes: #631690).
   * Adapted this patch to fio 1.55.
+  * debian/watch: Removed template to fix lintian warning
+    debian-watch-contains-dh_make-template.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 27 Jun 2011 12:16:05 +0200
 
