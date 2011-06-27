@@ -17,9 +17,11 @@ Forwarded: <no|not-needed|url proving that it has been forwarded>
 Reviewed-By: <name and email of someone who approved the patch>
 Last-Update: <YYYY-MM-DD>
 
---- fio-1.50.orig/Makefile
-+++ fio-1.50/Makefile
-@@ -58,9 +58,9 @@ endif
+Index: fio/Makefile
+===================================================================
+--- fio.orig/Makefile	2011-06-27 12:38:32.827925996 +0200
++++ fio/Makefile	2011-06-27 12:38:43.563935069 +0200
+@@ -65,9 +65,9 @@
  endif
  
  INSTALL = install
