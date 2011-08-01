@@ -1,4 +1,11 @@
-fio (1.55-1) unstable; urgency=low
+fio (1.57-1) unstable; urgency=low
+
+  * Imported Upstream version 1.57.
+  * Dropped manpage with manpage spelling fixes. Merged upstream.
+
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 01 Aug 2011 11:41:22 +0200
+
+fio (1.55-1) UNRELEASED; urgency=low
 
   * Corrected debian/watch file, thanks Ilya Barygin (Closes: #629174).
   * Imported Upstream version 1.55.
