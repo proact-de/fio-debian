@@ -9,7 +9,7 @@ Index: fio/Makefile
 ===================================================================
 --- fio.orig/Makefile	2011-06-27 12:38:32.827925996 +0200
 +++ fio/Makefile	2011-06-27 12:38:43.563935069 +0200
-@@ -65,9 +65,9 @@
+@@ -71,9 +71,9 @@
  endif
  
  INSTALL = install
@@ -19,5 +19,5 @@ Index: fio/Makefile
 -mandir = $(prefix)/man
 +mandir = $(prefix)/share/man
  
- .c.o:
- 	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<
+ all: .depend $(PROGS) $(SCRIPTS)
+ 
