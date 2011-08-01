@@ -22,12 +22,12 @@
 
 #include "lib/getopt.h"
 
-static char fio_version_string[] = "fio 1.55";
+static char fio_version_string[] = "fio 1.57";
 
 #define FIO_RANDSEED		(0xb1899bedUL)
 
 static char **ini_file;
-static int max_jobs = MAX_JOBS;
+static int max_jobs = FIO_MAX_JOBS;
 static int dump_cmdline;
 
 static struct thread_data def_thread;
@@ -142,6 +142,11 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 		.name		= (char *) "warnings-fatal",
 		.has_arg	= no_argument,
 		.val		= 'w',
+	},
+	{
+		.name		= (char *) "max-jobs",
+		.has_arg	= required_argument,
+		.val		= 'j',
 	},
 	{
 		.name		= NULL,
@@ -771,7 +776,7 @@ static int is_empty_or_comment(char *line)
 			return 1;
 		if (line[i] == '#')
 			return 1;
-		if (!isspace(line[i]) && !iscntrl(line[i]))
+		if (!isspace((int) line[i]) && !iscntrl((int) line[i]))
 			return 0;
 	}
 
@@ -1039,6 +1044,7 @@ static void usage(const char *name)
 	printf("\t--alloc-size=kb\tSet smalloc pool to this size in kb"
 		" (def 1024)\n");
 	printf("\t--warnings-fatal Fio parser warnings are fatal\n");
+	printf("\t--max-jobs\tMaximum number of threads/processes to support\n");
 	printf("\nFio was written by Jens Axboe <jens.axboe@oracle.com>");
 	printf("\n                   Jens Axboe <jaxboe@fusionio.com>\n");
 }
@@ -1246,6 +1252,14 @@ static int parse_cmd_line(int argc, char *argv[])
 		}
 		case 'w':
 			warnings_fatal = 1;
+			break;
+		case 'j':
+			max_jobs = atoi(optarg);
+			if (!max_jobs || max_jobs > REAL_MAX_JOBS) {
+				log_err("fio: invalid max jobs: %d\n", max_jobs);
+				do_exit++;
+				exit_val = 1;
+			}
 			break;
 		default:
 			do_exit++;

@@ -102,7 +102,9 @@ static void terminate_threads(int group_id)
 			/*
 			 * if the thread is running, just let it exit
 			 */
-			if (td->runstate < TD_RUNNING)
+			if (!td->pid)
+				continue;
+			else if (td->runstate < TD_RAMP)
 				kill(td->pid, SIGTERM);
 			else {
 				struct ioengine_ops *ops = td->io_ops;
@@ -180,7 +182,7 @@ static void set_sig_handlers(void)
  * Check if we are above the minimum rate given.
  */
 static int __check_min_rate(struct thread_data *td, struct timeval *now,
-			    enum td_ddir ddir)
+			    enum fio_ddir ddir)
 {
 	unsigned long long bytes = 0;
 	unsigned long iops = 0;
@@ -372,10 +374,15 @@ requeue:
 	return 0;
 }
 
+static inline void __update_tv_cache(struct thread_data *td)
+{
+	fio_gettime(&td->tv_cache, NULL);
+}
+
 static inline void update_tv_cache(struct thread_data *td)
 {
 	if ((++td->tv_cache_nr & td->tv_cache_mask) == td->tv_cache_mask)
-		fio_gettime(&td->tv_cache, NULL);
+		__update_tv_cache(td);
 }
 
 static int break_on_this_error(struct thread_data *td, int *retptr)
@@ -461,8 +468,11 @@ static void do_verify(struct thread_data *td)
 		update_tv_cache(td);
 
 		if (runtime_exceeded(td, &td->tv_cache)) {
-			td->terminate = 1;
-			break;
+			__update_tv_cache(td);
+			if (runtime_exceeded(td, &td->tv_cache)) {
+				td->terminate = 1;
+				break;
+			}
 		}
 
 		io_u = __get_io_u(td);
@@ -540,9 +550,10 @@ sync_done:
 
 		/*
 		 * if we can queue more, do so. but check if there are
-		 * completed io_u's first.
+		 * completed io_u's first. Note that we can get BUSY even
+		 * without IO queued, if the system is resource starved.
 		 */
-		full = queue_full(td) || ret == FIO_Q_BUSY;
+		full = queue_full(td) || (ret == FIO_Q_BUSY && td->cur_depth);
 		if (full || !td->o.iodepth_batch_complete) {
 			min_events = min(td->o.iodepth_batch_complete,
 					 td->cur_depth);
@@ -607,8 +618,11 @@ static void do_io(struct thread_data *td)
 		update_tv_cache(td);
 
 		if (runtime_exceeded(td, &td->tv_cache)) {
-			td->terminate = 1;
-			break;
+			__update_tv_cache(td);
+			if (runtime_exceeded(td, &td->tv_cache)) {
+				td->terminate = 1;
+				break;
+			}
 		}
 
 		io_u = get_io_u(td);
@@ -697,9 +711,11 @@ sync_done:
 			break;
 
 		/*
-		 * See if we need to complete some commands
+		 * See if we need to complete some commands. Note that we
+		 * can get BUSY even without IO queued, if the system is
+		 * resource starved.
 		 */
-		full = queue_full(td) || ret == FIO_Q_BUSY;
+		full = queue_full(td) || (ret == FIO_Q_BUSY && td->cur_depth);
 		if (full || !td->o.iodepth_batch_complete) {
 			min_evts = min(td->o.iodepth_batch_complete,
 					td->cur_depth);
@@ -760,8 +776,11 @@ sync_done:
 		struct fio_file *f;
 
 		i = td->cur_depth;
-		if (i)
+		if (i) {
 			ret = io_u_queued_complete(td, i, NULL);
+			if (td->o.fill_device && td->error == ENOSPC)
+				td->error = 0;
+		}
 
 		if (should_fsync(td) && td->o.end_fsync) {
 			td_set_runstate(td, TD_FSYNCING);
@@ -964,11 +983,6 @@ static void reset_io_counters(struct thread_data *td)
 	 */
 	if (td->o.time_based || td->o.loops)
 		td->nr_done_files = 0;
-
-	/*
-	 * Set the same seed to get repeatable runs
-	 */
-	td_fill_rand_seeds(td);
 }
 
 void reset_all_stats(struct thread_data *td)
@@ -1002,6 +1016,11 @@ static void clear_io_state(struct thread_data *td)
 	close_files(td);
 	for_each_file(td, f, i)
 		fio_file_clear_done(f);
+
+	/*
+	 * Set the same seed to get repeatable runs
+	 */
+	td_fill_rand_seeds(td);
 }
 
 static int exec_string(const char *string)
@@ -1031,10 +1050,11 @@ static void *thread_main(void *data)
 	pthread_condattr_t attr;
 	int clear_state;
 
-	if (!td->o.use_thread)
+	if (!td->o.use_thread) {
 		setsid();
-
-	td->pid = getpid();
+		td->pid = getpid();
+	} else
+		td->pid = gettid();
 
 	dprint(FD_PROCESS, "jobs pid=%d started\n", (int) td->pid);
 
@@ -1079,6 +1099,22 @@ static void *thread_main(void *data)
 	}
 
 	/*
+	 * If we have a gettimeofday() thread, make sure we exclude that
+	 * thread from this job
+	 */
+	if (td->o.gtod_cpu)
+		fio_cpu_clear(&td->o.cpumask, td->o.gtod_cpu);
+
+	/*
+	 * Set affinity first, in case it has an impact on the memory
+	 * allocations.
+	 */
+	if (td->o.cpumask_set && fio_setaffinity(td->pid, td->o.cpumask) == -1) {
+		td_verror(td, errno, "cpu_set_affinity");
+		goto err;
+	}
+
+	/*
 	 * May alter parameters that init_io_u() will use, so we need to
 	 * do this first.
 	 */
@@ -1090,23 +1126,6 @@ static void *thread_main(void *data)
 
 	if (td->o.verify_async && verify_async_init(td))
 		goto err;
-
-	if (td->o.cpumask_set && fio_setaffinity(td->pid, td->o.cpumask) == -1) {
-		td_verror(td, errno, "cpu_set_affinity");
-		goto err;
-	}
-
-	/*
-	 * If we have a gettimeofday() thread, make sure we exclude that
-	 * thread from this job
-	 */
-	if (td->o.gtod_cpu) {
-		fio_cpu_clear(&td->o.cpumask, td->o.gtod_cpu);
-		if (fio_setaffinity(td->pid, td->o.cpumask) == -1) {
-			td_verror(td, errno, "cpu_set_affinity");
-			goto err;
-		}
-	}
 
 	if (td->ioprio_set) {
 		if (ioprio_set(IOPRIO_WHO_PROCESS, 0, td->ioprio) == -1) {
@@ -1281,6 +1300,7 @@ static int fork_main(int shmid, int offset)
 	struct thread_data *td;
 	void *data, *ret;
 
+#ifndef __hpux
 	data = shmat(shmid, NULL, 0);
 	if (data == (void *) -1) {
 		int __err = errno;
@@ -1288,6 +1308,12 @@ static int fork_main(int shmid, int offset)
 		perror("shmat");
 		return __err;
 	}
+#else
+	/*
+	 * HP-UX inherits shm mappings?
+	 */
+	data = threads;
+#endif
 
 	td = data + offset * sizeof(struct thread_data);
 	ret = thread_main(td);
@@ -1512,7 +1538,7 @@ static void run_threads(void)
 	set_genesis_time();
 
 	while (todo) {
-		struct thread_data *map[MAX_JOBS];
+		struct thread_data *map[REAL_MAX_JOBS];
 		struct timeval this_start;
 		int this_jobs = 0, left;
 

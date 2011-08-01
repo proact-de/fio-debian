@@ -329,7 +329,7 @@ static int str_cpumask_cb(void *data, unsigned long long *val)
 		return 1;
 	}
 
-	max_cpu = sysconf(_SC_NPROCESSORS_ONLN);
+	max_cpu = cpus_online();
 
 	for (i = 0; i < sizeof(int) * 8; i++) {
 		if ((1 << i) & *val) {
@@ -366,7 +366,7 @@ static int set_cpus_allowed(struct thread_data *td, os_cpu_mask_t *mask,
 	strip_blank_front(&str);
 	strip_blank_end(str);
 
-	max_cpu = sysconf(_SC_NPROCESSORS_ONLN);
+	max_cpu = cpus_online();
 
 	while ((cpu = strsep(&str, ",")) != NULL) {
 		char *str2, *cpu2;
@@ -744,6 +744,20 @@ static int str_gtod_cpu_cb(void *data, long long *il)
 	return 0;
 }
 
+static int str_size_cb(void *data, unsigned long long *__val)
+{
+	struct thread_data *td = data;
+	unsigned long long v = *__val;
+
+	if (parse_is_percent(v)) {
+		td->o.size = 0;
+		td->o.size_percent = -1ULL - v;
+	} else
+		td->o.size = v;
+
+	return 0;
+}
+
 static int rw_verify(struct fio_option *o, void *data)
 {
 	struct thread_data *td = data;
@@ -1031,8 +1045,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 	{
 		.name	= "size",
 		.type	= FIO_OPT_STR_VAL,
-		.off1	= td_var_offset(size),
-		.minval = 1,
+		.cb	= str_size_cb,
 		.help	= "Total size of device or files",
 	},
 	{
@@ -1178,12 +1191,37 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 #ifdef FIO_HAVE_FALLOCATE
 	{
 		.name	= "fallocate",
-		.type	= FIO_OPT_BOOL,
-		.off1	= td_var_offset(fallocate),
-		.help	= "Use fallocate() when laying out files",
-		.def	= "1",
-	},
+		.type	= FIO_OPT_STR,
+		.off1	= td_var_offset(fallocate_mode),
+		.help	= "Whether pre-allocation is performed when laying out files",
+		.def	= "posix",
+		.posval	= {
+			  { .ival = "none",
+			    .oval = FIO_FALLOCATE_NONE,
+			    .help = "Do not pre-allocate space",
+			  },
+			  { .ival = "posix",
+			    .oval = FIO_FALLOCATE_POSIX,
+			    .help = "Use posix_fallocate()",
+			  },
+#ifdef FIO_HAVE_LINUX_FALLOCATE
+			  { .ival = "keep",
+			    .oval = FIO_FALLOCATE_KEEP_SIZE,
+			    .help = "Use fallocate(..., FALLOC_FL_KEEP_SIZE, ...)",
+			  },
 #endif
+			  /* Compatibility with former boolean values */
+			  { .ival = "0",
+			    .oval = FIO_FALLOCATE_NONE,
+			    .help = "Alias for 'none'",
+			  },
+			  { .ival = "1",
+			    .oval = FIO_FALLOCATE_POSIX,
+			    .help = "Alias for 'posix'",
+			  },
+		},
+	},
+#endif	/* FIO_HAVE_FALLOCATE */
 	{
 		.name	= "fadvise_hint",
 		.type	= FIO_OPT_BOOL,
@@ -2066,11 +2104,11 @@ void fio_keywords_init(void)
 	sprintf(buf, "%lu", page_size);
 	fio_keywords[0].replace = strdup(buf);
 
-	mb_memory = os_phys_mem() / page_size;
+	mb_memory = os_phys_mem() / (1024 * 1024);
 	sprintf(buf, "%llu", mb_memory);
 	fio_keywords[1].replace = strdup(buf);
 
-	l = sysconf(_SC_NPROCESSORS_ONLN);
+	l = cpus_online();
 	sprintf(buf, "%lu", l);
 	fio_keywords[2].replace = strdup(buf);
 }

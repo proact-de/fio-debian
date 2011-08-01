@@ -45,7 +45,7 @@ Print help information for \fIcommand\fR.  May be `all' for all commands.
 .TP
 .BI \-\-debug \fR=\fPtype
 Enable verbose tracing of various fio actions. May be `all' for all types
-or individual types seperated by a comma (eg \-\-debug=io,file). `help' will
+or individual types separated by a comma (eg \-\-debug=io,file). `help' will
 list all available tracing options.
 .TP
 .B \-\-help
@@ -81,8 +81,8 @@ SI integer: a whole number, possibly containing a suffix denoting the base unit
 of the value.  Accepted suffixes are `k', 'M', 'G', 'T', and 'P', denoting
 kilo (1024), mega (1024^2), giga (1024^3), tera (1024^4), and peta (1024^5)
 respectively. The suffix is not case sensitive. If prefixed with '0x', the
-value is assumed to be base 16 (hexadecimal). A suffix may include a trailing
-'b', for instance 'kb' is identical to 'k'. You can specify a base 10 value
+value is assumed to be base 16 (hexadecimal). A suffix may include a trailing 'b',
+for instance 'kb' is identical to 'k'. You can specify a base 10 value
 by using 'KiB', 'MiB', 'GiB', etc. This is useful for disk drives where
 values are often given in base 10 values. Specifying '30GiB' will get you
 30*1000^3 bytes.
@@ -220,10 +220,32 @@ offsets, or it can use it's own internal generator (based on Tausworthe).
 Default is to use the internal generator, which is often of better quality and
 faster. Default: false.
 .TP
-.BI fallocate \fR=\fPbool
-By default, fio will use fallocate() to advise the system of the size of the
-file we are going to write. This can be turned off with fallocate=0. May not
-be available on all supported platforms.
+.BI fallocate \fR=\fPstr
+Whether pre-allocation is performed when laying down files. Accepted values
+are:
+.RS
+.RS
+.TP
+.B none
+Do not pre-allocate space.
+.TP
+.B posix
+Pre-allocate via posix_fallocate().
+.TP
+.B keep
+Pre-allocate via fallocate() with FALLOC_FL_KEEP_SIZE set.
+.TP
+.B 0
+Backward-compatible alias for 'none'.
+.TP
+.B 1
+Backward-compatible alias for 'posix'.
+.RE
+.P
+May not be available on all supported platforms. 'keep' is only
+available on Linux. If using ZFS on Solaris this must be set to 'none'
+because ZFS doesn't support it. Default: 'posix'.
+.RE
 .TP
 .BI fadvise_hint \fR=\fPbool
 Disable use of \fIposix_fadvise\fR\|(2) to advise the kernel what I/O patterns
@@ -235,7 +257,9 @@ been transfered, unless limited by other options (\fBruntime\fR, for instance).
 Unless \fBnrfiles\fR and \fBfilesize\fR options are given, this amount will be
 divided between the available files for the job. If not set, fio will use the
 full size of the given files or devices. If the the files do not exist, size
-must be given.
+must be given. It is also possible to give size as a percentage between 1 and
+100. If size=20% is given, fio will use 20% of the full size of the given files
+or devices.
 .TP
 .BI fill_device \fR=\fPbool "\fR,\fB fill_fs" \fR=\fPbool
 Sets size to something really large and waits for ENOSPC (no space left on
@@ -268,7 +292,7 @@ This option allows even finer grained control of the block sizes issued,
 not just even splits between them. With this option, you can weight various
 block sizes for exact control of the issued IO for a job that has mixed
 block sizes. The format of the option is bssplit=blocksize/percentage,
-optionally adding as many definitions as needed seperated by a colon.
+optionally adding as many definitions as needed separated by a colon.
 Example: bssplit=4k/10:64k/50:32k/40 would issue 50% 64k blocks, 10% 4k
 blocks and 40% 32k blocks. \fBbssplit\fR also supports giving separate
 splits to reads and writes. The format is identical to what the
@@ -735,7 +759,7 @@ read back and verified).  If \fBverify_backlog_batch\fR is less than
 will be verified more than once.
 .TP
 .B stonewall
-Wait for preceeding jobs in the job file to exit before starting this one.
+Wait for preceding jobs in the job file to exit before starting this one.
 \fBstonewall\fR implies \fBnew_group\fR.
 .TP
 .B new_group
@@ -801,7 +825,7 @@ really high IOPS rates.  Note that to really get rid of a large amount of these
 calls, this option must be used with disable_slat and disable_bw as well.
 .TP
 .B disable_clat \fR=\fPbool
-Disable measurements of submission latency numbers. See \fBdisable_lat\fR.
+Disable measurements of completion latency numbers. See \fBdisable_lat\fR.
 .TP
 .B disable_slat \fR=\fPbool
 Disable measurements of submission latency numbers. See \fBdisable_lat\fR.
@@ -854,7 +878,7 @@ Add job to this control group. If it doesn't exist, it will be created.
 The system must have a mounted cgroup blkio mount point for this to work. If
 your system doesn't have it mounted, you can do so with:
 
-# mount -t cgroup -o blkio none /cgroup
+# mount \-t cgroup \-o blkio none /cgroup
 .TP
 .BI cgroup_weight \fR=\fPint
 Set the weight of the cgroup to this value. See the documentation that comes
@@ -1096,7 +1120,7 @@ Milliseconds:
 .RE
 .RE
 .P
-Error Info (dependant on continue_on_error, default off):
+Error Info (dependent on continue_on_error, default off):
 .RS
 .B total # errors, first error code 
 .RE

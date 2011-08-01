@@ -43,8 +43,13 @@ endif
 ifeq ($(UNAME), AIX)
   SOURCE += fifo.c helpers.c lib/getopt_long.c engines/posixaio.c
   LIBS	 += -lpthread -ldl -lrt
-  CFLAGS += -rdynamic
   CPPFLAGS += -D_LARGE_FILES -D__ppc__
+  LDFLAGS += -L/opt/freeware/lib -Wl,-blibpath:/opt/freeware/lib:/usr/lib:/lib -Wl,-bmaxdata:0x80000000
+endif
+ifeq ($(UNAME), HP-UX)
+  SOURCE += fifo.c helpers.c lib/getopt_long.c lib/strsep.c engines/posixaio.c
+  LIBS   += -lpthread -ldl -lrt
+  CFLAGS += -D_LARGEFILE64_SOURCE
 endif
 ifeq ($(UNAME), Darwin)
   SOURCE += helpers.c engines/posixaio.c
@@ -52,7 +57,8 @@ ifeq ($(UNAME), Darwin)
 endif
 ifneq (,$(findstring CYGWIN,$(UNAME)))
   SOURCE += engines/windowsaio.c
-  LIBS	 += -lpthread -lrt
+  LIBS	 += -lpthread -lrt -lpsapi
+  CFLAGS += -DPSAPI_VERSION=1
 endif
 
 OBJS = $(SOURCE:.c=.o)
@@ -69,18 +75,18 @@ prefix = /usr/local
 bindir = $(prefix)/bin
 mandir = $(prefix)/man
 
-.c.o:
+all: .depend $(PROGS) $(SCRIPTS)
+
+.c.o: .depend
 	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<
 
 fio: $(OBJS)
-	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LIBS) $(LDFLAGS)
 
-depend:
+.depend: $(SOURCE)
 	$(QUIET_DEP)$(CC) -MM $(CFLAGS) $(CPPFLAGS) $(SOURCE) 1> .depend
 
-$(PROGS): depend
-
-all: depend $(PROGS) $(SCRIPTS)
+$(PROGS): .depend
 
 clean:
 	-rm -f .depend $(OBJS) $(PROGS) core.* core

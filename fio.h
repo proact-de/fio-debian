@@ -165,6 +165,7 @@ struct thread_options {
 	unsigned int iodepth_batch_complete;
 
 	unsigned long long size;
+	unsigned int size_percent;
 	unsigned int fill_device;
 	unsigned long long file_size_low;
 	unsigned long long file_size_high;
@@ -223,7 +224,7 @@ struct thread_options {
 	unsigned int fsync_blocks;
 	unsigned int fdatasync_blocks;
 	unsigned int barrier_blocks;
-	unsigned long start_delay;
+	unsigned long long start_delay;
 	unsigned long long timeout;
 	unsigned long long ramp_time;
 	unsigned int overwrite;
@@ -248,7 +249,7 @@ struct thread_options {
 	unsigned int file_service_type;
 	unsigned int group_reporting;
 	unsigned int fadvise_hint;
-	unsigned int fallocate;
+	enum fio_fallocate_mode fallocate_mode;
 	unsigned int zero_buffers;
 	unsigned int refill_buffers;
 	unsigned int time_based;
@@ -557,7 +558,7 @@ static inline void fio_ro_check(struct thread_data *td, struct io_u *io_u)
 #define RAND_MAP_IDX(f, b)	(TO_MAP_BLOCK(f, b) / BLOCKS_PER_MAP)
 #define RAND_MAP_BIT(f, b)	(TO_MAP_BLOCK(f, b) & (BLOCKS_PER_MAP - 1))
 
-#define MAX_JOBS	(2048)
+#define REAL_MAX_JOBS		2048
 
 #define td_non_fatal_error(e)	((e) == EIO || (e) == EILSEQ)
 
