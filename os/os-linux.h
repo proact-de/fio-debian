@@ -41,6 +41,15 @@
 #define FIO_HAVE_TRIM
 #define FIO_HAVE_BINJECT
 #define FIO_HAVE_CLOCK_MONOTONIC
+#define FIO_HAVE_GETTID
+
+/*
+ * Can only enable this for newer glibcs, or the header and defines are
+ * missing
+ */
+#if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 6
+#define FIO_HAVE_LINUX_FALLOCATE
+#endif
 
 #ifdef SYNC_FILE_RANGE_WAIT_BEFORE
 #define FIO_HAVE_SYNC_FILE_RANGE
@@ -99,6 +108,11 @@ static inline int fio_cpuset_exit(os_cpu_mask_t *mask)
 static inline int ioprio_set(int which, int who, int ioprio)
 {
 	return syscall(__NR_ioprio_set, which, who, ioprio);
+}
+
+static inline int gettid(void)
+{
+	return syscall(__NR_gettid);
 }
 
 /*

@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <signal.h>
+#include <mach/mach_init.h>
 
 #include "../file.h"
 
@@ -22,8 +23,16 @@
 #define FIO_HAVE_POSIXAIO
 #define FIO_HAVE_CLOCK_MONOTONIC
 #define FIO_USE_GENERIC_RAND
+#define FIO_HAVE_GETTID
+#define FIO_HAVE_CHARDEV_SIZE
 
 #define OS_MAP_ANON		MAP_ANON
+
+/*
+ * OSX has a pitifully small shared memory segment by default,
+ * so default to a lower number of max jobs supported
+ */
+#define FIO_MAX_JOBS		128
 
 typedef off_t off64_t;
 
@@ -127,6 +136,19 @@ static inline int blockdev_size(struct fio_file *f, unsigned long long *bytes)
     return 0;
 }
 
+static inline int chardev_size(struct fio_file *f, unsigned long long *bytes)
+{
+	/*
+	 * Could be a raw block device, this is better than just assuming
+	 * we can't get the size at all.
+	 */
+	if (!blockdev_size(f, bytes))
+		return 0;
+
+	*bytes = -1ULL;
+	return 0;
+}
+
 static inline int blockdev_invalidate_cache(struct fio_file *f)
 {
 	return EINVAL;
@@ -140,5 +162,10 @@ static inline unsigned long long os_phys_mem(void)
 
 	sysctl(mib, 2, &mem, &len, NULL, 0);
 	return mem;
+}
+
+static inline int gettid(void)
+{
+	return mach_thread_self();
 }
 #endif

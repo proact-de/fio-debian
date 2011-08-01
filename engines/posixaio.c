@@ -72,6 +72,7 @@ static int fio_posixaio_prep(struct thread_data fio_unused *td,
 	aiocb->aio_buf = io_u->xfer_buf;
 	aiocb->aio_nbytes = io_u->xfer_buflen;
 	aiocb->aio_offset = io_u->offset;
+	aiocb->aio_sigevent.sigev_notify = SIGEV_NONE;
 
 	io_u->seen = 0;
 	return 0;
@@ -184,6 +185,15 @@ static int fio_posixaio_queue(struct thread_data *td,
 	}
 		
 	if (ret) {
+		/*
+		 * At least OSX has a very low limit on the number of pending
+		 * IOs, so if it returns EAGAIN, we are out of resources
+		 * to queue more. Just return FIO_Q_BUSY to naturally
+		 * drop off at this depth.
+		 */
+		if (errno == EAGAIN)
+			return FIO_Q_BUSY;
+
 		io_u->error = errno;
 		td_verror(td, io_u->error, "xfer");
 		return FIO_Q_COMPLETED;
