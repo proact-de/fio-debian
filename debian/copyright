@@ -34,6 +34,13 @@ Copyrights notes:
     fifo.c, fifo.h:
     Copyright (C) 2004 Stelian Pop <stelian@popies.net>
 
+    fio.1:
+    Written by Aaron Carroll <aaronc@cse.unsw.edu.au>
+    based on documentation by Jens Axboe
+
+    fio_generate_plots.1:
+    Written by Martin Steigerwald <ms@teamix.de>
+
     hash.h:
     Copyright (C) 2002 William Lee Irwin III, IBM
 

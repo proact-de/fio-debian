@@ -4,8 +4,9 @@ fio (1.57-1) unstable; urgency=low
   * Dropped manpage patch with manpage spelling fixes. Merged upstream.
   * Added -a to debhelper commands in architecture dependent sections
     of the makefile. Thanks Sebastian 'Tokkee' Harl.
+  * debian/copyright: Added authors of manpages.
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 03 Aug 2011 13:15:30 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 03 Aug 2011 13:24:30 +0200
 
 fio (1.55-1) UNRELEASED; urgency=low
 
