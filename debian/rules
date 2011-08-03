@@ -40,10 +40,10 @@ install-indep:
 # nothing to install by default.
 
 install-arch: build-arch
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_installdirs
+	dh_testdir -a
+	dh_testroot -a
+	dh_prep -a
+	dh_installdirs -a
 
 	# Add here commands to install the package into debian/fio.
 	$(MAKE) DESTDIR=$(CURDIR)/debian/fio install
@@ -57,20 +57,20 @@ binary-indep: build-indep install-indep
 
 # Build architecture-dependent files here.
 binary-arch: build-arch install-arch
-	dh_testdir
-	dh_testroot
-	dh_installchangelogs
-	dh_installdocs
-	dh_installman
-	dh_link
-	dh_strip
-	dh_compress
-	dh_fixperms
-	dh_installdeb
-	dh_shlibdeps
-	dh_gencontrol
-	dh_md5sums
-	dh_builddeb
+	dh_testdir -a
+	dh_testroot -a
+	dh_installchangelogs -a
+	dh_installdocs -a
+	dh_installman -a
+	dh_link -a
+	dh_strip -a
+	dh_compress -a
+	dh_fixperms -a
+	dh_installdeb -a
+	dh_shlibdeps -a
+	dh_gencontrol -a
+	dh_md5sums -a
+	dh_builddeb -a
 
 binary: binary-indep binary-arch
 .PHONY: build clean binary-indep binary-arch binary install
