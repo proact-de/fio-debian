@@ -1,7 +1,7 @@
 fio (1.57-1) unstable; urgency=low
 
   * Imported Upstream version 1.57.
-  * Dropped manpage with manpage spelling fixes. Merged upstream.
+  * Dropped manpage patch with manpage spelling fixes. Merged upstream.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 01 Aug 2011 11:41:22 +0200
 
@@ -16,10 +16,10 @@ fio (1.55-1) UNRELEASED; urgency=low
   * debian/watch: Removed template to fix lintian warning
     debian-watch-contains-dh_make-template.
   * debian/rules: Added build-arch and build-indep as targets as
-    recommened by lintian 2.5.1 in order to prepare for a future
+    recommended by lintian 2.5.1 in order to prepare for a future
     policy change.
     * build-indep does nothing as there are no architecture
-      indepedent packages for now.
+      independent packages for now.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 27 Jun 2011 14:32:05 +0200
 
