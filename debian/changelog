@@ -2,11 +2,15 @@ fio (1.57-1) unstable; urgency=low
 
   * Imported Upstream version 1.57.
   * Dropped manpage patch with manpage spelling fixes. Merged upstream.
-  * Added -a to debhelper commands in architecture dependent sections
-    of the makefile. Thanks Sebastian 'Tokkee' Harl.
-  * debian/copyright: Added authors of manpages.
+  * Implemented suggestions from Sebastian 'Tokkee' Harl. Thanks.
+    * Added -a to debhelper commands in architecture dependent sections
+      of the makefile.
+    * debian/copyright: Added authors of manpages for fio and
+      fio_generate_plots.
+    * debian/copyright: Added copyright hints for sha1.c, sha.h,
+      engines/windowsaio.c, lib/getopt_long.c, lib/rand.c.
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 03 Aug 2011 13:24:30 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 03 Aug 2011 14:05:33 +0200
 
 fio (1.55-1) UNRELEASED; urgency=low
 
