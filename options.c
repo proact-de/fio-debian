@@ -203,13 +203,43 @@ static int str_rw_cb(void *data, const char *str)
 	char *nr = get_opt_postfix(str);
 
 	td->o.ddir_seq_nr = 1;
-	if (nr) {
+	td->o.ddir_seq_add = 0;
+
+	if (!nr)
+		return 0;
+
+	if (td_random(td))
 		td->o.ddir_seq_nr = atoi(nr);
-		free(nr);
+	else {
+		long long val;
+
+		if (str_to_decimal(nr, &val, 1, td)) {
+			log_err("fio: rw postfix parsing failed\n");
+			free(nr);
+			return 1;
+		}
+
+		td->o.ddir_seq_add = val;
 	}
 
+	free(nr);
 	return 0;
 }
+
+#ifdef FIO_HAVE_LIBAIO
+static int str_libaio_cb(void *data, const char *str)
+{
+	struct thread_data *td = data;
+
+	if (!strcmp(str, "userspace_reap")) {
+		td->o.userspace_libaio_reap = 1;
+		return 0;
+	}
+
+	log_err("fio: bad libaio sub-option: %s\n", str);
+	return 1;
+}
+#endif
 
 static int str_mem_cb(void *data, const char *mem)
 {
@@ -946,6 +976,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 #ifdef FIO_HAVE_LIBAIO
 			  { .ival = "libaio",
 			    .help = "Linux native asynchronous IO",
+			    .cb   = str_libaio_cb,
 			  },
 #endif
 #ifdef FIO_HAVE_POSIXAIO
@@ -1001,6 +1032,11 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 #ifdef FIO_HAVE_BINJECT
 			  { .ival = "binject",
 			    .help = "binject direct inject block engine",
+			  },
+#endif
+#ifdef FIO_HAVE_RDMA
+			  { .ival = "rdma",
+			    .help = "RDMA IO engine",
 			  },
 #endif
 			  { .ival = "external",
@@ -1874,6 +1910,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 	},
 	{
 		.name	= "stonewall",
+		.alias	= "wait_for_previous",
 		.type	= FIO_OPT_STR_SET,
 		.off1	= td_var_offset(stonewall),
 		.help	= "Insert a hard barrier between this job and previous",
@@ -1929,6 +1966,31 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.off1	= td_var_offset(refill_buffers),
 		.help	= "Refill IO buffers on every IO submit",
 	},
+	{
+		.name	= "scramble_buffers",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(scramble_buffers),
+		.help	= "Slightly scramble buffers on every IO submit",
+		.def	= "1",
+	},
+	{
+		.name	= "clat_percentiles",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(clat_percentiles),
+		.help	= "Enable the reporting of completion latency percentiles",
+		.def	= "0",
+	},
+	{
+		.name	= "percentile_list",
+		.type	= FIO_OPT_FLOAT_LIST,
+		.off1	= td_var_offset(percentile_list),
+		.off2   = td_var_offset(overwrite_plist),
+		.help	= "Specify a custom list of percentiles to report",
+		.maxlen	= FIO_IO_U_LIST_MAX_LEN,
+		.minfp	= 0.0,
+		.maxfp	= 100.0,
+	},
+
 #ifdef FIO_HAVE_DISK_UTIL
 	{
 		.name	= "disk_util",

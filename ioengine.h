@@ -22,7 +22,7 @@ struct io_u {
 		struct iocb iocb;
 #endif
 #ifdef FIO_HAVE_POSIXAIO
-		struct aiocb aiocb;
+		os_aiocb_t aiocb;
 #endif
 #ifdef FIO_HAVE_SGIO
 		struct sg_io_hdr hdr;
@@ -35,6 +35,9 @@ struct io_u {
 #endif
 #ifdef FIO_HAVE_BINJECT
 		struct b_user_cmd buc;
+#endif
+#ifdef FIO_HAVE_RDMA
+		struct ibv_mr *mr;
 #endif
 		void *mmap_data;
 	};

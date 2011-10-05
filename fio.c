@@ -70,6 +70,8 @@ static pthread_t disk_util_thread;
 static struct flist_head *cgroup_list;
 static char *cgroup_mnt;
 
+unsigned long arch_flags = 0;
+
 struct io_log *agg_io_log[2];
 
 #define TERMINATE_ALL		(-1)
@@ -557,7 +559,7 @@ sync_done:
 		if (full || !td->o.iodepth_batch_complete) {
 			min_events = min(td->o.iodepth_batch_complete,
 					 td->cur_depth);
-			if (full && !min_events)
+			if (full && !min_events && td->o.iodepth_batch_complete != 0)
 				min_events = 1;
 
 			do {
@@ -719,7 +721,7 @@ sync_done:
 		if (full || !td->o.iodepth_batch_complete) {
 			min_evts = min(td->o.iodepth_batch_complete,
 					td->cur_depth);
-			if (full && !min_evts)
+			if (full && !min_evts && td->o.iodepth_batch_complete != 0)
 				min_evts = 1;
 
 			if (__should_check_rate(td, 0) ||
@@ -872,9 +874,9 @@ static int init_io_u(struct thread_data *td)
 			io_u->buf = p + max_bs * i;
 			dprint(FD_MEM, "io_u %p, mem %p\n", io_u, io_u->buf);
 
-			if (td_write(td) && !td->o.refill_buffers)
+			if (td_write(td))
 				io_u_fill_buffer(td, io_u, max_bs);
-			else if (td_write(td) && td->o.verify_pattern_bytes) {
+			if (td_write(td) && td->o.verify_pattern_bytes) {
 				/*
 				 * Fill the buffer with the pattern if we are
 				 * going to be doing writes.
@@ -1500,10 +1502,8 @@ static void run_threads(void)
 	for_each_td(td, i) {
 		print_status_init(td->thread_number - 1);
 
-		if (!td->o.create_serialize) {
-			init_disk_util(td);
+		if (!td->o.create_serialize)
 			continue;
-		}
 
 		/*
 		 * do file setup here so it happens sequentially,
@@ -1531,8 +1531,6 @@ static void run_threads(void)
 					td_io_close_file(td, f);
 			}
 		}
-
-		init_disk_util(td);
 	}
 
 	set_genesis_time();
@@ -1570,6 +1568,8 @@ static void run_threads(void)
 							td->o.name);
 				break;
 			}
+
+			init_disk_util(td);
 
 			/*
 			 * Set state to created. Thread will transition
@@ -1690,12 +1690,13 @@ static void run_threads(void)
 	fio_unpin_memory();
 }
 
-int main(int argc, char *argv[])
+int main(int argc, char *argv[], char *envp[])
 {
 	long ps;
 
+	arch_init(envp);
+
 	sinit();
-	init_rand(&__fio_rand_state);
 
 	/*
 	 * We need locale for number printing, if it isn't set then just
