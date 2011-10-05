@@ -16,7 +16,10 @@ fio resides in a git repo, the canonical place is:
 
 git://git.kernel.dk/fio.git
 
-The http protocol also works, path is the same.
+If you are inside a corporate firewall, git:// may not always work for
+you. In that case you can use the http protocol, path is the same:
+
+http://git.kernel.dk/fio.git
 
 Snapshots are frequently generated and they include the git meta data as
 well. You can download them here:
@@ -134,6 +137,7 @@ $ fio
 	--bandwidth-log	Generate per-job bandwidth logs
 	--minimal		Minimal (terse) output
 	--version		Print version info and exit
+	--terse-version=type	Terse version output format
 	--help			Print this page
 	--cmdhelp=cmd	Print command help, "all" for all of them
 	--showcmd		Turn a job file into command line options
@@ -289,11 +293,8 @@ The job file parameters are:
 			can be used to gauge hard drive speed over the entire
 			platter, without reading everything. Both x/y can
 			include k/m/g suffix.
-	iolog=x		Open and read io pattern from file 'x'. The file must
-			contain one io action per line in the following format:
-			rw, offset, length
-			where with rw=0/1 for read/write, and the offset
-			and length entries being in bytes.
+	read_iolog=x	Open and read io pattern from file 'x'. The file format
+                        is described in the HOWTO.
 	write_iolog=x	Write an iolog to file 'x' in the same format as iolog.
 			The iolog options are exclusive, if both given the
 			read iolog will be performed.  Specify a separate file

@@ -249,7 +249,16 @@ static int get_next_seq_block(struct thread_data *td, struct fio_file *f,
 	assert(ddir_rw(ddir));
 
 	if (f->last_pos < f->real_file_size) {
-		*b = (f->last_pos - f->file_offset) / td->o.min_bs[ddir];
+		unsigned long long pos;
+
+		if (f->last_pos == f->file_offset && td->o.ddir_seq_add < 0)
+			f->last_pos = f->real_file_size;
+
+		pos = f->last_pos - f->file_offset;
+		if (pos)
+			pos += td->o.ddir_seq_add;
+
+		*b = pos / td->o.min_bs[ddir];
 		return 0;
 	}
 
@@ -480,6 +489,16 @@ static enum fio_ddir rate_ddir(struct thread_data *td, enum fio_ddir ddir)
 		}
 	} else
 		usec = td->rate_pending_usleep[ddir];
+
+	/*
+	 * We are going to sleep, ensure that we flush anything pending as
+	 * not to skew our latency numbers
+	 */
+	if (td->cur_depth) {
+		int fio_unused ret;
+
+		ret = io_u_queued_complete(td, td->cur_depth, NULL);
+	}
 
 	fio_gettime(&t, NULL);
 	usec_sleep(td, usec);
@@ -1102,6 +1121,44 @@ static int check_get_verify(struct thread_data *td, struct io_u *io_u)
 }
 
 /*
+ * Fill offset and start time into the buffer content, to prevent too
+ * easy compressible data for simple de-dupe attempts. Do this for every
+ * 512b block in the range, since that should be the smallest block size
+ * we can expect from a device.
+ */
+static void small_content_scramble(struct io_u *io_u)
+{
+	unsigned int i, nr_blocks = io_u->buflen / 512;
+	unsigned long long boffset;
+	unsigned int offset;
+	void *p, *end;
+
+	if (!nr_blocks)
+		return;
+
+	p = io_u->xfer_buf;
+	boffset = io_u->offset;
+
+	for (i = 0; i < nr_blocks; i++) {
+		/*
+		 * Fill the byte offset into a "random" start offset of
+		 * the buffer, given by the product of the usec time
+		 * and the actual offset.
+		 */
+		offset = (io_u->start_time.tv_usec ^ boffset) & 511;
+		offset &= ~(sizeof(unsigned long long) - 1);
+		if (offset >= 512 - sizeof(unsigned long long))
+			offset -= sizeof(unsigned long long);
+		memcpy(p + offset, &boffset, sizeof(boffset));
+
+		end = p + 512 - sizeof(io_u->start_time);
+		memcpy(end, &io_u->start_time, sizeof(io_u->start_time));
+		p += 512;
+		boffset += 512;
+	}
+}
+
+/*
  * Return an io_u to be processed. Gets a buflen and offset, sets direction,
  * etc. The returned io_u is fully ready to be prepped and submitted.
  */
@@ -1109,6 +1166,7 @@ struct io_u *get_io_u(struct thread_data *td)
 {
 	struct fio_file *f;
 	struct io_u *io_u;
+	int do_scramble = 0;
 
 	io_u = __get_io_u(td);
 	if (!io_u) {
@@ -1150,11 +1208,14 @@ struct io_u *get_io_u(struct thread_data *td)
 		f->last_start = io_u->offset;
 		f->last_pos = io_u->offset + io_u->buflen;
 
-		if (td->o.verify != VERIFY_NONE && io_u->ddir == DDIR_WRITE)
-			populate_verify_io_u(td, io_u);
-		else if (td->o.refill_buffers && io_u->ddir == DDIR_WRITE)
-			io_u_fill_buffer(td, io_u, io_u->xfer_buflen);
-		else if (io_u->ddir == DDIR_READ) {
+		if (io_u->ddir == DDIR_WRITE) {
+			if (td->o.verify != VERIFY_NONE)
+				populate_verify_io_u(td, io_u);
+			else if (td->o.refill_buffers)
+				io_u_fill_buffer(td, io_u, io_u->xfer_buflen);
+			else if (td->o.scramble_buffers)
+				do_scramble = 1;
+		} else if (io_u->ddir == DDIR_READ) {
 			/*
 			 * Reset the buf_filled parameters so next time if the
 			 * buffer is used for writes it is refilled.
@@ -1174,6 +1235,8 @@ out:
 	if (!td_io_prep(td, io_u)) {
 		if (!td->o.disable_slat)
 			fio_gettime(&io_u->start_time, NULL);
+		if (do_scramble)
+			small_content_scramble(io_u);
 		return io_u;
 	}
 err_put:
@@ -1431,7 +1494,7 @@ void io_u_fill_buffer(struct thread_data *td, struct io_u *io_u,
 	io_u->buf_filled_len = 0;
 
 	if (!td->o.zero_buffers)
-		fill_random_buf(io_u->buf, max_bs);
+		fill_random_buf(&td->buf_state, io_u->buf, max_bs);
 	else
 		memset(io_u->buf, 0, max_bs);
 }

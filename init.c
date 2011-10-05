@@ -22,13 +22,14 @@
 
 #include "lib/getopt.h"
 
-static char fio_version_string[] = "fio 1.57";
+static char fio_version_string[] = "fio 1.59";
 
 #define FIO_RANDSEED		(0xb1899bedUL)
 
 static char **ini_file;
 static int max_jobs = FIO_MAX_JOBS;
 static int dump_cmdline;
+static int def_timeout;
 
 static struct thread_data def_thread;
 struct thread_data *threads = NULL;
@@ -43,11 +44,11 @@ char **job_sections = NULL;
 int nr_job_sections = 0;
 char *exec_profile = NULL;
 int warnings_fatal = 0;
+int terse_version = 2;
 
 int write_bw_log = 0;
 int read_only = 0;
 
-static int def_timeout;
 static int write_lat_log;
 
 static int prev_group_jobs;
@@ -147,6 +148,11 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 		.name		= (char *) "max-jobs",
 		.has_arg	= required_argument,
 		.val		= 'j',
+	},
+	{
+		.name		= (char *) "terse-version",
+		.has_arg	= required_argument,
+		.val		= 'V',
 	},
 	{
 		.name		= NULL,
@@ -516,6 +522,8 @@ void td_fill_rand_seeds(struct thread_data *td)
 		td_fill_rand_seeds_os(td);
 	else
 		td_fill_rand_seeds_internal(td);
+
+	init_rand_seed(&td->buf_state, td->rand_seeds[7]);
 }
 
 /*
@@ -616,6 +624,12 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num)
 	}
 
 	td->mutex = fio_mutex_init(0);
+
+	td->ts.clat_percentiles = td->o.clat_percentiles;
+	if (td->o.overwrite_plist)
+		td->ts.percentile_list = td->o.percentile_list;
+	else
+		td->ts.percentile_list = NULL;
 
 	td->ts.clat_stat[0].min_val = td->ts.clat_stat[1].min_val = ULONG_MAX;
 	td->ts.slat_stat[0].min_val = td->ts.slat_stat[1].min_val = ULONG_MAX;
@@ -946,13 +960,12 @@ static int fill_def_thread(void)
 	memset(&def_thread, 0, sizeof(def_thread));
 
 	fio_getaffinity(getpid(), &def_thread.o.cpumask);
+	def_thread.o.timeout = def_timeout;
 
 	/*
 	 * fill default options
 	 */
 	fio_fill_default_options(&def_thread);
-
-	def_thread.o.timeout = def_timeout;
 	return 0;
 }
 
@@ -1024,6 +1037,7 @@ static int setup_thread_area(void)
 
 static void usage(const char *name)
 {
+	printf("%s\n", fio_version_string);
 	printf("%s [options] [job options] <job file(s)>\n", name);
 	printf("\t--debug=options\tEnable debug logging\n");
 	printf("\t--output\tWrite output to file\n");
@@ -1032,6 +1046,7 @@ static void usage(const char *name)
 	printf("\t--bandwidth-log\tGenerate per-job bandwidth logs\n");
 	printf("\t--minimal\tMinimal (terse) output\n");
 	printf("\t--version\tPrint version info and exit\n");
+	printf("\t--terse-version=x Terse version output format\n");
 	printf("\t--help\t\tPrint this page\n");
 	printf("\t--cmdhelp=cmd\tPrint command help, \"all\" for all of"
 		" them\n");
@@ -1193,6 +1208,14 @@ static int parse_cmd_line(int argc, char *argv[])
 		case 'v':
 			log_info("%s\n", fio_version_string);
 			exit(0);
+		case 'V':
+			terse_version = atoi(optarg);
+			if (terse_version != 2) {
+				log_err("fio: bad terse version format\n");
+				exit_val = 1;
+				do_exit++;
+			}
+			break;
 		case 'e':
 			if (!strcmp("always", optarg))
 				eta_print = FIO_ETA_ALWAYS;

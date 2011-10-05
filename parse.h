@@ -16,6 +16,7 @@ enum fio_opt_type {
 	FIO_OPT_RANGE,
 	FIO_OPT_INT,
 	FIO_OPT_BOOL,
+	FIO_OPT_FLOAT_LIST,
 	FIO_OPT_STR_SET,
 	FIO_OPT_DEPRECATED,
 };
@@ -28,6 +29,7 @@ struct value_pair {
 	unsigned int oval;		/* output value */
 	const char *help;		/* help text for sub option */
 	int or;				/* OR value */
+	void *cb;			/* sub-option callback */
 };
 
 #define OPT_LEN_MAX 	4096
@@ -47,6 +49,9 @@ struct fio_option {
 	void *roff1, *roff2, *roff3, *roff4;
 	unsigned int maxval;		/* max and min value */
 	int minval;
+	double maxfp;			/* max and min floating value */
+	double minfp;
+	unsigned int maxlen;		/* max length */
 	int neg;			/* negate value stored */
 	int prio;
 	void *cb;			/* callback */

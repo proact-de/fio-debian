@@ -4,7 +4,7 @@ CPPFLAGS= -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 \
 	$(DEBUGFLAGS)
 OPTFLAGS= -O2 -fno-omit-frame-pointer -g $(EXTFLAGS)
 CFLAGS	= -std=gnu99 -Wwrite-strings -Wall $(OPTFLAGS)
-LIBS	= -lm
+LIBS	= -lm $(EXTLIBS)
 PROGS	= fio
 SCRIPTS = fio_generate_plots
 UNAME  := $(shell uname)
@@ -20,7 +20,7 @@ ifeq ($(UNAME), Linux)
   SOURCE += diskutil.c fifo.c blktrace.c helpers.c cgroup.c trim.c \
 		engines/libaio.c engines/posixaio.c engines/sg.c \
 		engines/splice.c engines/syslet-rw.c engines/guasi.c \
-		engines/binject.c profiles/tiobench.c
+		engines/binject.c engines/rdma.c profiles/tiobench.c
   LIBS += -lpthread -ldl -lrt -laio
   CFLAGS += -rdynamic
 endif
@@ -63,6 +63,10 @@ endif
 
 OBJS = $(SOURCE:.c=.o)
 
+T_OBJS = t/stest.o
+T_OBJS += mutex.o smalloc.o
+T_PROGS = t/stest
+
 ifneq ($(findstring $(MAKEFLAGS),s),s)
 ifndef V
 	QUIET_CC	= @echo '   ' CC $@;
@@ -80,6 +84,9 @@ all: .depend $(PROGS) $(SCRIPTS)
 .c.o: .depend
 	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<
 
+t/stest: $(T_OBJS)
+	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_OBJS) $(LIBS) $(LDFLAGS)
+
 fio: $(OBJS)
 	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LIBS) $(LDFLAGS)
 
@@ -89,7 +96,7 @@ fio: $(OBJS)
 $(PROGS): .depend
 
 clean:
-	-rm -f .depend $(OBJS) $(PROGS) core.* core
+	-rm -f .depend $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) core.* core
 
 cscope:
 	@cscope -b -R

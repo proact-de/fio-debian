@@ -53,6 +53,9 @@ Display usage information and exit.
 .TP
 .B \-\-version
 Display version information and exit.
+.TP
+.B \-\-terse\-version\fR=\fPtype
+Terse version output format
 .SH "JOB FILE FORMAT"
 Job files are in `ini' format. They consist of one or more
 job definitions, which begin with a job name in square brackets and
@@ -96,6 +99,10 @@ Integer range: a range of integers specified in the format
 \fIupper\fR may contain a suffix as described above.  If an option allows two
 sets of ranges, they are separated with a `,' or `/' character. For example:
 `8\-8k/8M\-4G'.
+.TP
+.I float_list
+List of floating numbers: A list of floating numbers, separated by
+a ':' charcater.
 .SS "Parameter List"
 .TP
 .BI name \fR=\fPstr
@@ -177,7 +184,10 @@ may still be skewed a bit, since the speed may be different. It is possible to
 specify a number of IO's to do before getting a new offset, this is one by
 appending a `:\fI<nr>\fR to the end of the string given. For a random read, it
 would look like \fBrw=randread:8\fR for passing in an offset modifier with a
-value of 8. See the \fBrw_sequencer\fR option.
+value of 8. If the postfix is used with a sequential IO pattern, then the value
+specified will be added to the generated offset for each IO. For instance,
+using \fBrw=write:4k\fR will skip 4k for every write. It turns sequential IO
+into sequential IO with holes. See the \fBrw_sequencer\fR option.
 .RE
 .TP
 .BI rw_sequencer \fR=\fPstr
@@ -319,6 +329,13 @@ default is to only fill it at init time and reuse that data. Only makes sense
 if zero_buffers isn't specified, naturally. If data verification is enabled,
 refill_buffers is also automatically enabled.
 .TP
+.BI scramble_buffers \fR=\fPbool
+If \fBrefill_buffers\fR is too costly and the target is using data
+deduplication, then setting this option will slightly modify the IO buffer
+contents to defeat normal de-dupe attempts. This is not enough to defeat
+more clever block compression attempts, but it will stop naive dedupe
+of blocks. Default: true.
+.TP
 .BI nrfiles \fR=\fPint
 Number of files to use for this job.  Default: 1.
 .TP
@@ -360,7 +377,13 @@ Basic \fIreadv\fR\|(2) or \fIwritev\fR\|(2) I/O. Will emulate queuing by
 coalescing adjacents IOs into a single submission.
 .TP
 .B libaio
-Linux native asynchronous I/O.
+Linux native asynchronous I/O.  This engine also has a sub-option,
+\fBuserspace_reap\fR. To set it, use \fBioengine=libaio:userspace_reap\fR.
+Normally, with the libaio engine in use, fio will use the
+\fIio_getevents\fR\|(3) system call to reap newly returned events. With this
+flag turned on, the AIO ring will be read directly from user-space to reap
+events. The reaping mode is only enabled when polling for a minimum of \fB0\fR
+events (eg when \fBiodepth_batch_complete=0\fR).
 .TP
 .B posixaio
 POSIX asynchronous I/O using \fIaio_read\fR\|(3) and \fIaio_write\fR\|(3).
@@ -409,6 +432,10 @@ The GUASI I/O engine is the Generic Userspace Asynchronous Syscall Interface
 approach to asycnronous I/O.
 .br
 See <http://www.xmailserver.org/guasi\-lib.html>.
+.TP
+.B rdma
+The RDMA I/O engine supports both RDMA memory semantics (RDMA_WRITE/RDMA_READ)
+and channel semantics (Send/Recv) for the InfiniBand, RoCE and iWARP protocols.
 .TP
 .B external
 Loads an external I/O engine object file.  Append the engine filename as
@@ -508,7 +535,7 @@ Normally \fBfio\fR will cover every block of the file when doing random I/O. If
 this parameter is given, a new offset will be chosen without looking at past
 I/O history.  This parameter is mutually exclusive with \fBverify\fR.
 .TP
-.B softrandommap
+.BI softrandommap \fR=\fPbool
 See \fBnorandommap\fR. If fio runs with the random block map enabled and it
 fails to allocate the map, if this option is set it will continue without a
 random block map. As coverage will not be as complete as with random maps, this
@@ -626,7 +653,7 @@ number, eg echoing 8 will ensure that the OS has 8 huge pages ready for
 use.
 .RE
 .TP
-.BI iomem_align \fR=\fPint
+.BI iomem_align \fR=\fPint "\fR,\fP mem_align" \fR=\fPint
 This indiciates the memory alignment of the IO memory buffers. Note that the
 given alignment is applied to the first IO unit buffer, if using \fBiodepth\fR
 the alignment of the following buffers are given by the \fBbs\fR used. In
@@ -758,7 +785,7 @@ read back and verified).  If \fBverify_backlog_batch\fR is less than
 \fBverify_backlog_batch\fR is larger than \fBverify_backlog\fR,  some blocks
 will be verified more than once.
 .TP
-.B stonewall
+.B stonewall "\fR,\fP wait_for_previous"
 Wait for preceding jobs in the job file to exit before starting this one.
 \fBstonewall\fR implies \fBnew_group\fR.
 .TP
@@ -806,31 +833,31 @@ is to replay the IOPS onto the major/minor device that each IOP was recorded
 from.  Setting \fBreplay_redirect\fR causes all IOPS to be replayed onto the
 single specified device regardless of the device it was recorded from.
 .TP
-.B write_bw_log \fR=\fPstr
+.BI write_bw_log \fR=\fPstr
 If given, write a bandwidth log of the jobs in this job file. Can be used to
 store data of the bandwidth of the jobs in their lifetime. The included
 fio_generate_plots script uses gnuplot to turn these text files into nice
 graphs. See \fBwrite_log_log\fR for behaviour of given filename. For this
 option, the postfix is _bw.log.
 .TP
-.B write_lat_log \fR=\fPstr
+.BI write_lat_log \fR=\fPstr
 Same as \fBwrite_bw_log\fR, but writes I/O completion latencies.  If no
 filename is given with this option, the default filename of "jobname_type.log"
 is used. Even if the filename is given, fio will still append the type of log.
 .TP
-.B disable_lat \fR=\fPbool
+.BI disable_lat \fR=\fPbool
 Disable measurements of total latency numbers. Useful only for cutting
 back the number of calls to gettimeofday, as that does impact performance at
 really high IOPS rates.  Note that to really get rid of a large amount of these
 calls, this option must be used with disable_slat and disable_bw as well.
 .TP
-.B disable_clat \fR=\fPbool
+.BI disable_clat \fR=\fPbool
 Disable measurements of completion latency numbers. See \fBdisable_lat\fR.
 .TP
-.B disable_slat \fR=\fPbool
+.BI disable_slat \fR=\fPbool
 Disable measurements of submission latency numbers. See \fBdisable_lat\fR.
 .TP
-.B disable_bw_measurement \fR=\fPbool
+.BI disable_bw_measurement \fR=\fPbool
 Disable measurements of throughput/bandwidth numbers. See \fBdisable_lat\fR.
 .TP
 .BI lockmem \fR=\fPint
@@ -896,6 +923,17 @@ the thread/process does any work.
 .TP
 .BI gid \fR=\fPint
 Set group ID, see \fBuid\fR.
+.TP
+.BI clat_percentiles \fR=\fPbool
+Enable the reporting of percentiles of completion latencies.
+.TP
+.BI percentile_list \fR=\fPfloat_list
+Overwrite the default list of percentiles for completion
+latencies. Each number is a floating number in the range (0,100], and
+the maximum length of the list is 20. Use ':' to separate the
+numbers. For example, --percentile_list=99.5:99.9 will cause fio to
+report the values of completion latency below which 99.5% and 99.9% of
+the observed latencies fell, respectively.
 .SH OUTPUT
 While running, \fBfio\fR will display the status of the created jobs.  For
 example:
@@ -1056,7 +1094,7 @@ change.  The fields are:
 .P
 Read status:
 .RS
-.B KB I/O, bandwidth \fR(KB/s)\fP, runtime \fR(ms)\fP
+.B Total I/O \fR(KB)\fP, bandwidth \fR(KB/s)\fP, runtime \fR(ms)\fP
 .P
 Submission latency:
 .RS
@@ -1078,7 +1116,7 @@ Bandwidth:
 .P
 Write status:
 .RS
-.B KB I/O, bandwidth \fR(KB/s)\fP, runtime \fR(ms)\fP
+.B Total I/O \fR(KB)\fP, bandwidth \fR(KB/s)\fP, runtime \fR(ms)\fP
 .P
 Submission latency:
 .RS
