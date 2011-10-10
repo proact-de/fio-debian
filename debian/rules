@@ -21,10 +21,8 @@ build-stamp:
 	dh_testdir
 
 	# Add here commands to compile the package.
-	# Add variables to build engine rdma.
-	EXTFLAGS="-DFIO_HAVE_RDMA"
-	EXTLIBS="-libverbs -lrdmacm"
-	$(MAKE)
+	# Build inclusive I/O engine rdma.
+	EXTFLAGS="-DFIO_HAVE_RDMA" EXTLIBS="-libverbs -lrdmacm" $(MAKE)
 
 	touch $@
 
