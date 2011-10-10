@@ -3,7 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: Martin Steigerwald <ms@teamix.de>
 Uploaders: Michael Prokop <mika@debian.org>
-Build-Depends: debhelper (>= 7), libaio-dev
+Build-Depends: debhelper (>= 7), libaio-dev, librdmacm-dev, libibverbs-dev
 Standards-Version: 3.9.2
 Homepage: http://freshmeat.net/projects/fio
 Vcs-Git: git://git.debian.org/git/collab-maint/fio.git

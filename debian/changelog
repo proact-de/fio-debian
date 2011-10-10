@@ -5,8 +5,9 @@ fio (1.59-1) unstable; urgency=low
       Thanks to Nobuhiro Iwamatsu for the patch and build testing.
   * debian/patches/manpage: Escape minus signs to fix lintian warning
     I: fio: hyphen-used-as-minus-sign usr/share/man/man1/fio.1.gz:934
+  * Added build dependencies for new rdma engine in engines/rdma.c.
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 10 Oct 2011 16:06:00 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Wed, 10 Oct 2011 16:24:00 +0200
 
 fio (1.57-1) unstable; urgency=low
 
