@@ -21,8 +21,9 @@ build-stamp:
 	dh_testdir
 
 	# Add here commands to compile the package.
-	export EXTFLAGS="-DFIO_HAVE_RDMA"
-	export EXTLIBS="-libverbs -lrdmacm"
+	# Add variables to build engine rdma.
+	EXTFLAGS="-DFIO_HAVE_RDMA"
+	EXTLIBS="-libverbs -lrdmacm"
 	$(MAKE)
 
 	touch $@
