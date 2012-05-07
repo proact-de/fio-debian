@@ -1,15 +1,18 @@
-Description: Escaped apostroph at beginning of line.
-  Escaped apostoph at beginning of line to fix lintian warning:
+Description: Changed line wrapping a bit to fix lintian warning.
+  Changed line wrapping a bit to fix lintian warning regarding
+  apostroph at the beginning of a line:
   W: fio: manpage-has-errors-from-man usr/share/man/man1/fio.1.gz 1317: warning: macro `hostname'' not defined
 Author: Martin Steigerwald <ms@teamix.de>
 --- a/fio.1
 +++ b/fio.1
-@@ -1314,7 +1314,7 @@
+@@ -1313,8 +1313,8 @@
+ 
  on that machine, where args defines what fio listens to. The arguments
  are of the form 'type:hostname or IP:port'. 'type' is either 'ip' (or ip4)
- for TCP/IP v4, 'ip6' for TCP/IP v6, or 'sock' for a local unix domain socket.
+-for TCP/IP v4, 'ip6' for TCP/IP v6, or 'sock' for a local unix domain socket.
 -'hostname' is either a hostname or IP address, and 'port' is the port to
-+\'hostname' is either a hostname or IP address, and 'port' is the port to
++for TCP/IP v4, 'ip6' for TCP/IP v6, or 'sock' for a local unix domain
++socket. 'hostname' is either a hostname or IP address, and 'port' is the port to
  listen to (only valid for TCP/IP, not a local socket). Some examples:
  
  1) fio --server
