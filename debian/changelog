@@ -13,8 +13,9 @@ fio (2.0.7-1) UNRELEASED; urgency=low
     * manpage: Removed, applied upstream.
   * debian/copyright:
     * Updated to 2012.
+    * Converted to machine readable format 1.0.
 
- -- Martin Steigerwald <ms@teamix.de>  Mon, 07 May 2012 14:03:18 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 07 May 2012 15:42:18 +0200
 
 fio (1.59-1) unstable; urgency=low
 

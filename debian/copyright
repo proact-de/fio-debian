@@ -1,100 +1,124 @@
-This package was debianized by Martin Steigerwald <ms@teamix.de> on
-Tue, 19 May 2009 15:04:02 +0200.
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: fio
+Upstream-Contact: Jens Axboe <axboe@kernel.dk>
+Source: http://brick.kernel.dk/snaps/fio-1.32.tar.gz
 
-It was downloaded from http://freshmeat.net/projects/fio/
-aka http://brick.kernel.dk/snaps/fio-1.32.tar.gz
+Files: *
+Copyright: 2005 Jens Axboe <axboe@suse.de>
+           2006-2012 Jens Axboe <axboe@kernel.dk>
+License: GPL-2
 
-Upstream Author:
+Files: debian/*
+Copyright: 2009-2012 Martin Steigerwald <ms@teamix.de>
+Comment:
+ This package was debianized by Martin Steigerwald <ms@teamix.de> on
+ Tue, 19 May 2009 15:04:02 +0200.
+License: GPL-2+
 
-   Jens Axboe <axboe@kernel.dk>
+Files: fifo.c fifo.h
+Copyright: 2004 Stelian Pop <stelian@popies.net>
+License: GPL-2+
 
-Copyright:
-   Copyright (C) 2005 Jens Axboe <axboe@suse.de>
-   Copyright (C) 2006-2012 Jens Axboe <axboe@kernel.dk>
+Files: fio.1
+Copyright: Written by Aaron Carroll <aaronc@cse.unsw.edu.au>
+ based on documentation by Jens Axboe
+License: GPL-2
 
-License:
+Files: fio_generate_plots.1
+Copyright: Written by Martin Steigerwald <ms@teamix.de>
+License: GPL-2
 
-   This package is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; version 2 dated June, 1991.
+Files: hash.h
+Copyright: 2002 William Lee Irwin III, IBM
+License: GPL-2
 
-   This package is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
+Files: rbtree.c
+Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
+           2002  David Woodhouse <dwmw2@infradead.org>
+License: GPL-2+
 
-   You should have received a copy of the GNU General Public License
-   along with this package; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
-   02110-1301, USA.
+Files: rbtree.h
+Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
+License: GPL-2+
 
-On Debian GNU/Linux systems, the complete text of the GNU General
-Public License can be found in `/usr/share/common-licenses/GPL-2'.
+Files: crc/crc16.h
+Copyright: 2005 Ben Gardner <bgardner@wabtec.com>
+License: GPL-2
 
-Copyrights notes:
+Files: crc/crc32.c crc/crc32.h crc/crc32c.h
+Copyright: 1992, 1995-1999 Free Software Foundation, Inc.
+License: GPL-2+
 
-    fifo.c, fifo.h:
-    Copyright (C) 2004 Stelian Pop <stelian@popies.net>
+Files: crc/crc32c.c:
+Copyright: 2004 Cisco Systems, Inc.
+License: GPL-2+
 
-    fio.1:
-    Written by Aaron Carroll <aaronc@cse.unsw.edu.au>
-    based on documentation by Jens Axboe
+Files: crc/crc32c-intel.c
+Copyright: Based on a posting to lkml by Austin Zhang <austin.zhang@intel.com>
+License: GPL-2
 
-    fio_generate_plots.1:
-    Written by Martin Steigerwald <ms@teamix.de>
+Files: crc/md5.c:
+Copyright: Shamelessly lifted from the 2.6 kernel (crypto/md5.c)
+License: GPL-2
 
-    hash.h:
-    Copyright (C) 2002 William Lee Irwin III, IBM
+Files: crc/sha1.c crc/sha1.h
+Copyright: Based on the Mozilla SHA1 (see mozilla-sha1/sha1.c)
+License: GPL-2
 
-    rbtree.c:
-    Copyright (C) 1999 Andrea Arcangeli <andrea@suse.de>
-    Copyright (C) 2002  David Woodhouse <dwmw2@infradead.org>
+Files: crc/sha256.c
+Copyright: Jean-Luc Cooke <jlcooke@certainkey.com>
+           Andrew McDonald <andrew@mcdonald.org.uk>
+           2002 James Morris <jmorris@intercode.com.au>
+License: GPL-2+
 
-    rbtree.h:
-    (C) 1999 Andrea Arcangeli <andrea@suse.de>
+Files: crc/sha512.c
+Copyright: Jean-Luc Cooke <jlcooke@certainkey.com>
+           Andrew McDonald <andrew@mcdonald.org.uk>
+           2003 Kyle McMartin <kyle@debian.org>
+License: GPL-2+
 
-    crc/crc16.h:
-    Copyright (C) 2005 Ben Gardner <bgardner@wabtec.com>
+Files: engines/windowsaio.c
+Copyright: 2011-2012 Bruce Cran <bruce@cran.org.uk>
+License: GPL-2
 
-    crc/crc32.c:
-    Copyright (C) 1992, 1995-1999 Free Software Foundation, Inc.
+Files: lib/getopt_long.c
+Copyright: This file was imported from the klibc library from hpa
+License: GPL-2
 
-    crc/crc32.h:
-    Copyright (C) 92, 1995-1999 Free Software Foundation, Inc.
+Files: lib/rand.c
+Copyright: Based on code from GNU Scientific Library 1.5 (30 Jun 2004)
+License: GPL-2
 
-    crc/crc32c.h:
-    Copyright (C) 1992, 1995-1999 Free Software Foundation, Inc.
+License: GPL-2
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; version 2 dated June, 1991.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the·
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
 
-    crc/crc32c.c:
-    Copyright (C) 2004 Cisco Systems, Inc.
+License: GPL-2+
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the 
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
 
-    crc/crc32c-intel.c:
-    Based on a posting to lkml by Austin Zhang <austin.zhang@intel.com>
-
-    crc/md5.c:
-    Shamelessly lifted from the 2.6 kernel (crypto/md5.c)
-
-    crc/sha1.c, crc/sha1.h:
-    Based on the Mozilla SHA1 (see mozilla-sha1/sha1.c)
-
-    crc/sha256.c:
-    Copyright (C) Jean-Luc Cooke <jlcooke@certainkey.com>
-    Copyright (C) Andrew McDonald <andrew@mcdonald.org.uk>
-    Copyright (C) 2002 James Morris <jmorris@intercode.com.au>
-
-    crc/sha512.c:
-    Copyright (C) Jean-Luc Cooke <jlcooke@certainkey.com>
-    Copyright (C) Andrew McDonald <andrew@mcdonald.org.uk>
-    Copyright (C) 2003 Kyle McMartin <kyle@debian.org>
-
-    engines/windowsaio.c:
-    Copyright (C) 2011-2012 Bruce Cran <bruce@cran.org.uk>
-
-    lib/getopt_long.c:
-    This file was imported from the klibc library from hpa
-
-    lib/rand.c:
-    Based on code from GNU Scientific Library 1.5 (30 Jun 2004)
-
-The Debian packaging is © 2009, Martin Steigerwald <ms@teamix.de> and
-is licensed under the GPL, see `/usr/share/common-licenses/GPL-2'.
