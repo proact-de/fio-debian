@@ -1,6 +1,8 @@
 #ifndef FIO_OS_SOLARIS_H
 #define FIO_OS_SOLARIS_H
 
+#define	FIO_OS	os_solaris
+
 #include <errno.h>
 #include <malloc.h>
 #include <sys/types.h>
@@ -8,6 +10,7 @@
 #include <sys/pset.h>
 #include <sys/mman.h>
 #include <sys/dkio.h>
+#include <sys/byteorder.h>
 
 #include "../file.h"
 
@@ -19,10 +22,21 @@
 #define FIO_HAVE_FDATASYNC
 #define FIO_HAVE_CHARDEV_SIZE
 #define FIO_USE_GENERIC_BDEV_SIZE
+#define FIO_USE_GENERIC_INIT_RANDOM_STATE
 #define FIO_HAVE_GETTID
 
 #define OS_MAP_ANON		MAP_ANON
 #define OS_RAND_MAX		2147483648UL
+
+#if defined(_BIG_ENDIAN)
+#define FIO_BIG_ENDIAN
+#else
+#define FIO_LITTLE_ENDIAN
+#endif
+
+#define fio_swap16(x)	BSWAP_16(x)
+#define fio_swap32(x)	BSWAP_32(x)
+#define fio_swap64(x)	BSWAP_64(x)
 
 struct solaris_rand_seed {
 	unsigned short r[3];
@@ -98,24 +112,16 @@ static inline int fio_set_odirect(int fd)
 
 static inline int fio_cpuset_init(os_cpu_mask_t *mask)
 {
-	int ret;
-
-	if (pset_create(mask) < 0) {
-		ret = errno;
+	if (pset_create(mask) < 0)
 		return -1;
-	}
 
 	return 0;
 }
 
 static inline int fio_cpuset_exit(os_cpu_mask_t *mask)
 {
-	int ret;
-
-	if (pset_destroy(*mask) < 0) {
-		ret = errno;
+	if (pset_destroy(*mask) < 0)
 		return -1;
-	}
 
 	return 0;
 }

@@ -22,8 +22,9 @@ static int last_tv_valid;
 static struct timeval *fio_tv;
 int fio_gtod_offload = 0;
 int fio_gtod_cpu = -1;
+static pthread_t gtod_thread;
 
-enum fio_cs fio_clock_source = CS_GTOD;
+enum fio_cs fio_clock_source = FIO_PREFERRED_CLOCK_SOURCE;
 
 #ifdef FIO_DEBUG_TIME
 
@@ -140,7 +141,11 @@ void fio_gettime(struct timeval *tp, void fio_unused *caller)
 	case CS_CGETTIME: {
 		struct timespec ts;
 
+#ifdef FIO_HAVE_CLOCK_MONOTONIC
+		if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+#else
 		if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
+#endif
 			log_err("fio: clock_gettime fails\n");
 			assert(0);
 		}
@@ -268,7 +273,60 @@ void fio_gtod_init(void)
 	assert(fio_tv);
 }
 
-void fio_gtod_update(void)
+static void fio_gtod_update(void)
 {
 	gettimeofday(fio_tv, NULL);
+}
+
+static void *gtod_thread_main(void *data)
+{
+	struct fio_mutex *mutex = data;
+
+	fio_mutex_up(mutex);
+
+	/*
+	 * As long as we have jobs around, update the clock. It would be nice
+	 * to have some way of NOT hammering that CPU with gettimeofday(),
+	 * but I'm not sure what to use outside of a simple CPU nop to relax
+	 * it - we don't want to lose precision.
+	 */
+	while (threads) {
+		fio_gtod_update();
+		nop;
+	}
+
+	return NULL;
+}
+
+int fio_start_gtod_thread(void)
+{
+	struct fio_mutex *mutex;
+	pthread_attr_t attr;
+	int ret;
+
+	mutex = fio_mutex_init(0);
+	if (!mutex)
+		return 1;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN);
+	ret = pthread_create(&gtod_thread, &attr, gtod_thread_main, NULL);
+	pthread_attr_destroy(&attr);
+	if (ret) {
+		log_err("Can't create gtod thread: %s\n", strerror(ret));
+		goto err;
+	}
+
+	ret = pthread_detach(gtod_thread);
+	if (ret) {
+		log_err("Can't detatch gtod thread: %s\n", strerror(ret));
+		goto err;
+	}
+
+	dprint(FD_MUTEX, "wait on startup_mutex\n");
+	fio_mutex_down(mutex);
+	dprint(FD_MUTEX, "done waiting on startup_mutex\n");
+err:
+	fio_mutex_remove(mutex);
+	return ret;
 }

@@ -33,8 +33,12 @@ struct thread_data;
 #include "options.h"
 #include "profile.h"
 #include "time.h"
+#include "gettime.h"
 #include "lib/getopt.h"
 #include "lib/rand.h"
+#include "server.h"
+#include "stat.h"
+#include "flow.h"
 
 #ifdef FIO_HAVE_GUASI
 #include <guasi.h>
@@ -43,14 +47,6 @@ struct thread_data;
 #ifdef FIO_HAVE_SOLARISAIO
 #include <sys/asynch.h>
 #endif
-
-struct group_run_stats {
-	unsigned long long max_run[2], min_run[2];
-	unsigned long long max_bw[2], min_bw[2];
-	unsigned long long io_kb[2];
-	unsigned long long agg[2];
-	unsigned int kb_base;
-};
 
 /*
  * What type of allocation to use for io buffers
@@ -72,169 +68,14 @@ enum {
 };
 
 /*
- * How many depth levels to log
+ * What type of errors to continue on when continue_on_error is used
  */
-#define FIO_IO_U_MAP_NR	7
-#define FIO_IO_U_LAT_U_NR 10
-#define FIO_IO_U_LAT_M_NR 12
-
-/*
- * Aggregate clat samples to report percentile(s) of them.
- *
- * EXECUTIVE SUMMARY
- *
- * FIO_IO_U_PLAT_BITS determines the maximum statistical error on the
- * value of resulting percentiles. The error will be approximately
- * 1/2^(FIO_IO_U_PLAT_BITS+1) of the value.
- *
- * FIO_IO_U_PLAT_GROUP_NR and FIO_IO_U_PLAT_BITS determine the maximum
- * range being tracked for latency samples. The maximum value tracked
- * accurately will be 2^(GROUP_NR + PLAT_BITS -1) microseconds.
- *
- * FIO_IO_U_PLAT_GROUP_NR and FIO_IO_U_PLAT_BITS determine the memory
- * requirement of storing those aggregate counts. The memory used will
- * be (FIO_IO_U_PLAT_GROUP_NR * 2^FIO_IO_U_PLAT_BITS) * sizeof(int)
- * bytes.
- *
- * FIO_IO_U_PLAT_NR is the total number of buckets.
- *
- * DETAILS
- *
- * Suppose the clat varies from 0 to 999 (usec), the straightforward
- * method is to keep an array of (999 + 1) buckets, in which a counter
- * keeps the count of samples which fall in the bucket, e.g.,
- * {[0],[1],...,[999]}. However this consumes a huge amount of space,
- * and can be avoided if an approximation is acceptable.
- *
- * One such method is to let the range of the bucket to be greater
- * than one. This method has low accuracy when the value is small. For
- * example, let the buckets be {[0,99],[100,199],...,[900,999]}, and
- * the represented value of each bucket be the mean of the range. Then
- * a value 0 has an round-off error of 49.5. To improve on this, we
- * use buckets with non-uniform ranges, while bounding the error of
- * each bucket within a ratio of the sample value. A simple example
- * would be when error_bound = 0.005, buckets are {
- * {[0],[1],...,[99]}, {[100,101],[102,103],...,[198,199]},..,
- * {[900,909],[910,919]...}  }. The total range is partitioned into
- * groups with different ranges, then buckets with uniform ranges. An
- * upper bound of the error is (range_of_bucket/2)/value_of_bucket
- *
- * For better efficiency, we implement this using base two. We group
- * samples by their Most Significant Bit (MSB), extract the next M bit
- * of them as an index within the group, and discard the rest of the
- * bits.
- *
- * E.g., assume a sample 'x' whose MSB is bit n (starting from bit 0),
- * and use M bit for indexing
- *
- *        | n |    M bits   | bit (n-M-1) ... bit 0 |
- *
- * Because x is at least 2^n, and bit 0 to bit (n-M-1) is at most
- * (2^(n-M) - 1), discarding bit 0 to (n-M-1) makes the round-off
- * error
- *
- *           2^(n-M)-1    2^(n-M)    1
- *      e <= --------- <= ------- = ---
- *             2^n          2^n     2^M
- *
- * Furthermore, we use "mean" of the range to represent the bucket,
- * the error e can be lowered by half to 1 / 2^(M+1). By using M bits
- * as the index, each group must contains 2^M buckets.
- *
- * E.g. Let M (FIO_IO_U_PLAT_BITS) be 6
- *      Error bound is 1/2^(6+1) = 0.0078125 (< 1%)
- *
- *	Group	MSB	#discarded	range of		#buckets
- *			error_bits	value
- *	----------------------------------------------------------------
- *	0*	0~5	0		[0,63]			64
- *	1*	6	0		[64,127]		64
- *	2	7	1		[128,255]		64
- *	3	8	2		[256,511]		64
- *	4	9	3		[512,1023]		64
- *	...	...	...		[...,...]		...
- *	18	23	17		[8838608,+inf]**	64
- *
- *  * Special cases: when n < (M-1) or when n == (M-1), in both cases,
- *    the value cannot be rounded off. Use all bits of the sample as
- *    index.
- *
- *  ** If a sample's MSB is greater than 23, it will be counted as 23.
- */
-
-#define FIO_IO_U_PLAT_BITS 6
-#define FIO_IO_U_PLAT_VAL (1 << FIO_IO_U_PLAT_BITS)
-#define FIO_IO_U_PLAT_GROUP_NR 19
-#define FIO_IO_U_PLAT_NR (FIO_IO_U_PLAT_GROUP_NR * FIO_IO_U_PLAT_VAL)
-#define FIO_IO_U_LIST_MAX_LEN 20 /* The size of the default and user-specified
-					list of percentiles */
-
-#define MAX_PATTERN_SIZE 512
-
-struct thread_stat {
-	char *name;
-	char *verror;
-	int error;
-	int groupid;
-	pid_t pid;
-	char *description;
-	int members;
-
-	struct io_log *slat_log;
-	struct io_log *clat_log;
-	struct io_log *lat_log;
-	struct io_log *bw_log;
-
-	/*
-	 * bandwidth and latency stats
-	 */
-	struct io_stat clat_stat[2];		/* completion latency */
-	struct io_stat slat_stat[2];		/* submission latency */
-	struct io_stat lat_stat[2];		/* total latency */
-	struct io_stat bw_stat[2];		/* bandwidth stats */
-
-	unsigned long long stat_io_bytes[2];
-	struct timeval stat_sample_time[2];
-
-	/*
-	 * fio system usage accounting
-	 */
-	struct rusage ru_start;
-	struct rusage ru_end;
-	unsigned long usr_time;
-	unsigned long sys_time;
-	unsigned long ctx;
-	unsigned long minf, majf;
-
-	/*
-	 * IO depth and latency stats
-	 */
-	unsigned int clat_percentiles;
-	double* percentile_list;
-
-	unsigned int io_u_map[FIO_IO_U_MAP_NR];
-	unsigned int io_u_submit[FIO_IO_U_MAP_NR];
-	unsigned int io_u_complete[FIO_IO_U_MAP_NR];
-	unsigned int io_u_lat_u[FIO_IO_U_LAT_U_NR];
-	unsigned int io_u_lat_m[FIO_IO_U_LAT_M_NR];
-	unsigned int io_u_plat[2][FIO_IO_U_PLAT_NR];
-	unsigned long total_io_u[3];
-	unsigned long short_io_u[3];
-	unsigned long total_submit;
-	unsigned long total_complete;
-
-	unsigned long long io_bytes[2];
-	unsigned long long runtime[2];
-	unsigned long total_run_time;
-
-	/*
-	 * IO Error related stats
-	 */
-	unsigned continue_on_error;
-	unsigned long total_err_count;
-	int first_error;
-
-	unsigned int kb_base;
+enum error_type {
+        ERROR_TYPE_NONE = 0,
+        ERROR_TYPE_READ = 1 << 0,
+        ERROR_TYPE_WRITE = 1 << 1,
+        ERROR_TYPE_VERIFY = 1 << 2,
+        ERROR_TYPE_ANY = 0xffff,
 };
 
 struct bssplit {
@@ -307,6 +148,8 @@ struct thread_options {
 	unsigned int use_os_rand;
 	unsigned int write_lat_log;
 	unsigned int write_bw_log;
+	unsigned int write_iops_log;
+	unsigned int log_avg_msec;
 	unsigned int norandommap;
 	unsigned int softrandommap;
 	unsigned int bs_unaligned;
@@ -325,7 +168,9 @@ struct thread_options {
 	unsigned long long ramp_time;
 	unsigned int overwrite;
 	unsigned int bw_avg_time;
+	unsigned int iops_avg_time;
 	unsigned int loops;
+	unsigned long long zone_range;
 	unsigned long long zone_size;
 	unsigned long long zone_skip;
 	enum fio_memtype mem_type;
@@ -349,6 +194,8 @@ struct thread_options {
 	unsigned int zero_buffers;
 	unsigned int refill_buffers;
 	unsigned int scramble_buffers;
+	unsigned int compress_percentage;
+	unsigned int compress_chunk;
 	unsigned int time_based;
 	unsigned int disable_lat;
 	unsigned int disable_clat;
@@ -365,12 +212,13 @@ struct thread_options {
 	unsigned long long trim_backlog;
 	unsigned int clat_percentiles;
 	unsigned int overwrite_plist;
-	double percentile_list[FIO_IO_U_LIST_MAX_LEN];
+	fio_fp64_t percentile_list[FIO_IO_U_LIST_MAX_LEN];
 
 	char *read_iolog_file;
 	char *write_iolog_file;
 	char *bw_log_file;
 	char *lat_log_file;
+	char *iops_log_file;
 	char *replay_redirect;
 
 	/*
@@ -396,7 +244,7 @@ struct thread_options {
 	/*
 	 * I/O Error handling
 	 */
-	unsigned int continue_on_error;
+	enum error_type continue_on_error;
 
 	/*
 	 * Benchmark profile type
@@ -413,23 +261,43 @@ struct thread_options {
 	unsigned int uid;
 	unsigned int gid;
 
+	int flow_id;
+	int flow;
+	int flow_watermark;
+	unsigned int flow_sleep;
+
+	unsigned long long offset_increment;
+
 	unsigned int sync_file_range;
-
-	unsigned int userspace_libaio_reap;
 };
-
-#define FIO_VERROR_SIZE	128
 
 /*
  * This describes a single thread/process executing a fio job.
  */
 struct thread_data {
 	struct thread_options o;
+	void *eo;
 	char verror[FIO_VERROR_SIZE];
 	pthread_t thread;
 	int thread_number;
 	int groupid;
 	struct thread_stat ts;
+
+	struct io_log *slat_log;
+	struct io_log *clat_log;
+	struct io_log *lat_log;
+	struct io_log *bw_log;
+	struct io_log *iops_log;
+
+	uint64_t stat_io_bytes[2];
+	struct timeval bw_sample_time;
+
+	uint64_t stat_io_blocks[2];
+	struct timeval iops_sample_time;
+
+	struct rusage ru_start;
+	struct rusage ru_end;
+
 	struct fio_file **files;
 	unsigned int files_size;
 	unsigned int files_index;
@@ -442,6 +310,7 @@ struct thread_data {
 		struct frand_state __next_file_state;
 	};
 	int error;
+	int sig;
 	int done;
 	pid_t pid;
 	char *orig_buffer;
@@ -490,10 +359,23 @@ struct thread_data {
 	struct ioengine_ops *io_ops;
 
 	/*
-	 * Current IO depth and list of free and busy io_u's.
+	 * Queue depth of io_u's that fio MIGHT do
 	 */
 	unsigned int cur_depth;
+
+	/*
+	 * io_u's about to be committed
+	 */
 	unsigned int io_u_queued;
+
+	/*
+	 * io_u's submitted but not completed yet
+	 */
+	unsigned int io_u_in_flight;
+
+	/*
+	 * List of free and busy io_u's
+	 */
 	struct flist_head io_u_freelist;
 	struct flist_head io_u_busylist;
 	struct flist_head io_u_requeues;
@@ -512,7 +394,7 @@ struct thread_data {
 	/*
 	 * Rate state
 	 */
-	unsigned long rate_nsec_cycle[2];
+	unsigned long long rate_bps[2];
 	long rate_pending_usleep[2];
 	unsigned long rate_bytes[2];
 	unsigned long rate_blocks[2];
@@ -523,6 +405,7 @@ struct thread_data {
 
 	unsigned long io_issues[2];
 	unsigned long long io_blocks[2];
+	unsigned long long this_io_blocks[2];
 	unsigned long long io_bytes[2];
 	unsigned long long io_skip_bytes;
 	unsigned long long this_io_bytes[2];
@@ -598,6 +481,8 @@ struct thread_data {
 	unsigned int total_err_count;
 	int first_error;
 
+	struct fio_flow *flow;
+
 	/*
 	 * Can be overloaded by profiles
 	 */
@@ -632,15 +517,18 @@ enum {
 #define td_vmsg(td, err, msg, func)	\
 	__td_verror((td), (err), (msg), (func))
 
+#define __fio_stringify_1(x)	#x
+#define __fio_stringify(x)	__fio_stringify_1(x)
+
 extern int exitall_on_terminate;
-extern int thread_number;
-extern int nr_process, nr_thread;
+extern unsigned int thread_number;
+extern unsigned int nr_process, nr_thread;
 extern int shm_id;
 extern int groupid;
 extern int terse_output;
 extern int temp_stall_ts;
 extern unsigned long long mlock_size;
-extern unsigned long page_mask, page_size;
+extern uintptr_t page_mask, page_size;
 extern int read_only;
 extern int eta_print;
 extern unsigned long done_secs;
@@ -650,6 +538,11 @@ extern int fio_gtod_cpu;
 extern enum fio_cs fio_clock_source;
 extern int warnings_fatal;
 extern int terse_version;
+extern int is_backend;
+extern int nr_clients;
+extern int log_syslog;
+extern const char fio_version_string[];
+extern const fio_fp64_t def_percentile_list[FIO_IO_U_LIST_MAX_LEN];
 
 extern struct thread_data *threads;
 
@@ -666,6 +559,15 @@ static inline void fio_ro_check(struct thread_data *td, struct io_u *io_u)
 #define REAL_MAX_JOBS		2048
 
 #define td_non_fatal_error(e)	((e) == EIO || (e) == EILSEQ)
+
+static inline enum error_type td_error_type(enum fio_ddir ddir, int err)
+{
+	if (err == EILSEQ)
+		return ERROR_TYPE_VERIFY;
+	if (ddir == DDIR_READ)
+		return ERROR_TYPE_READ;
+	return ERROR_TYPE_WRITE;
+}
 
 static inline void update_error_count(struct thread_data *td, int err)
 {
@@ -690,19 +592,28 @@ static inline int should_fsync(struct thread_data *td)
  * Init/option functions
  */
 extern int __must_check parse_options(int, char **);
+extern int parse_jobs_ini(char *, int, int);
+extern int parse_cmd_line(int, char **);
+extern int fio_backend(void);
+extern void reset_fio_state(void);
+extern void clear_io_state(struct thread_data *);
 extern int fio_options_parse(struct thread_data *, char **, int);
 extern void fio_keywords_init(void);
 extern int fio_cmd_option_parse(struct thread_data *, const char *, char *);
+extern int fio_cmd_ioengine_option_parse(struct thread_data *, const char *, char *);
 extern void fio_fill_default_options(struct thread_data *);
 extern int fio_show_option_help(const char *);
+extern void fio_options_set_ioengine_opts(struct option *long_options, struct thread_data *td);
 extern void fio_options_dup_and_init(struct option *);
-extern void options_mem_dupe(struct thread_data *);
-extern void options_mem_free(struct thread_data *);
+extern void fio_options_mem_dupe(struct thread_data *);
+extern void options_mem_dupe(void *data, struct fio_option *options);
 extern void td_fill_rand_seeds(struct thread_data *);
 extern void add_job_opts(const char **);
 extern char *num2str(unsigned long, int, int, int);
+extern int ioengine_load(struct thread_data *);
 
-#define FIO_GETOPT_JOB		0x89988998
+#define FIO_GETOPT_JOB		0x89000000
+#define FIO_GETOPT_IOENGINE	0x98000000
 #define FIO_NR_OPTIONS		(FIO_MAX_OPTS + 128)
 
 /*
@@ -731,6 +642,8 @@ enum {
 };
 
 extern void td_set_runstate(struct thread_data *, int);
+#define TERMINATE_ALL		(-1)
+extern void fio_terminate_threads(int);
 
 /*
  * Memory helpers
@@ -841,5 +754,8 @@ static inline void td_io_u_free_notify(struct thread_data *td)
 	if (td->o.verify_async)
 		pthread_cond_signal(&td->free_cond);
 }
+
+extern const char *fio_get_arch_string(int);
+extern const char *fio_get_os_string(int);
 
 #endif

@@ -1,7 +1,7 @@
 #ifndef FIO_IOENGINE_H
 #define FIO_IOENGINE_H
 
-#define FIO_IOOPS_VERSION	12
+#define FIO_IOOPS_VERSION	13
 
 enum {
 	IO_U_F_FREE		= 1 << 0,
@@ -11,6 +11,7 @@ enum {
 	IO_U_F_BUSY_OK		= 1 << 4,
 	IO_U_F_TRIMMED		= 1 << 5,
 	IO_U_F_BARRIER		= 1 << 6,
+	IO_U_F_VER_LIST		= 1 << 7,
 };
 
 /*
@@ -121,6 +122,8 @@ struct ioengine_ops {
 	int (*open_file)(struct thread_data *, struct fio_file *);
 	int (*close_file)(struct thread_data *, struct fio_file *);
 	int (*get_file_size)(struct thread_data *, struct fio_file *);
+	int option_struct_size;
+	struct fio_option *options;
 	void *data;
 	void *dlhandle;
 };
@@ -130,7 +133,7 @@ enum fio_ioengine_flags {
 	FIO_RAWIO	= 1 << 1,	/* some sort of direct/raw io */
 	FIO_DISKLESSIO	= 1 << 2,	/* no disk involved */
 	FIO_NOEXTEND	= 1 << 3,	/* engine can't extend file */
-	FIO_NODISKUTIL  = 1 << 4,       /* diskutil can't handle filename */
+	FIO_NODISKUTIL  = 1 << 4,	/* diskutil can't handle filename */
 	FIO_UNIDIR	= 1 << 5,	/* engine is uni-directional */
 	FIO_NOIO	= 1 << 6,	/* thread does only pseudo IO */
 	FIO_SIGTERM	= 1 << 7,	/* needs SIGTERM to exit */
@@ -155,7 +158,10 @@ extern int __must_check td_io_get_file_size(struct thread_data *, struct fio_fil
 extern struct ioengine_ops *load_ioengine(struct thread_data *, const char *);
 extern void register_ioengine(struct ioengine_ops *);
 extern void unregister_ioengine(struct ioengine_ops *);
+extern void free_ioengine(struct thread_data *);
 extern void close_ioengine(struct thread_data *);
+
+extern int fio_show_ioengine_help(const char *engine);
 
 /*
  * io unit handling
@@ -171,7 +177,7 @@ extern int __must_check io_u_queued_complete(struct thread_data *, int, unsigned
 extern void io_u_queued(struct thread_data *, struct io_u *);
 extern void io_u_log_error(struct thread_data *, struct io_u *);
 extern void io_u_mark_depth(struct thread_data *, unsigned int);
-extern void io_u_fill_buffer(struct thread_data *td, struct io_u *, unsigned int);
+extern void io_u_fill_buffer(struct thread_data *td, struct io_u *, unsigned int, unsigned int);
 void io_u_mark_complete(struct thread_data *, unsigned int);
 void io_u_mark_submit(struct thread_data *, unsigned int);
 

@@ -2,19 +2,19 @@ CC	= gcc
 DEBUGFLAGS = -D_FORTIFY_SOURCE=2 -DFIO_INC_DEBUG
 CPPFLAGS= -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 \
 	$(DEBUGFLAGS)
-OPTFLAGS= -O2 -fno-omit-frame-pointer -g $(EXTFLAGS)
+OPTFLAGS= -O3 -fno-omit-frame-pointer -g $(EXTFLAGS)
 CFLAGS	= -std=gnu99 -Wwrite-strings -Wall $(OPTFLAGS)
 LIBS	= -lm $(EXTLIBS)
 PROGS	= fio
 SCRIPTS = fio_generate_plots
 UNAME  := $(shell uname)
 
-SOURCE = gettime.c fio.c ioengines.c init.c stat.c log.c time.c filesetup.c \
+SOURCE := gettime.c fio.c ioengines.c init.c stat.c log.c time.c filesetup.c \
 		eta.c verify.c memory.c io_u.c parse.c mutex.c options.c \
 		rbtree.c smalloc.c filehash.c profile.c debug.c lib/rand.c \
-		lib/num2str.c $(wildcard crc/*.c) engines/cpu.c \
+		lib/num2str.c lib/ieee754.c $(wildcard crc/*.c) engines/cpu.c \
 		engines/mmap.c engines/sync.c engines/null.c engines/net.c \
-		memalign.c
+		memalign.c server.c client.c iolog.c backend.c libfio.c flow.c
 
 ifeq ($(UNAME), Linux)
   SOURCE += diskutil.c fifo.c blktrace.c helpers.c cgroup.c trim.c \
@@ -22,7 +22,7 @@ ifeq ($(UNAME), Linux)
 		engines/splice.c engines/syslet-rw.c engines/guasi.c \
 		engines/binject.c engines/rdma.c profiles/tiobench.c
   LIBS += -lpthread -ldl -lrt -laio
-  CFLAGS += -rdynamic
+  LDFLAGS += -rdynamic
 endif
 ifeq ($(UNAME), SunOS)
   SOURCE += fifo.c lib/strsep.c helpers.c engines/posixaio.c \
@@ -33,12 +33,12 @@ endif
 ifeq ($(UNAME), FreeBSD)
   SOURCE += helpers.c engines/posixaio.c
   LIBS	 += -lpthread -lrt
-  CFLAGS += -rdynamic
+  LDFLAGS += -rdynamic
 endif
 ifeq ($(UNAME), NetBSD)
   SOURCE += helpers.c engines/posixaio.c
   LIBS	 += -lpthread -lrt
-  CFLAGS += -rdynamic
+  LDFLAGS += -rdynamic
 endif
 ifeq ($(UNAME), AIX)
   SOURCE += fifo.c helpers.c lib/getopt_long.c engines/posixaio.c
@@ -56,16 +56,25 @@ ifeq ($(UNAME), Darwin)
   LIBS	 += -lpthread -ldl
 endif
 ifneq (,$(findstring CYGWIN,$(UNAME)))
-  SOURCE += engines/windowsaio.c
-  LIBS	 += -lpthread -lrt -lpsapi
-  CFLAGS += -DPSAPI_VERSION=1
+  SOURCE := $(filter-out engines/mmap.c,$(SOURCE))
+  SOURCE += engines/windowsaio.c os/windows/posix.c
+  LIBS	 += -lpthread -lpsapi -lws2_32
+  CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format
+  CC	  = x86_64-w64-mingw32-gcc
 endif
 
 OBJS = $(SOURCE:.c=.o)
 
-T_OBJS = t/stest.o
-T_OBJS += mutex.o smalloc.o
-T_PROGS = t/stest
+T_SMALLOC_OBJS = t/stest.o
+T_SMALLOC_OBJS += mutex.o smalloc.o t/log.o
+T_SMALLOC_PROGS = t/stest
+
+T_IEEE_OBJS = t/ieee754.o
+T_IEEE_OBJS += ieee754.o
+T_IEEE_PROGS = t/ieee754
+
+T_OBJS = $(T_SMALLOC_OBJS)
+T_OBJS += $(T_IEEE_OBJS)
 
 ifneq ($(findstring $(MAKEFLAGS),s),s)
 ifndef V
@@ -77,15 +86,23 @@ endif
 INSTALL = install
 prefix = /usr/local
 bindir = $(prefix)/bin
+
+ifeq ($(UNAME), Darwin)
+mandir = /usr/share/man
+else
 mandir = $(prefix)/man
+endif
 
 all: .depend $(PROGS) $(SCRIPTS)
 
 .c.o: .depend
 	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<
 
-t/stest: $(T_OBJS)
-	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_OBJS) $(LIBS) $(LDFLAGS)
+t/stest: $(T_SMALLOC_OBJS)
+	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_SMALLOC_OBJS) $(LIBS) $(LDFLAGS)
+
+t/ieee754: $(T_IEEE_OBJS)
+	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_IEEE_OBJS) $(LIBS) $(LDFLAGS)
 
 fio: $(OBJS)
 	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(OBJS) $(LIBS) $(LDFLAGS)
