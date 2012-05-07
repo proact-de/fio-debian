@@ -6,6 +6,9 @@ fio (2.0.7-1) UNRELEASED; urgency=low
   [ Martin Steigerwald ]
   * Imported Upstream version 2.0.7 which sports a client / server
     architecture.
+  * debian/patches
+    * makefile: Updated for fio 2.0.7 makefile.
+    * manpage: Removed, applied upstream.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 07 May 2012 14:03:18 +0200
 
