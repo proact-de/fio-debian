@@ -1,9 +1,12 @@
 #ifndef FIO_OS_NETBSD_H
 #define FIO_OS_NETBSD_H
 
+#define	FIO_OS	os_netbsd
+
 #include <errno.h>
 #include <sys/param.h>
 #include <sys/thr.h>
+#include <sys/endian.h>
 /* XXX hack to avoid confilcts between rbtree.h and <sys/rb.h> */
 #define	rb_node	_rb_node
 #include <sys/sysctl.h>
@@ -20,6 +23,7 @@
 #define FIO_HAVE_FDATASYNC
 #define FIO_USE_GENERIC_BDEV_SIZE
 #define FIO_USE_GENERIC_RAND
+#define FIO_USE_GENERIC_INIT_RANDOM_STATE
 #define FIO_HAVE_GETTID
 
 #undef	FIO_HAVE_CPU_AFFINITY	/* XXX notyet */
@@ -29,6 +33,16 @@
 #ifndef PTHREAD_STACK_MIN
 #define PTHREAD_STACK_MIN 4096
 #endif
+
+#if BYTE_ORDER == LITTLE_ENDIAN
+#define FIO_LITTLE_ENDIAN
+#else
+#define FIO_BIG_ENDIAN
+#endif
+
+#define fio_swap16(x)	bswap16(x)
+#define fio_swap32(x)	bswap32(x)
+#define fio_swap64(x)	bswap64(x)
 
 typedef off_t off64_t;
 

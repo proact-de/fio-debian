@@ -226,21 +226,6 @@ static int str_rw_cb(void *data, const char *str)
 	return 0;
 }
 
-#ifdef FIO_HAVE_LIBAIO
-static int str_libaio_cb(void *data, const char *str)
-{
-	struct thread_data *td = data;
-
-	if (!strcmp(str, "userspace_reap")) {
-		td->o.userspace_libaio_reap = 1;
-		return 0;
-	}
-
-	log_err("fio: bad libaio sub-option: %s\n", str);
-	return 1;
-}
-#endif
-
 static int str_mem_cb(void *data, const char *mem)
 {
 	struct thread_data *td = data;
@@ -260,12 +245,9 @@ static int str_verify_cb(void *data, const char *mem)
 {
 	struct thread_data *td = data;
 
-	if (td->o.verify != VERIFY_CRC32C_INTEL)
-		return 0;
-
-	if (!crc32c_intel_works()) {
-		log_info("fio: System does not support hw accelerated crc32c. Falling back to sw crc32c.\n");
-		td->o.verify = VERIFY_CRC32C;
+	if (td->o.verify == VERIFY_CRC32C_INTEL ||
+	    td->o.verify == VERIFY_CRC32C) {
+		crc32c_intel_probe();
 	}
 
 	return 0;
@@ -704,12 +686,32 @@ static int str_verify_pattern_cb(void *data, const char *input)
 			}
 		}
 	}
+
+	/*
+	 * Fill the pattern all the way to the end. This greatly reduces
+	 * the number of memcpy's we have to do when verifying the IO.
+	 */
+	while (i > 1 && i * 2 <= MAX_PATTERN_SIZE) {
+		memcpy(&td->o.verify_pattern[i], &td->o.verify_pattern[0], i);
+		i *= 2;
+	}
+	if (i == 1) {
+		/*
+		 * The code in verify_io_u_pattern assumes a single byte pattern
+		 * fills the whole verify pattern buffer.
+		 */
+		memset(td->o.verify_pattern, td->o.verify_pattern[0],
+		       MAX_PATTERN_SIZE);
+	}
+
 	td->o.verify_pattern_bytes = i;
+
 	/*
 	 * VERIFY_META could already be set
 	 */
 	if (td->o.verify == VERIFY_NONE)
 		td->o.verify = VERIFY_PATTERN;
+
 	return 0;
 }
 
@@ -749,6 +751,17 @@ static int str_write_lat_log_cb(void *data, const char *str)
 	return 0;
 }
 
+static int str_write_iops_log_cb(void *data, const char *str)
+{
+	struct thread_data *td = data;
+
+	if (str)
+		td->o.iops_log_file = strdup(str);
+
+	td->o.write_iops_log = 1;
+	return 0;
+}
+
 static int str_gtod_reduce_cb(void *data, int *il)
 {
 	struct thread_data *td = data;
@@ -758,6 +771,7 @@ static int str_gtod_reduce_cb(void *data, int *il)
 	td->o.disable_clat = !!val;
 	td->o.disable_slat = !!val;
 	td->o.disable_bw = !!val;
+	td->o.clat_percentiles = !val;
 	if (val)
 		td->tv_cache_mask = 63;
 
@@ -828,9 +842,6 @@ static int kb_base_verify(struct fio_option *o, void *data)
 
 	return 0;
 }
-
-#define __stringify_1(x)	#x
-#define __stringify(x)		__stringify_1(x)
 
 /*
  * Map of job/command line options
@@ -933,6 +944,10 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 			    .oval = TD_DDIR_RW,
 			    .help = "Sequential read and write mix",
 			  },
+			  { .ival = "readwrite",
+			    .oval = TD_DDIR_RW,
+			    .help = "Sequential read and write mix",
+			  },
 			  { .ival = "randrw",
 			    .oval = TD_DDIR_RANDRW,
 			    .help = "Random read and write mix"
@@ -976,7 +991,6 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 #ifdef FIO_HAVE_LIBAIO
 			  { .ival = "libaio",
 			    .help = "Linux native asynchronous IO",
-			    .cb   = str_libaio_cb,
 			  },
 #endif
 #ifdef FIO_HAVE_POSIXAIO
@@ -992,7 +1006,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 #ifdef FIO_HAVE_WINDOWSAIO
 			  { .ival = "windowsaio",
 			    .help = "Windows native asynchronous IO"
-		  	  },
+			  },
 #endif
 			  { .ival = "mmap",
 			    .help = "Memory mapped IO"
@@ -1106,6 +1120,14 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_STR_VAL,
 		.off1	= td_var_offset(start_offset),
 		.help	= "Start IO from this offset",
+		.def	= "0",
+	},
+	{
+		.name	= "offset_increment",
+		.type	= FIO_OPT_STR_VAL,
+		.off1	= td_var_offset(offset_increment),
+		.help	= "What is the increment from one offset to the next",
+		.parent = "offset",
 		.def	= "0",
 	},
 	{
@@ -1469,12 +1491,12 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 			    .help = "Use crc32 checksums for verification",
 			  },
 			  { .ival = "crc32c-intel",
-			    .oval = VERIFY_CRC32C_INTEL,
-			    .help = "Use hw crc32c checksums for verification",
+			    .oval = VERIFY_CRC32C,
+			    .help = "Use crc32c checksums for verification (hw assisted, if available)",
 			  },
 			  { .ival = "crc32c",
 			    .oval = VERIFY_CRC32C,
-			    .help = "Use crc32c checksums for verification",
+			    .help = "Use crc32c checksums for verification (hw assisted, if available)",
 			  },
 			  { .ival = "crc16",
 			    .oval = VERIFY_CRC16,
@@ -1558,7 +1580,7 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.name	= "verify_dump",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(verify_dump),
-		.def	= "1",
+		.def	= "0",
 		.help	= "Dump contents of good and bad blocks on failure",
 		.parent = "verify",
 	},
@@ -1677,6 +1699,13 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.name	= "zonesize",
 		.type	= FIO_OPT_STR_VAL,
 		.off1	= td_var_offset(zone_size),
+		.help	= "Amount of data to read per zone",
+		.def	= "0",
+	},
+	{
+		.name	= "zonerange",
+		.type	= FIO_OPT_STR_VAL,
+		.off1	= td_var_offset(zone_range),
 		.help	= "Give size of an IO zone",
 		.def	= "0",
 	},
@@ -1824,6 +1853,15 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.help	= "Time window over which to calculate bandwidth"
 			  " (msec)",
 		.def	= "500",
+		.parent	= "write_bw_log",
+	},
+	{
+		.name	= "iopsavgtime",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(iops_avg_time),
+		.help	= "Time window over which to calculate IOPS (msec)",
+		.def	= "500",
+		.parent	= "write_iops_log",
 	},
 	{
 		.name	= "create_serialize",
@@ -1942,11 +1980,25 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.help	= "Write log of latency during run",
 	},
 	{
+		.name	= "write_iops_log",
+		.type	= FIO_OPT_STR,
+		.off1	= td_var_offset(write_iops_log),
+		.cb	= str_write_iops_log_cb,
+		.help	= "Write log of IOPS during run",
+	},
+	{
+		.name	= "log_avg_msec",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(log_avg_msec),
+		.help	= "Average bw/iops/lat logs over this period of time",
+		.def	= "0",
+	},
+	{
 		.name	= "hugepage-size",
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(hugepage_size),
 		.help	= "When using hugepages, specify size of each page",
-		.def	= __stringify(FIO_HUGE_PAGE),
+		.def	= __fio_stringify(FIO_HUGE_PAGE),
 	},
 	{
 		.name	= "group_reporting",
@@ -1974,11 +2026,26 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.def	= "1",
 	},
 	{
+		.name	= "buffer_compress_percentage",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(compress_percentage),
+		.maxval	= 100,
+		.minval	= 1,
+		.help	= "How compressible the buffer is (approximately)",
+	},
+	{
+		.name	= "buffer_compress_chunk",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(compress_chunk),
+		.parent	= "buffer_compress_percentage",
+		.help	= "Size of compressible region in buffer",
+	},
+	{
 		.name	= "clat_percentiles",
 		.type	= FIO_OPT_BOOL,
 		.off1	= td_var_offset(clat_percentiles),
 		.help	= "Enable the reporting of completion latency percentiles",
-		.def	= "0",
+		.def	= "1",
 	},
 	{
 		.name	= "percentile_list",
@@ -2048,10 +2115,44 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 	},
 	{
 		.name	= "continue_on_error",
-		.type	= FIO_OPT_BOOL,
+		.type	= FIO_OPT_STR,
 		.off1	= td_var_offset(continue_on_error),
 		.help	= "Continue on non-fatal errors during IO",
-		.def	= "0",
+		.def	= "none",
+		.posval = {
+			  { .ival = "none",
+			    .oval = ERROR_TYPE_NONE,
+			    .help = "Exit when an error is encountered",
+			  },
+			  { .ival = "read",
+			    .oval = ERROR_TYPE_READ,
+			    .help = "Continue on read errors only",
+			  },
+			  { .ival = "write",
+			    .oval = ERROR_TYPE_WRITE,
+			    .help = "Continue on write errors only",
+			  },
+			  { .ival = "io",
+			    .oval = ERROR_TYPE_READ | ERROR_TYPE_WRITE,
+			    .help = "Continue on any IO errors",
+			  },
+			  { .ival = "verify",
+			    .oval = ERROR_TYPE_VERIFY,
+			    .help = "Continue on verify errors only",
+			  },
+			  { .ival = "all",
+			    .oval = ERROR_TYPE_ANY,
+			    .help = "Continue on all io and verify errors",
+			  },
+			  { .ival = "0",
+			    .oval = ERROR_TYPE_NONE,
+			    .help = "Alias for 'none'",
+			  },
+			  { .ival = "1",
+			    .oval = ERROR_TYPE_ANY,
+			    .help = "Alias for 'all'",
+			  },
+		},
 	},
 	{
 		.name	= "profile",
@@ -2093,24 +2194,99 @@ static struct fio_option options[FIO_MAX_OPTS] = {
 		.help	= "Run job with this group ID",
 	},
 	{
+		.name	= "flow_id",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(flow_id),
+		.help	= "The flow index ID to use",
+		.def	= "0",
+	},
+	{
+		.name	= "flow",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(flow),
+		.help	= "Weight for flow control of this job",
+		.parent	= "flow_id",
+		.def	= "0",
+	},
+	{
+		.name	= "flow_watermark",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(flow_watermark),
+		.help	= "High watermark for flow control. This option"
+			" should be set to the same value for all threads"
+			" with non-zero flow.",
+		.parent	= "flow_id",
+		.def	= "1024",
+	},
+	{
+		.name	= "flow_sleep",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(flow_sleep),
+		.help	= "How many microseconds to sleep after being held"
+			" back by the flow control mechanism",
+		.parent	= "flow_id",
+		.def	= "0",
+	},
+	{
 		.name = NULL,
 	},
 };
 
 static void add_to_lopt(struct option *lopt, struct fio_option *o,
-			const char *name)
+			const char *name, int val)
 {
 	lopt->name = (char *) name;
-	lopt->val = FIO_GETOPT_JOB;
+	lopt->val = val;
 	if (o->type == FIO_OPT_STR_SET)
 		lopt->has_arg = no_argument;
 	else
 		lopt->has_arg = required_argument;
 }
 
+static void options_to_lopts(struct fio_option *opts,
+			      struct option *long_options,
+			      int i, int option_type)
+{
+	struct fio_option *o = &opts[0];
+	while (o->name) {
+		add_to_lopt(&long_options[i], o, o->name, option_type);
+		if (o->alias) {
+			i++;
+			add_to_lopt(&long_options[i], o, o->alias, option_type);
+		}
+
+		i++;
+		o++;
+		assert(i < FIO_NR_OPTIONS);
+	}
+}
+
+void fio_options_set_ioengine_opts(struct option *long_options,
+				   struct thread_data *td)
+{
+	unsigned int i;
+
+	i = 0;
+	while (long_options[i].name) {
+		if (long_options[i].val == FIO_GETOPT_IOENGINE) {
+			memset(&long_options[i], 0, sizeof(*long_options));
+			break;
+		}
+		i++;
+	}
+
+	/*
+	 * Just clear out the prior ioengine options.
+	 */
+	if (!td || !td->eo)
+		return;
+
+	options_to_lopts(td->io_ops->options, long_options, i,
+			 FIO_GETOPT_IOENGINE);
+}
+
 void fio_options_dup_and_init(struct option *long_options)
 {
-	struct fio_option *o;
 	unsigned int i;
 
 	options_init(options);
@@ -2119,18 +2295,7 @@ void fio_options_dup_and_init(struct option *long_options)
 	while (long_options[i].name)
 		i++;
 
-	o = &options[0];
-	while (o->name) {
-		add_to_lopt(&long_options[i], o, o->name);
-		if (o->alias) {
-			i++;
-			add_to_lopt(&long_options[i], o, o->alias);
-		}
-
-		i++;
-		o++;
-		assert(i < FIO_NR_OPTIONS);
-	}
+	options_to_lopts(options, long_options, i, FIO_GETOPT_JOB);
 }
 
 struct fio_keyword {
@@ -2179,15 +2344,15 @@ void fio_keywords_init(void)
 
 static char *bc_calc(char *str)
 {
-	char *buf, *tmp, opt[80];
+	char buf[128], *tmp;
 	FILE *f;
 	int ret;
 
 	/*
 	 * No math, just return string
 	 */
-	if (!strchr(str, '+') && !strchr(str, '-') && !strchr(str, '*') &&
-	    !strchr(str, '/'))
+	if ((!strchr(str, '+') && !strchr(str, '-') && !strchr(str, '*') &&
+	     !strchr(str, '/')) || strchr(str, '\''))
 		return str;
 
 	/*
@@ -2198,37 +2363,89 @@ static char *bc_calc(char *str)
 		return str;
 
 	tmp++;
-	memset(opt, 0, sizeof(opt));
-	strncpy(opt, str, tmp - str);
 
-	buf = malloc(128);
+	/*
+	 * Prevent buffer overflows; such a case isn't reasonable anyway
+	 */
+	if (strlen(str) >= 128 || strlen(tmp) > 100)
+		return str;
 
 	sprintf(buf, "which %s > /dev/null", BC_APP);
 	if (system(buf)) {
 		log_err("fio: bc is needed for performing math\n");
-		free(buf);
 		return NULL;
 	}
 
-	sprintf(buf, "echo %s | %s", tmp, BC_APP);
+	sprintf(buf, "echo '%s' | %s", tmp, BC_APP);
 	f = popen(buf, "r");
 	if (!f) {
-		free(buf);
 		return NULL;
 	}
 
-	ret = fread(buf, 1, 128, f);
+	ret = fread(&buf[tmp - str], 1, 128 - (tmp - str), f);
 	if (ret <= 0) {
-		free(buf);
 		return NULL;
 	}
 
-	buf[ret - 1] = '\0';
-	strcat(opt, buf);
-	strcpy(buf, opt);
 	pclose(f);
+	buf[(tmp - str) + ret - 1] = '\0';
+	memcpy(buf, str, tmp - str);
 	free(str);
-	return buf;
+	return strdup(buf);
+}
+
+/*
+ * Return a copy of the input string with substrings of the form ${VARNAME}
+ * substituted with the value of the environment variable VARNAME.  The
+ * substitution always occurs, even if VARNAME is empty or the corresponding
+ * environment variable undefined.
+ */
+static char *option_dup_subs(const char *opt)
+{
+	char out[OPT_LEN_MAX+1];
+	char in[OPT_LEN_MAX+1];
+	char *outptr = out;
+	char *inptr = in;
+	char *ch1, *ch2, *env;
+	ssize_t nchr = OPT_LEN_MAX;
+	size_t envlen;
+
+	if (strlen(opt) + 1 > OPT_LEN_MAX) {
+		log_err("OPT_LEN_MAX (%d) is too small\n", OPT_LEN_MAX);
+		return NULL;
+	}
+
+	in[OPT_LEN_MAX] = '\0';
+	strncpy(in, opt, OPT_LEN_MAX);
+
+	while (*inptr && nchr > 0) {
+		if (inptr[0] == '$' && inptr[1] == '{') {
+			ch2 = strchr(inptr, '}');
+			if (ch2 && inptr+1 < ch2) {
+				ch1 = inptr+2;
+				inptr = ch2+1;
+				*ch2 = '\0';
+
+				env = getenv(ch1);
+				if (env) {
+					envlen = strlen(env);
+					if (envlen <= nchr) {
+						memcpy(outptr, env, envlen);
+						outptr += envlen;
+						nchr -= envlen;
+					}
+				}
+
+				continue;
+			}
+		}
+
+		*outptr++ = *inptr++;
+		--nchr;
+	}
+
+	*outptr = '\0';
+	return strdup(out);
 }
 
 /*
@@ -2238,6 +2455,7 @@ static char *fio_keyword_replace(char *opt)
 {
 	char *s;
 	int i;
+	int docalc = 0;
 
 	for (i = 0; fio_keywords[i].word != NULL; i++) {
 		struct fio_keyword *kw = &fio_keywords[i];
@@ -2267,35 +2485,98 @@ static char *fio_keyword_replace(char *opt)
 			 * replace opt and free the old opt
 			 */
 			opt = new;
-			//free(o_org);
+			free(o_org);
 
-			/*
-			 * Check for potential math and invoke bc, if possible
-			 */
-			opt = bc_calc(opt);
+			docalc = 1;
 		}
 	}
+
+	/*
+	 * Check for potential math and invoke bc, if possible
+	 */
+	if (docalc)
+		opt = bc_calc(opt);
 
 	return opt;
 }
 
+static char **dup_and_sub_options(char **opts, int num_opts)
+{
+	int i;
+	char **opts_copy = malloc(num_opts * sizeof(*opts));
+	for (i = 0; i < num_opts; i++) {
+		opts_copy[i] = option_dup_subs(opts[i]);
+		if (!opts_copy[i])
+			continue;
+		opts_copy[i] = fio_keyword_replace(opts_copy[i]);
+	}
+	return opts_copy;
+}
+
 int fio_options_parse(struct thread_data *td, char **opts, int num_opts)
 {
-	int i, ret;
+	int i, ret, unknown;
+	char **opts_copy;
 
 	sort_options(opts, options, num_opts);
+	opts_copy = dup_and_sub_options(opts, num_opts);
 
-	for (ret = 0, i = 0; i < num_opts; i++) {
-		opts[i] = fio_keyword_replace(opts[i]);
-		ret |= parse_option(opts[i], options, td);
+	for (ret = 0, i = 0, unknown = 0; i < num_opts; i++) {
+		struct fio_option *o;
+		int newret = parse_option(opts_copy[i], opts[i], options, &o,
+					  td);
+
+		if (opts_copy[i]) {
+			if (newret && !o) {
+				unknown++;
+				continue;
+			}
+			free(opts_copy[i]);
+			opts_copy[i] = NULL;
+		}
+
+		ret |= newret;
 	}
 
+	if (unknown) {
+		ret |= ioengine_load(td);
+		if (td->eo) {
+			sort_options(opts_copy, td->io_ops->options, num_opts);
+			opts = opts_copy;
+		}
+		for (i = 0; i < num_opts; i++) {
+			struct fio_option *o = NULL;
+			int newret = 1;
+			if (!opts_copy[i])
+				continue;
+
+			if (td->eo)
+				newret = parse_option(opts_copy[i], opts[i],
+						      td->io_ops->options, &o,
+						      td->eo);
+
+			ret |= newret;
+			if (!o)
+				log_err("Bad option <%s>\n", opts[i]);
+
+			free(opts_copy[i]);
+			opts_copy[i] = NULL;
+		}
+	}
+
+	free(opts_copy);
 	return ret;
 }
 
 int fio_cmd_option_parse(struct thread_data *td, const char *opt, char *val)
 {
 	return parse_cmd_option(opt, val, options, td);
+}
+
+int fio_cmd_ioengine_option_parse(struct thread_data *td, const char *opt,
+				char *val)
+{
+	return parse_cmd_option(opt, val, td->io_ops->options, td);
 }
 
 void fio_fill_default_options(struct thread_data *td)
@@ -2308,42 +2589,35 @@ int fio_show_option_help(const char *opt)
 	return show_cmd_help(options, opt);
 }
 
-static void __options_mem(struct thread_data *td, int alloc)
+void options_mem_dupe(void *data, struct fio_option *options)
 {
-	struct thread_options *o = &td->o;
-	struct fio_option *opt;
+	struct fio_option *o;
 	char **ptr;
-	int i;
 
-	for (i = 0, opt = &options[0]; opt->name; i++, opt = &options[i]) {
-		if (opt->type != FIO_OPT_STR_STORE)
+	for (o = &options[0]; o->name; o++) {
+		if (o->type != FIO_OPT_STR_STORE)
 			continue;
 
-		ptr = (void *) o + opt->off1;
-		if (*ptr) {
-			if (alloc)
-				*ptr = strdup(*ptr);
-			else {
-				free(*ptr);
-				*ptr = NULL;
-			}
-		}
+		ptr = td_var(data, o->off1);
+		if (*ptr)
+			*ptr = strdup(*ptr);
 	}
 }
 
 /*
  * dupe FIO_OPT_STR_STORE options
  */
-void options_mem_dupe(struct thread_data *td)
+void fio_options_mem_dupe(struct thread_data *td)
 {
-	__options_mem(td, 1);
-}
+	options_mem_dupe(&td->o, options);
 
-void options_mem_free(struct thread_data fio_unused *td)
-{
-#if 0
-	__options_mem(td, 0);
-#endif
+	if (td->eo && td->io_ops) {
+		void *oldeo = td->eo;
+
+		td->eo = malloc(td->io_ops->option_struct_size);
+		memcpy(td->eo, oldeo, td->io_ops->option_struct_size);
+		options_mem_dupe(td->eo, td->io_ops->options);
+	}
 }
 
 unsigned int fio_get_kb_base(void *data)
@@ -2424,5 +2698,15 @@ void del_opt_posval(const char *optname, const char *ival)
 
 		o->posval[i].ival = NULL;
 		o->posval[i].help = NULL;
+	}
+}
+
+void fio_options_free(struct thread_data *td)
+{
+	options_free(options, td);
+	if (td->eo && td->io_ops && td->io_ops->options) {
+		options_free(td->io_ops->options, td->eo);
+		free(td->eo);
+		td->eo = NULL;
 	}
 }

@@ -1,6 +1,8 @@
 #ifndef FIO_OS_APPLE_H
 #define FIO_OS_APPLE_H
 
+#define	FIO_OS	os_mac
+
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/disk.h>
@@ -9,6 +11,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <mach/mach_init.h>
+#include <machine/endian.h>
+#include <libkern/OSByteOrder.h>
 
 #include "../file.h"
 
@@ -23,10 +27,23 @@
 #define FIO_HAVE_POSIXAIO
 #define FIO_HAVE_CLOCK_MONOTONIC
 #define FIO_USE_GENERIC_RAND
+#define FIO_USE_GENERIC_INIT_RANDOM_STATE
 #define FIO_HAVE_GETTID
 #define FIO_HAVE_CHARDEV_SIZE
 
 #define OS_MAP_ANON		MAP_ANON
+
+#if defined(__LITTLE_ENDIAN__)
+#define FIO_LITTLE_ENDIAN
+#elif defined(__BIG_ENDIAN__)
+#define FIO_BIG_ENDIAN
+#else
+#error "Undefined byte order"
+#endif
+
+#define fio_swap16(x)	OSSwapInt16(x)
+#define fio_swap32(x)	OSSwapInt32(x)
+#define fio_swap64(x)	OSSwapInt64(x)
 
 /*
  * OSX has a pitifully small shared memory segment by default,
@@ -53,17 +70,6 @@ struct itimerspec {
 static struct sigevent fio_timers[MAX_TIMERS];
 static unsigned int num_timers = 0;
 
-static inline int timer_create(clockid_t clockid, struct sigevent *restrict evp,
-				 timer_t *restrict timerid)
-{
-	int current_timer = num_timers;
-	fio_timers[current_timer] = *evp;
-	num_timers++;
-	
-	*timerid = current_timer;
-	return 0;
-}
-
 static void sig_alrm(int signum)
 {
 	union sigval sv;
@@ -80,7 +86,8 @@ static void sig_alrm(int signum)
 }
 
 static inline int timer_settime(timer_t timerid, int flags,
-								const struct itimerspec *value, struct itimerspec *ovalue)
+				const struct itimerspec *value,
+				struct itimerspec *ovalue)
 {
 	struct sigaction sa;
 	struct itimerval tv;
@@ -127,13 +134,17 @@ static inline int fio_set_odirect(int fd)
 
 static inline int blockdev_size(struct fio_file *f, unsigned long long *bytes)
 {
-    uint64_t temp = 1;
-    if (ioctl(f->fd, DKIOCGETBLOCKCOUNT, bytes) == -1)
+	uint32_t block_size;
+	uint64_t block_count;
+
+	if (ioctl(f->fd, DKIOCGETBLOCKCOUNT, &block_count) == -1)
 		return errno;
-    if (ioctl(f->fd, DKIOCGETBLOCKSIZE, &temp) == -1)
+	if (ioctl(f->fd, DKIOCGETBLOCKSIZE, &block_size) == -1)
 		return errno;
-    (*bytes) *= temp;
-    return 0;
+
+	*bytes = block_size;
+	*bytes *= block_count;
+	return 0;
 }
 
 static inline int chardev_size(struct fio_file *f, unsigned long long *bytes)

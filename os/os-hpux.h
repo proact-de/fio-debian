@@ -1,6 +1,8 @@
 #ifndef FIO_OS_HPUX_H
 #define FIO_OS_HPUX_H
 
+#define	FIO_OS	os_hpux
+
 #include <errno.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -13,12 +15,14 @@
 #include <sys/pstat.h>
 #include <time.h>
 #include <aio.h>
+#include <arm.h>
 
 #include "../file.h"
 
 #define FIO_HAVE_POSIXAIO
 #define FIO_HAVE_ODIRECT
 #define FIO_USE_GENERIC_RAND
+#define FIO_USE_GENERIC_INIT_RANDOM_STATE
 #define FIO_HAVE_CLOCK_MONOTONIC
 #define FIO_HAVE_PSHARED_MUTEX
 #define FIO_HAVE_FADVISE
@@ -43,8 +47,19 @@
 #define MSG_WAITALL	0x40
 #endif
 
+#ifdef LITTLE_ENDIAN
+#define FIO_LITTLE_ENDIAN
+#else
+#define FIO_BIG_ENDIAN
+#endif
+
+#define FIO_USE_GENERIC_SWAP
+
 #define FIO_OS_HAVE_AIOCB_TYPEDEF
 typedef struct aiocb64 os_aiocb_t;
+
+#define FIO_OS_HAVE_SOCKLEN_T
+typedef int fio_socklen_t;
 
 static inline int blockdev_invalidate_cache(struct fio_file *f)
 {

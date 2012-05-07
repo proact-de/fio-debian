@@ -1,6 +1,8 @@
 #ifndef FIO_OS_LINUX_H
 #define FIO_OS_LINUX_H
 
+#define	FIO_OS	os_linux
+
 #include <sys/ioctl.h>
 #include <sys/uio.h>
 #include <sys/syscall.h>
@@ -12,6 +14,7 @@
 #include <linux/unistd.h>
 #include <linux/raw.h>
 #include <linux/major.h>
+#include <endian.h>
 
 #include "indirect.h"
 #include "binject.h"
@@ -31,7 +34,6 @@
 #define FIO_HAVE_RAWBIND
 #define FIO_HAVE_BLKTRACE
 #define FIO_HAVE_STRSEP
-#define FIO_HAVE_FALLOCATE
 #define FIO_HAVE_POSIXAIO_FSYNC
 #define FIO_HAVE_PSHARED_MUTEX
 #define FIO_HAVE_CL_SIZE
@@ -42,12 +44,16 @@
 #define FIO_HAVE_BINJECT
 #define FIO_HAVE_CLOCK_MONOTONIC
 #define FIO_HAVE_GETTID
+#define FIO_USE_GENERIC_INIT_RANDOM_STATE
 
 /*
  * Can only enable this for newer glibcs, or the header and defines are
  * missing
  */
 #if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 6
+#define FIO_HAVE_FALLOCATE
+#endif
+#if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 8
 #define FIO_HAVE_LINUX_FALLOCATE
 #endif
 
@@ -89,8 +95,8 @@ typedef struct drand48_data os_random_state_t;
 	sched_getaffinity((pid), (ptr))
 #endif
 
-#define fio_cpu_clear(mask, cpu)	CPU_CLR((cpu), (mask))
-#define fio_cpu_set(mask, cpu)		CPU_SET((cpu), (mask))
+#define fio_cpu_clear(mask, cpu)	(void) CPU_CLR((cpu), (mask))
+#define fio_cpu_set(mask, cpu)		(void) CPU_SET((cpu), (mask))
 
 static inline int fio_cpuset_init(os_cpu_mask_t *mask)
 {
@@ -285,6 +291,18 @@ static inline int fio_lookup_raw(dev_t dev, int *majdev, int *mindev)
 #ifdef MADV_REMOVE
 #define FIO_MADV_FREE	MADV_REMOVE
 #endif
+
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define FIO_LITTLE_ENDIAN
+#elif __BYTE_ORDER == __BIG_ENDIAN
+#define FIO_BIG_ENDIAN
+#else
+#error "Unknown endianness"
+#endif
+
+#define fio_swap16(x)	__bswap_16(x)
+#define fio_swap32(x)	__bswap_32(x)
+#define fio_swap64(x)	__bswap_64(x)
 
 #define CACHE_LINE_FILE	\
 	"/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size"

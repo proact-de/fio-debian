@@ -267,7 +267,7 @@ filename=str	Fio normally makes up a filename based on the job name,
 		files between threads in a job or several jobs, specify
 		a filename for each of them to override the default. If
 		the ioengine used is 'net', the filename is the host, port,
-		and protocol to use in the format of =host/port/protocol.
+		and protocol to use in the format of =host,port,protocol.
 		See ioengine=net for more. If the ioengine is file based, you
 		can specify a number of files by separating the names with a
 		':' colon. So if you wanted a job to open /dev/sda and /dev/sdb
@@ -310,7 +310,7 @@ rw=str		Type of io pattern. Accepted values are:
 			write		Sequential writes
 			randwrite	Random writes
 			randread	Random reads
-			rw		Sequential mixed reads and writes
+			rw,readwrite	Sequential mixed reads and writes
 			randrw		Random mixed reads and writes
 
 		For the mixed io types, the default is to split them 50/50.
@@ -320,7 +320,7 @@ rw=str		Type of io pattern. Accepted values are:
 		one by appending a ':<nr>' to the end of the string given.
 		For a random read, it would look like 'rw=randread:8' for
 		passing in an offset modifier with a value of 8. If the
-		postfix is used with a sequential IO pattern, then the value
+		suffix is used with a sequential IO pattern, then the value
 		specified will be added to the generated offset for each IO.
 		For instance, using rw=write:4k will skip 4k for every
 		write. It turns sequential IO into sequential IO with holes.
@@ -488,6 +488,22 @@ scramble_buffers=bool	If refill_buffers is too costly and the target is
 		block compression attempts, but it will stop naive dedupe of
 		blocks. Default: true.
 
+buffer_compress_percentage=int	If this is set, then fio will attempt to
+		provide IO buffer content (on WRITEs) that compress to
+		the specified level. Fio does this by providing a mix of
+		random data and zeroes. Note that this is per block size
+		unit, for file/disk wide compression level that matches
+		this setting, you'll also want to set refill_buffers.
+
+buffer_compress_chunk=int	See buffer_compress_percentage. This
+		setting allows fio to manage how big the ranges of random
+		data and zeroed data is. Without this set, fio will
+		provide buffer_compress_percentage of blocksize random
+		data, followed by the remaining zeroed. With this set
+		to some chunk size smaller than the block size, fio can
+		alternate random and zeroed data throughout the IO
+		buffer.
+
 nrfiles=int	Number of files to use for this job. Defaults to 1.
 
 openfiles=int	Number of files to keep open at the same time. Defaults to
@@ -524,16 +540,7 @@ ioengine=str	Defines how the job issues io to the file. The following
 			libaio	Linux native asynchronous io. Note that Linux
 				may only support queued behaviour with
 				non-buffered IO (set direct=1 or buffered=0).
-				This engine also has a sub-option,
-				userspace_reap. To set it, use
-				ioengine=libaio:userspace_reap. Normally, with
-				the libaio engine in use, fio will use the
-				io_getevents system call to reap newly returned
-				events. With this flag turned on, the AIO ring
-				will be read directly from user-space to reap
-				events. The reaping mode is only enabled when
-				polling for a minimum of 0 events (eg when
-				iodepth_batch_complete=0).
+				This engine defines engine specific options.
 
 			posixaio glibc posix asynchronous io.
 
@@ -562,16 +569,16 @@ ioengine=str	Defines how the job issues io to the file. The following
 				itself and for debugging/testing purposes.
 
 			net	Transfer over the network to given host:port.
-				'filename' must be set appropriately to
-				filename=host/port/protocol regardless of send
-				or receive, if the latter only the port
-				argument is used. 'host' may be an IP address
-				or hostname, port is the port number to be used,
-				and protocol may be 'udp' or 'tcp'. If no
-				protocol is given, TCP is used.
+				Depending on the protocol used, the hostname,
+				port, listen and filename options are used to
+				specify what sort of connection to make, while
+				the protocol option determines which protocol
+				will be used.
+				This engine defines engine specific options.
 
 			netsplice Like net, but uses splice/vmsplice to
 				map data and send/receive.
+				This engine defines engine specific options.
 
 			cpuio	Doesn't transfer any data, but burns CPU
 				cycles according to the cpuload= and
@@ -636,6 +643,7 @@ iodepth_low=int	The low water mark indicating when to start filling
 
 direct=bool	If value is true, use non-buffered io. This is usually
 		O_DIRECT. Note that ZFS on Solaris doesn't support direct io.
+		On Windows the synchronous ioengines don't support direct io.
 
 buffered=bool	If value is true, use buffered io. This is the opposite
 		of the 'direct' option. Defaults to true.
@@ -643,6 +651,13 @@ buffered=bool	If value is true, use buffered io. This is the opposite
 offset=int	Start io at the given offset in the file. The data before
 		the given offset will not be touched. This effectively
 		caps the file size at real_size - offset.
+
+offset_increment=int	If this is provided, then the real offset becomes
+		the offset + offset_increment * thread_number, where the
+		thread number is a counter that starts at 0 and is incremented
+		for each job. This option is useful if there are several jobs
+		which are intended to operate on a file in parallel in disjoint
+		segments, with even spacing between the starting points.
 
 fsync=int	If writing to a file, issue a sync of the dirty data
 		for every number of blocks given. For example, if you give
@@ -653,7 +668,7 @@ fsync=int	If writing to a file, issue a sync of the dirty data
 
 fdatasync=int	Like fsync= but uses fdatasync() to only sync data and not
 		metadata blocks.
-		In FreeBSD there is no fdatasync(), this falls back to
+		In FreeBSD and Windows there is no fdatasync(), this falls back to
 		using fsync()
 
 sync_file_range=str:val	Use sync_file_range() for every 'val' number of
@@ -864,6 +879,9 @@ exitall		When one job finishes, terminate the rest. The default is
 bwavgtime=int	Average the calculated bandwidth over the given time. Value
 		is specified in milliseconds.
 
+iopsavgtime=int	Average the calculated IOPS over the given time. Value
+		is specified in milliseconds.
+
 create_serialize=bool	If true, serialize the file creating for the jobs.
 			This may be handy to avoid interleaving of data
 			files, which may greatly depend on the filesystem
@@ -978,7 +996,7 @@ verify_fatal=bool	Normally fio will keep checking the entire contents
 verify_dump=bool	If set, dump the contents of both the original data
 		block and the data block we read off disk to files. This
 		allows later analysis to inspect just what kind of data
-		corruption occurred. On by default.
+		corruption occurred. Off by default.
 
 verify_async=int	Fio will normally verify IO inline from the submitting
 		thread. This option takes an integer describing how many
@@ -1089,8 +1107,8 @@ write_bw_log=str If given, write a bandwidth log of the jobs in this job
 		file. Can be used to store data of the bandwidth of the
 		jobs in their lifetime. The included fio_generate_plots
 		script uses gnuplot to turn these text files into nice
-		graphs. See write_log_log for behaviour of given
-		filename. For this option, the postfix is _bw.log.
+		graphs. See write_lat_log for behaviour of given
+		filename. For this option, the suffix is _bw.log.
 
 write_lat_log=str Same as write_bw_log, except that this option stores io
 		submission, completion, and total latencies instead. If no
@@ -1103,6 +1121,21 @@ write_lat_log=str Same as write_bw_log, except that this option stores io
 		The actual log names will be foo_slat.log, foo_slat.log,
 		and foo_lat.log. This helps fio_generate_plot fine the logs
 		automatically.
+
+write_bw_log=str If given, write an IOPS log of the jobs in this job
+		file. See write_bw_log.
+
+write_iops_log=str Same as write_bw_log, but writes IOPS. If no filename is
+		given with this option, the default filename of
+		"jobname_type.log" is used. Even if the filename is given,
+		fio will still append the type of log.
+
+log_avg_msec=int By default, fio will log an entry in the iops, latency,
+		or bw log for every IO that completes. When writing to the
+		disk log, that can quickly grow to a very large size. Setting
+		this option makes fio average the each log entry over the
+		specified period of time, reducing the resolution of the log.
+		Defaults to 0.
 
 lockmem=int	Pin down the specified amount of memory with mlock(2). Can
 		potentially be used instead of removing memory or booting
@@ -1173,7 +1206,7 @@ gtod_cpu=int	Sometimes it's cheaper to dedicate a single thread of
 		uses. Fio will manually clear it from the CPU mask of other
 		jobs.
 
-continue_on_error=bool	Normally fio will exit the job on the first observed
+continue_on_error=str	Normally fio will exit the job on the first observed
 		failure. If this option is set, fio will continue the job when
 		there is a 'non-fatal error' (EIO or EILSEQ) until the runtime
 		is exceeded or the I/O size specified is completed. If this
@@ -1181,6 +1214,24 @@ continue_on_error=bool	Normally fio will exit the job on the first observed
 		the total error count and the first error. The error field
 		given in the stats is the first error that was hit during the
 		run.
+
+		The allowed values are:
+
+			none	Exit on any IO or verify errors.
+
+			read	Continue on read errors, exit on all others.
+
+			write	Continue on write errors, exit on all others.
+
+			io	Continue on any IO error, exit on all others.
+
+			verify	Continue on verify errors, exit on all others.
+
+			all	Continue on all errors.
+
+			0		Backward-compatible alias for 'none'.
+
+			1		Backward-compatible alias for 'all'.
 
 cgroup=str	Add job to this control group. If it doesn't exist, it will
 		be created. The system must have a mounted cgroup blkio
@@ -1203,6 +1254,64 @@ uid=int		Instead of running as the invoking user, set the user ID to
 		this value before the thread/process does any work.
 
 gid=int		Set group ID, see uid.
+
+flow_id=int	The ID of the flow. If not specified, it defaults to being a
+		global flow. See flow.
+
+flow=int	Weight in token-based flow control. If this value is used, then
+		there is a 'flow counter' which is used to regulate the
+		proportion of activity between two or more jobs. fio attempts
+		to keep this flow counter near zero. The 'flow' parameter
+		stands for how much should be added or subtracted to the flow
+		counter on each iteration of the main I/O loop. That is, if
+		one job has flow=8 and another job has flow=-1, then there
+		will be a roughly 1:8 ratio in how much one runs vs the other.
+
+flow_watermark=int	The maximum value that the absolute value of the flow
+		counter is allowed to reach before the job must wait for a
+		lower value of the counter.
+
+flow_sleep=int	The period of time, in microseconds, to wait after the flow
+		watermark has been exceeded before retrying operations
+
+In addition, there are some parameters which are only valid when a specific
+ioengine is in use. These are used identically to normal parameters, with the
+caveat that when used on the command line, they must come after the ioengine
+that defines them is selected.
+
+[libaio] userspace_reap Normally, with the libaio engine in use, fio will use
+		the io_getevents system call to reap newly returned events.
+		With this flag turned on, the AIO ring will be read directly
+		from user-space to reap events. The reaping mode is only
+		enabled when polling for a minimum of 0 events (eg when
+		iodepth_batch_complete=0).
+
+[netsplice] hostname=str
+[net] hostname=str The host name or IP address to use for TCP or UDP based IO.
+		If the job is a TCP listener or UDP reader, the hostname is not
+		used and must be omitted.
+
+[netsplice] port=int
+[net] port=int	The TCP or UDP port to bind to or connect to.
+
+[netsplice] protocol=str
+[netsplice] proto=str
+[net] protocol=str
+[net] proto=str	The network protocol to use. Accepted values are:
+
+			tcp	Transmission control protocol
+			udp	Unreliable datagram protocol
+			unix	UNIX domain socket
+
+		When the protocol is TCP or UDP, the port must also be given,
+		as well as the hostname if the job is a TCP listener or UDP
+		reader. For unix sockets, the normal filename option should be
+		used and the port is invalid.
+
+[net] listen	For TCP network connections, tell fio to listen for incoming
+		connections rather than initiating an outgoing connection. The
+		hostname must be omitted if this option is used.
+
 
 6.0 Interpreting the output
 ---------------------------
@@ -1230,13 +1339,17 @@ I		Thread initialized, waiting.
 	F	Running, currently waiting for fsync()
 	V	Running, doing verification of written data.
 E		Thread exited, not reaped by main thread yet.
-_		Thread reaped.
+_		Thread reaped, or
+X		Thread reaped, exited with an error.
+K		Thread reaped, exited due to signal.
 
 The other values are fairly self explanatory - number of threads
 currently running and doing io, rate of io since last check (read speed
 listed first, then write speed), and the estimated completion percentage
 and time for the running group. It's impossible to estimate runtime of
-the following groups (if any).
+the following groups (if any). Note that the string is displayed in order,
+so it's possible to tell which of the jobs are currently doing what. The
+first character is the first job defined in the job file, and so forth.
 
 When fio is done (or interrupted by ctrl-c), it will show the data for
 each thread, group of threads, and disks in that order. For each data
@@ -1269,7 +1382,8 @@ runt=		The runtime of that thread
 		latency, since queue/complete is one operation there. This
 		value can be in milliseconds or microseconds, fio will choose
 		the most appropriate base and print that. In the example
-		above, milliseconds is the best scale.
+		above, milliseconds is the best scale. Note: in --minimal mode
+		latencies are always expressed in microseconds.
 	clat=	Completion latency. Same names as slat, this denotes the
 		time from submission to completion of the io pieces. For
 		sync io, clat will usually be equal (or very close) to 0,
@@ -1354,26 +1468,42 @@ signify that change.
 
 Split up, the format is as follows:
 
-	version, jobname, groupid, error
+	terse version, fio version, jobname, groupid, error
 	READ status:
-		Total IO (KB), bandwidth (KB/sec), runtime (msec)
-		Submission latency: min, max, mean, deviation
-		Completion latency: min, max, mean, deviation
-		Total latency: min, max, mean, deviation
-		Bw: min, max, aggregate percentage of total, mean, deviation
+		Total IO (KB), bandwidth (KB/sec), IOPS, runtime (msec)
+		Submission latency: min, max, mean, deviation (usec)
+		Completion latency: min, max, mean, deviation (usec)
+		Completion latency percentiles: 20 fields (see below)
+		Total latency: min, max, mean, deviation (usec)
+		Bw (KB/s): min, max, aggregate percentage of total, mean, deviation
 	WRITE status:
-		Total IO (KB), bandwidth (KB/sec), runtime (msec)
-		Submission latency: min, max, mean, deviation
-		Completion latency: min, max, mean, deviation
-		Total latency: min, max, mean, deviation
-		Bw: min, max, aggregate percentage of total, mean, deviation
+		Total IO (KB), bandwidth (KB/sec), IOPS, runtime (msec)
+		Submission latency: min, max, mean, deviation (usec)
+		Completion latency: min, max, mean, deviation (usec)
+		Completion latency percentiles: 20 fields (see below)
+		Total latency: min, max, mean, deviation (usec)
+		Bw (KB/s): min, max, aggregate percentage of total, mean, deviation
 	CPU usage: user, system, context switches, major faults, minor faults
 	IO depths: <=1, 2, 4, 8, 16, 32, >=64
 	IO latencies microseconds: <=2, 4, 10, 20, 50, 100, 250, 500, 750, 1000
 	IO latencies milliseconds: <=2, 4, 10, 20, 50, 100, 250, 500, 750, 1000, 2000, >=2000
+	Disk utilization: Disk name, Read ios, write ios,
+			  Read merges, write merges,
+			  Read ticks, write ticks,
+			  Time spent in queue, disk utilization percentage
 	Additional Info (dependant on continue_on_error, default off): total # errors, first error code 
 	
 	Additional Info (dependant on description being set): Text description
+
+Completion latency percentiles can be a grouping of up to 20 sets, so
+for the terse output fio writes all of them. Each field will look like this:
+
+	1.00%=6112
+
+which is the Xth percentile, and the usec latency associated with it.
+
+For disk utilization, all disks used by fio are shown. So for each disk
+there will be a disk utilization section.
 
 
 8.0 Trace file format

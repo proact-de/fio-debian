@@ -713,7 +713,8 @@ int setup_files(struct thread_data *td)
 	extend_size = total_size = 0;
 	need_extend = 0;
 	for_each_file(td, f, i) {
-		f->file_offset = td->o.start_offset;
+		f->file_offset = td->o.start_offset +
+			(td->thread_number - 1) * td->o.offset_increment;
 
 		if (!td->o.file_size_low) {
 			/*
@@ -849,11 +850,15 @@ int init_random_map(struct thread_data *td)
 				(unsigned long long) td->o.rw_min_bs;
 		num_maps = (blocks + BLOCKS_PER_MAP - 1) /
 				(unsigned long long) BLOCKS_PER_MAP;
-		f->file_map = smalloc(num_maps * sizeof(unsigned long));
-		if (f->file_map) {
-			f->num_maps = num_maps;
-			continue;
-		}
+		if (num_maps == (unsigned long) num_maps) {
+			f->file_map = smalloc(num_maps * sizeof(unsigned long));
+			if (f->file_map) {
+				f->num_maps = num_maps;
+				continue;
+			}
+		} else
+			f->file_map = NULL;
+
 		if (!td->o.softrandommap) {
 			log_err("fio: failed allocating random map. If running"
 				" a large number of jobs, try the 'norandommap'"
@@ -922,10 +927,13 @@ static void get_file_type(struct fio_file *f)
 	else
 		f->filetype = FIO_TYPE_FILE;
 
+	/* \\.\ is the device namespace in Windows, where every file is
+	 * a block device */
+	if (strncmp(f->file_name, "\\\\.\\", 4) == 0)
+		f->filetype = FIO_TYPE_BD;
+
 	if (!stat(f->file_name, &sb)) {
-		/* \\.\ is the device namespace in Windows, where every file is
-		 * a block device */
-		if (S_ISBLK(sb.st_mode) || strncmp(f->file_name, "\\\\.\\", 4) == 0)
+		if (S_ISBLK(sb.st_mode))
 			f->filetype = FIO_TYPE_BD;
 		else if (S_ISCHR(sb.st_mode))
 			f->filetype = FIO_TYPE_CHAR;
@@ -1134,7 +1142,7 @@ static int recurse_dir(struct thread_data *td, const char *dirname)
 		if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, ".."))
 			continue;
 
-		sprintf(full_path, "%s/%s", dirname, dir->d_name);
+		sprintf(full_path, "%s%s%s", dirname, FIO_OS_PATH_SEPARATOR, dir->d_name);
 
 		if (lstat(full_path, &sb) == -1) {
 			if (errno != ENOENT) {

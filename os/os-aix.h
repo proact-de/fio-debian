@@ -1,6 +1,8 @@
 #ifndef FIO_OS_AIX_H
 #define FIO_OS_AIX_H
 
+#define	FIO_OS	os_aix
+
 #include <errno.h>
 #include <unistd.h>
 #include <sys/devinfo.h>
@@ -11,6 +13,7 @@
 #define FIO_HAVE_POSIXAIO
 #define FIO_HAVE_ODIRECT
 #define FIO_USE_GENERIC_RAND
+#define FIO_USE_GENERIC_INIT_RANDOM_STATE
 #define FIO_HAVE_CLOCK_MONOTONIC
 
 /*
@@ -24,6 +27,17 @@
 
 #define OS_MAP_ANON		MAP_ANON
 #define OS_MSG_DONTWAIT		0
+
+#if BYTE_ORDER == BIG_ENDIAN
+#define FIO_BIG_ENDIAN
+#else
+#define FIO_LITTLE_ENDIAN
+#endif
+
+#define FIO_USE_GENERIC_SWAP
+
+#define FIO_OS_HAVE_SOCKLEN_T
+#define fio_socklen_t socklen_t
 
 static inline int blockdev_invalidate_cache(struct fio_file *f)
 {
