@@ -1,3 +1,22 @@
+fio (2.0.7-1~1.gbpf3a8f1) UNRELEASED; urgency=low
+
+  ** SNAPSHOT build @f3a8f11cdc01a9d1582f68f5c9d79bceb882c220 **
+
+  [ Martin Steigerwald ]
+  * Clarify changelog about SuperH support as suggested by tokkee.
+  * Added build dependencies for new engine rdma as suggested by tokkee.
+  * Actually also build new rdma engine.
+  * Its a make variable.
+  * On the same line it builds rdma. Dunno why the export variant did not.
+
+  [ Ritesh Raj Sarraf ]
+  * fix Vcs-Browser url
+
+  [ Martin Steigerwald ]
+  * Imported Upstream version 2.0.7
+
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 07 May 2012 14:03:18 +0200
+
 fio (1.59-1) unstable; urgency=low
 
   * Imported Upstream version 1.59.
