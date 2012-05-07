@@ -1,3 +1,7 @@
+Description: Escaped apostroph at beginning of line.
+  Escaped apostoph at beginning of line to fix lintian warning:
+  W: fio: manpage-has-errors-from-man usr/share/man/man1/fio.1.gz 1317: warning: macro `hostname'' not defined
+Author: Martin Steigerwald <ms@teamix.de>
 --- a/fio.1
 +++ b/fio.1
 @@ -1314,7 +1314,7 @@

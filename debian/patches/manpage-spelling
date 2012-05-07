@@ -1,3 +1,5 @@
+Description: Correct spelling error in manpage.
+Author: Martin Steigerwald <ms@teamix.de>
 --- a/fio.1
 +++ b/fio.1
 @@ -70,7 +70,7 @@

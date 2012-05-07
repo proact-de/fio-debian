@@ -1,3 +1,7 @@
+Description: Properly escaped minus signs.
+  Properly escaped minus signs to fix lintian warnings like:
+  I: fio: hyphen-used-as-minus-sign usr/share/man/man1/fio.1.gz:1320
+Author: Martin Steigerwald <ms@teamix.de>
 --- a/fio.1
 +++ b/fio.1
 @@ -1317,42 +1317,42 @@
