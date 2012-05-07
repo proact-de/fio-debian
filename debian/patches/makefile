@@ -5,19 +5,14 @@ Description: Change makefile to build in correct locations.
 Author: Martin Steigerwald <ms@teamix.de>
 
 ---
-Index: fio/Makefile
-===================================================================
---- fio.orig/Makefile	2011-06-27 12:38:32.827925996 +0200
-+++ fio/Makefile	2011-06-27 12:38:43.563935069 +0200
-@@ -75,9 +75,9 @@
+--- a/Makefile
++++ b/Makefile
+@@ -84,7 +84,7 @@
  endif
  
  INSTALL = install
 -prefix = /usr/local
 +prefix = /usr
  bindir = $(prefix)/bin
--mandir = $(prefix)/man
-+mandir = $(prefix)/share/man
  
- all: .depend $(PROGS) $(SCRIPTS)
- 
+ ifeq ($(UNAME), Darwin)
