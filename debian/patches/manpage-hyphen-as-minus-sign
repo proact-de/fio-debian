@@ -5,7 +5,7 @@ Author: Martin Steigerwald <ms@teamix.de>
 --- a/fio.1
 +++ b/fio.1
 @@ -1317,42 +1317,42 @@
- \'hostname' is either a hostname or IP address, and 'port' is the port to
+ socket. 'hostname' is either a hostname or IP address, and 'port' is the port to
  listen to (only valid for TCP/IP, not a local socket). Some examples:
  
 -1) fio --server
