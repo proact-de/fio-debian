@@ -7,7 +7,7 @@ Author: Martin Steigerwald <ms@teamix.de>
 ---
 --- a/Makefile
 +++ b/Makefile
-@@ -84,7 +84,7 @@
+@@ -84,13 +84,13 @@
  endif
  
  INSTALL = install
@@ -16,3 +16,10 @@ Author: Martin Steigerwald <ms@teamix.de>
  bindir = $(prefix)/bin
  
  ifeq ($(UNAME), Darwin)
+ mandir = /usr/share/man
+ else
+-mandir = $(prefix)/man
++mandir = $(prefix)/share/man
+ endif
+ 
+ all: .depend $(PROGS) $(SCRIPTS)
