@@ -6,9 +6,11 @@ aka http://brick.kernel.dk/snaps/fio-1.32.tar.gz
 
 Upstream Author:
 
-    Jens Axboe <axboe@kernel.dk>
+   Jens Axboe <axboe@kernel.dk>
 
-Copyright: © 2005-2011 by Jens Axboe
+Copyright:
+   Copyright (C) 2005 Jens Axboe <axboe@suse.de>
+   Copyright (C) 2006-2012 Jens Axboe <axboe@kernel.dk>
 
 License:
 
@@ -86,7 +88,7 @@ Copyrights notes:
     Copyright (C) 2003 Kyle McMartin <kyle@debian.org>
 
     engines/windowsaio.c:
-    Copyright (C) 2011 Bruce Cran <bruce@cran.org.uk>
+    Copyright (C) 2011-2012 Bruce Cran <bruce@cran.org.uk>
 
     lib/getopt_long.c:
     This file was imported from the klibc library from hpa
