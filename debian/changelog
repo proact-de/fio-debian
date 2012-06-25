@@ -23,8 +23,10 @@ fio (2.0.8-1) UNRELEASED; urgency=low
   * Imported Upstream version 2.0.8
     * Remove the three manpage patches from above again. Applied
       upstream.
+  * patches/makefile-hardening: Changed makefile to build fio with
+    hardening flags.
 
- -- Martin Steigerwald <ms@teamix.de>  Mon, 25 Jun 2012 15:32:59 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 25 Jun 2012 16:02:59 +0200
 
 fio (1.59-1) unstable; urgency=low
 
