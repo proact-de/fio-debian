@@ -1,7 +1,7 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: fio
 Upstream-Contact: Jens Axboe <axboe@kernel.dk>
-Source: http://brick.kernel.dk/snaps/fio-1.32.tar.gz
+Source: http://brick.kernel.dk/snaps/
 
 Files: *
 Copyright: 2005 Jens Axboe <axboe@suse.de>
