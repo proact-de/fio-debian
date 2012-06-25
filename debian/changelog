@@ -11,18 +11,10 @@ fio (2.0.8-1) UNRELEASED; urgency=low
   * debian/patches:
     * makefile: Updated for fio 2.0.7 makefile.
     * manpage: Removed, applied upstream.
-    * Three manpage patches:
-      * manpage-hostname: Changed line wrapping a bit to fix lintian
-        warning regarding apostroph at the beginning of a line.
-      * manpage-hyphen-as-minus-sign: Properly escaped minus signs to
-        fix lintian warnings like
-      * manpage-spelling: Corrected a spelling error.
   * debian/copyright:
     * Updated to 2012.
     * Converted to machine readable format 1.0.
   * Imported Upstream version 2.0.8
-    * Remove the three manpage patches from above again. Applied
-      upstream.
   * patches/makefile-hardening: Changed makefile to build fio with
     hardening flags.
 
