@@ -5,12 +5,8 @@ Author: Martin Steigerwald <ms@teamix.de>
 
 --- a/Makefile
 +++ b/Makefile
-@@ -1,9 +1,13 @@
+@@ -1,9 +1,9 @@
  CC	= gcc
-+
-+DPKG_EXPORT_BUILDFLAGS = 1
-+include /usr/share/dpkg/buildflags.mk
-+
  DEBUGFLAGS = -D_FORTIFY_SOURCE=2 -DFIO_INC_DEBUG
 -CPPFLAGS= -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 \
 +CPPFLAGS+= -D_GNU_SOURCE -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 \

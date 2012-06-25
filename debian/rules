@@ -9,6 +9,10 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
+# For hardening build flags
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+
 build: build-arch build-indep
 
 build-arch: build-stamp
@@ -20,7 +24,6 @@ build-indep:
 build-stamp:
 	dh_testdir
 
-	# Add here commands to compile the package.
 	# Build inclusive I/O engine rdma.
 	EXTFLAGS="-DFIO_HAVE_RDMA" EXTLIBS="-libverbs -lrdmacm" $(MAKE)
 
