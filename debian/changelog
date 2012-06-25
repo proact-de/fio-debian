@@ -15,8 +15,8 @@ fio (2.0.8-1) UNRELEASED; urgency=low
     * Updated to 2012.
     * Converted to machine readable format 1.0.
   * Imported Upstream version 2.0.8
-  * patches/makefile-hardening: Changed makefile to build fio with
-    hardening flags.
+  * patches/makefile-hardening and debian/rules: Changed to build
+    fio with hardening flags.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 25 Jun 2012 16:02:59 +0200
 
