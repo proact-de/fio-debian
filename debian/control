@@ -13,7 +13,7 @@ Package: fio
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Suggests: gnuplot
-Description: Flexible I/O Tester
+Description: flexible I/O tester
  fio is a tool that will spawn a number of threads or processes doing a
  particular type of I/O action as specified by the user. fio takes a
  number of global parameters, each inherited by the thread unless
