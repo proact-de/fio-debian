@@ -93,10 +93,22 @@ else
 mandir = $(prefix)/man
 endif
 
-all: .depend $(PROGS) $(SCRIPTS)
+all: .depend $(PROGS) $(SCRIPTS) FORCE
 
-.c.o: .depend
+.PHONY: all install clean
+.PHONY: FORCE cscope
+
+FIO-VERSION-FILE: FORCE
+	@$(SHELL) ./FIO-VERSION-GEN
+-include FIO-VERSION-FILE
+
+CFLAGS += -DFIO_VERSION='"$(FIO_VERSION)"'
+
+.c.o: .depend FORCE
 	$(QUIET_CC)$(CC) -o $@ -c $(CFLAGS) $(CPPFLAGS) $<
+
+init.o: FIO-VERSION-FILE
+	$(QUIET_CC)$(CC) -o init.o -c $(CFLAGS) $(CPPFLAGS) -c init.c
 
 t/stest: $(T_SMALLOC_OBJS)
 	$(QUIET_CC)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_SMALLOC_OBJS) $(LIBS) $(LDFLAGS)
@@ -112,13 +124,13 @@ fio: $(OBJS)
 
 $(PROGS): .depend
 
-clean:
-	-rm -f .depend $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) core.* core
+clean: FORCE
+	-rm -f .depend $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) core.* core FIO-VERSION-FILE
 
 cscope:
 	@cscope -b -R
 
-install: $(PROGS) $(SCRIPTS)
+install: $(PROGS) $(SCRIPTS) FORCE
 	$(INSTALL) -m 755 -d $(DESTDIR)$(bindir)
 	$(INSTALL) $(PROGS) $(SCRIPTS) $(DESTDIR)$(bindir)
 	$(INSTALL) -m 755 -d $(DESTDIR)$(mandir)/man1

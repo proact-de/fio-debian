@@ -22,8 +22,6 @@
 #include "crc/crc16.h"
 #include "lib/ieee754.h"
 
-#include "fio_version.h"
-
 int fio_net_port = 8765;
 
 int exit_backend = 0;
@@ -407,9 +405,7 @@ static int handle_probe_cmd(struct fio_net_cmd *cmd)
 #ifdef FIO_BIG_ENDIAN
 	probe.bigendian = 1;
 #endif
-	probe.fio_major = FIO_MAJOR;
-	probe.fio_minor = FIO_MINOR;
-	probe.fio_patch = FIO_PATCH;
+	strncpy((char *) probe.fio_version, fio_version_string, sizeof(probe.fio_version));
 
 	probe.os	= FIO_OS;
 	probe.arch	= FIO_ARCH;
@@ -455,6 +451,7 @@ static int handle_send_eta_cmd(struct fio_net_cmd *cmd)
 
 	je->elapsed_sec		= cpu_to_le64(je->elapsed_sec);
 	je->eta_sec		= cpu_to_le64(je->eta_sec);
+	je->is_pow2		= cpu_to_le32(je->is_pow2);
 
 	fio_net_send_cmd(server_fd, FIO_NET_CMD_ETA, je, size, cmd->tag);
 	free(je);
