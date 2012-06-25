@@ -22,4 +22,4 @@ Author: Martin Steigerwald <ms@teamix.de>
 +mandir = $(prefix)/share/man
  endif
  
- all: .depend $(PROGS) $(SCRIPTS)
+ all: .depend $(PROGS) $(SCRIPTS) FORCE
