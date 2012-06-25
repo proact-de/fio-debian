@@ -180,6 +180,7 @@ struct jobs_eta {
 	uint32_t iops[2];
 	uint64_t elapsed_sec;
 	uint64_t eta_sec;
+	uint32_t is_pow2;
 
 	/*
 	 * Network 'copy' of run_str[]
@@ -193,6 +194,7 @@ extern void show_group_stats(struct group_run_stats *rs);
 extern int calc_thread_status(struct jobs_eta *je, int force);
 extern void display_thread_status(struct jobs_eta *je);
 extern void show_run_stats(void);
+extern void show_running_run_stats(void);
 extern void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src, int nr);
 extern void sum_group_stats(struct group_run_stats *dst, struct group_run_stats *src);
 extern void init_thread_stat(struct thread_stat *ts);

@@ -344,6 +344,11 @@ static void sig_int(int sig)
 	fio_clients_terminate();
 }
 
+static void sig_show_status(int sig)
+{
+	show_running_run_stats();
+}
+
 static void client_signal_handler(void)
 {
 	struct sigaction act;
@@ -357,6 +362,11 @@ static void client_signal_handler(void)
 	act.sa_handler = sig_int;
 	act.sa_flags = SA_RESTART;
 	sigaction(SIGTERM, &act, NULL);
+
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = sig_show_status;
+	act.sa_flags = SA_RESTART;
+	sigaction(SIGUSR1, &act, NULL);
 }
 
 static void probe_client(struct fio_client *client)
@@ -715,6 +725,7 @@ static void convert_jobs_eta(struct jobs_eta *je)
 
 	je->elapsed_sec		= le64_to_cpu(je->elapsed_sec);
 	je->eta_sec		= le64_to_cpu(je->eta_sec);
+	je->is_pow2		= le32_to_cpu(je->is_pow2);
 }
 
 static void sum_jobs_eta(struct jobs_eta *dst, struct jobs_eta *je)
@@ -806,9 +817,9 @@ static void handle_probe(struct fio_client *client, struct fio_net_cmd *cmd)
 
 	sprintf(bit, "%d-bit", probe->bpp * 8);
 
-	log_info("hostname=%s, be=%u, %s, os=%s, arch=%s, fio=%u.%u.%u\n",
+	log_info("hostname=%s, be=%u, %s, os=%s, arch=%s, fio=%s\n",
 		probe->hostname, probe->bigendian, bit, os, arch,
-		probe->fio_major, probe->fio_minor, probe->fio_patch);
+		probe->fio_version);
 
 	if (!client->name)
 		client->name = strdup((char *) probe->hostname);
