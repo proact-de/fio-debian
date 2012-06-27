@@ -1,7 +1,8 @@
 fio (2.0.8-2) unstable; urgency=low
 
   * debian/patches/ftbfs-fix-for-mips-architecture: 
-    Fixed build failure on mips and mipsel architectures.
+    Fixed build failure on mips and mipsel architectures. Sven Hoexter
+    suggested the fix and Jens Axboe confirmed it. Thanks.
 
  -- Martin Steigerwald <ms@teamix.de>  Wed, 27 Jun 2012 09:25:49 +0200
 
