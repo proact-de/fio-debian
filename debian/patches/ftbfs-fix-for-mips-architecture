@@ -1,0 +1,10 @@
+--- a/arch/arch.h
++++ b/arch/arch.h
+@@ -19,6 +19,7 @@
+ 	arch_arm,
+ 	arch_sh,
+ 	arch_hppa,
++	arch_mips,
+ 
+ 	arch_generic,
+ 
