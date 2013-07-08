@@ -39,11 +39,6 @@ Starting with Ubuntu 10.04 LTS (aka "Lucid Lynx"), fio packages are part
 of the Ubuntu "universe" repository.
 http://packages.ubuntu.com/search?keywords=fio
 
-SUSE:
-Pascal Bleser <guru@unixtech.be> has fio RPMs in his repository for SUSE
-variants, you can find them here:
-http://linux01.gwdg.de/~pbleser/rpm-navigation.php?cat=System/fio
-
 Red Hat, CentOS & Co:
 Dag Wieërs has RPMs for Red Hat related distros, find them here:
 http://dag.wieers.com/rpm/packages/fio/
@@ -59,7 +54,7 @@ tool (http://www.opencsw.org/get-it/pkgutil/) and then install fio via
 
 Windows:
 Bruce Cran <bruce@cran.org.uk> has fio packages for Windows at
-http://www.bluestop.org/fio .
+http://www.bluestop.org/fio/ .
 
 
 Mailing list
@@ -86,33 +81,53 @@ http://maillist.kernel.dk/fio-devel/
 Building
 --------
 
-Just type 'make' and 'make install'.
+Just type 'configure', 'make' and 'make install'.
 
 Note that GNU make is required. On BSD it's available from devel/gmake;
 on Solaris it's in the SUNWgmake package. On platforms where GNU make
 isn't the default, type 'gmake' instead of 'make'.
 
-If your compile fails with an error like this:
+Configure will print the enabled options. Note that on Linux based
+platforms, you'll need to have the libaio development packages
+installed to use the libaio engine. Depending on distro, it is
+usually called libaio-devel or libaio-dev.
 
-    CC gettime.o
-In file included from fio.h:23,
-                 from gettime.c:8:
-os/os.h:15:20: error: libaio.h: No such file or directory
-In file included from gettime.c:8:
-fio.h:119: error: field 'iocb' has incomplete type
-make: *** [gettime.o] Error 1
+For gfio, you need gtk 2.18 or newer and associated glib threads
+and cairo. gfio isn't built automatically, it needs to be enabled
+with a --enable-gfio option to configure.
 
-Check that you have the libaio development package installed. On RPM
-based distros, it's typically called libaio-devel.
+To build FIO with a cross-compiler:
+ $ make clean
+ $ make CROSS_COMPILE=/path/to/toolchain/prefix
+Configure will attempt to determine the target platform automatically.
 
 
 Windows
 -------
 
-On Windows MinGW (http://www.mingw.org/) is required in order to
-build fio. To create an MSI installer package install WiX 3.6 from
-http://wix.sourceforge.net/releases/ and run dobuild.cmd from the
+On Windows Cygwin (http://www.cygwin.com/) is required in order to
+build fio. To create an MSI installer package install WiX 3.7 from
+http://wixtoolset.org and run dobuild.cmd from the
 os/windows directory.
+
+How to compile FIO on 64-bit Windows:
+
+ 1. Install Cygwin (http://www.cygwin.com/setup.exe). Install 'make' and all
+    packages starting with 'mingw64-i686' and 'mingw64-x86_64'.
+ 2. Download ftp://sourceware.org/pub/pthreads-win32/prebuilt-dll-2-9-1-release/dll/x64/pthreadGC2.dll
+    and copy to the fio source directory.
+ 3. Open the Cygwin Terminal.
+ 4. Go to the fio directory (source files).
+ 5. Run 'make clean'.
+ 6. Run 'make'.
+
+To build fio on 32-bit Windows, download x86/pthreadGC2.dll instead and do
+'./configure --build-32bit-win=yes' before 'make'.
+
+It's recommended that once built or installed, fio be run in a Command Prompt
+or other 'native' console such as console2, since there are known to be display
+and signal issues when running it under a Cygwin shell
+(see http://code.google.com/p/mintty/issues/detail?id=56 for details).
 
 
 Command line
@@ -120,14 +135,17 @@ Command line
 
 $ fio
 	--debug			Enable some debugging options (see below)
+	--parse-only		Parse options only, don't start any IO
 	--output		Write output to file
-	--timeout		Runtime in seconds
+	--runtime		Runtime in seconds
 	--latency-log		Generate per-job latency logs
 	--bandwidth-log		Generate per-job bandwidth logs
 	--minimal		Minimal (terse) output
+	--output-format=type	Output format (terse,json,normal)
+	--terse-version=type	Terse version output format (default 3, or 2 or 4).
 	--version		Print version info and exit
-	--terse-version=type	Terse version output format (default 3, or 2).
 	--help			Print this page
+	--cpuclock-test		Perform test/validation of CPU clock
 	--cmdhelp=cmd		Print command help, "all" for all of them
 	--enghelp=engine	Print ioengine help, or list available ioengines
 	--enghelp=engine,cmd	Print help for an ioengine cmd
@@ -136,13 +154,18 @@ $ fio
 				writes
 	--eta=when		When ETA estimate should be printed
 				May be "always", "never" or "auto"
+	--eta-newline=time	Force a new line for every 'time' period passed
+	--status-interval=t	Force full status dump every 't' period passed
 	--section=name		Only run specified section in job file.
 				Multiple sections can be specified.
-	--alloc-size=kb	Set smalloc pool to this size in kb (def 1024)
-	--warnings-fatal Fio parser warnings are fatal
+	--alloc-size=kb		Set smalloc pool to this size in kb (def 1024)
+	--warnings-fatal	Fio parser warnings are fatal
 	--max-jobs		Maximum number of threads/processes to support
 	--server=args		Start backend server. See Client/Server section.
 	--client=host		Connect to specified backend.
+	--idle-prof=option	Report cpu idleness on a system or percpu basis
+				(option=system,percpu) or run unit work
+				calibration only (option=calibrate).
 
 
 Any parameters following the options will be assumed to be job files,
@@ -161,11 +184,11 @@ options in fio. Currently the options are:
 
 	process		Dump info related to processes
 	file		Dump info related to file actions
-	io			Dump info related to IO queuing
-	mem			Dump info related to memory allocations
+	io		Dump info related to IO queuing
+	mem		Dump info related to memory allocations
 	blktrace	Dump info related to blktrace setup
 	verify		Dump info related to IO verification
-	all			Enable all debug options
+	all		Enable all debug options
 	random		Dump info related to random offset generation
 	parse		Dump info related to option matching and parsing
 	diskutil	Dump info related to disk utilization updates
@@ -203,109 +226,9 @@ complex setups with the command line, but generally it's a lot easier to
 just write a simple job file to describe the workload. The job file format
 is in the ini style format, as that is easy to read and write for the user.
 
-The job file parameters are:
-
-	name=x		Use 'x' as the identifier for this job.
-	description=x	'x' is a text description of the job.
-	directory=x	Use 'x' as the top level directory for storing files
-	filename=x	Force the use of 'x' as the filename for all files
-			in this thread. If not given, fio will make up
-			a suitable filename based on the thread and file
-			number.
-	rw=x		'x' may be: read, randread, write, randwrite,
-			rw (read-write mix), randrw (read-write random mix)
-	rwmixcycle=x	Base cycle for switching between read and write
-			in msecs.
-	rwmixread=x	'x' percentage of rw mix ios will be reads. If
-			rwmixwrite is also given, the last of the two will
-			 be used if they don't add up to 100%.
-	rwmixwrite=x	'x' percentage of rw mix ios will be writes. See
-			rwmixread.
-	rand_repeatable=x  The sequence of random io blocks can be repeatable
-			across runs, if 'x' is 1.
-	size=x		Set file size to x bytes (x string can include k/m/g)
-	ioengine=x	'x' may be: aio/libaio/linuxaio for Linux aio,
-			posixaio for POSIX aio, solarisaio for Solaris
-			native async IO, windowsaio for Windows native async IO,
-			sync for regular read/write io,
-			psync for regular pread/pwrite io, vsync for regular
-			readv/writev (with queuing emulation) mmap for mmap'ed
-			io, syslet-rw for syslet driven read/write, splice for
-			using splice/vmsplice, sg for direct SG_IO io, net
-			for network io, or cpuio for a cycler burner load. sg
-			only works on Linux on SCSI (or SCSI-like devices, such
-			as usb-storage or sata/libata driven) devices. Fio also
-			has a null io engine, which is mainly used for testing
-			fio itself.
-
-	iodepth=x	For async io, allow 'x' ios in flight
-	overwrite=x	If 'x', layout a write file first.
-	nrfiles=x	Spread io load over 'x' number of files per job,
-			if possible.
-	prio=x		Run io at prio X, 0-7 is the kernel allowed range
-	prioclass=x	Run io at prio class X
-	bs=x		Use 'x' for thread blocksize. May include k/m postfix.
-	bsrange=x-y	Mix thread block sizes randomly between x and y. May
-			also include k/m postfix.
-	direct=x	1 for direct IO, 0 for buffered IO
-	thinktime=x	"Think" x usec after each io
-	rate=x		Throttle rate to x KB/sec
-	ratemin=x	Quit if rate of x KB/sec can't be met
-	ratecycle=x	ratemin averaged over x msecs
-	cpumask=x	Only allow job to run on CPUs defined by mask.
-	cpus_allowed=x	Like 'cpumask', but allow text setting of CPU affinity.
-	fsync=x		If writing with buffered IO, fsync after every
-			'x' blocks have been written.
-	end_fsync=x	If 'x', run fsync() after end-of-job.
-	startdelay=x	Start this thread x seconds after startup
-	runtime=x	Terminate x seconds after startup. Can include a
-			normal time suffix if not given in seconds, such as
-			'm' for minutes, 'h' for hours, and 'd' for days.
-	offset=x	Start io at offset x (x string can include k/m/g)
-	invalidate=x	Invalidate page cache for file prior to doing io
-	sync=x		Use sync writes if x and writing buffered IO.
-	mem=x		If x == malloc, use malloc for buffers. If x == shm,
-			use shared memory for buffers. If x == mmap, use
-			anonymous mmap.
-	exitall		When one thread quits, terminate the others
-	bwavgtime=x	Average bandwidth stats over an x msec window.
-	create_serialize=x	If 'x', serialize file creation.
-	create_fsync=x	If 'x', run fsync() after file creation.
-	unlink		If set, unlink files when done.
-	loops=x		Run the job 'x' number of times.
-	verify=x	If 'x' == md5, use md5 for verifies. If 'x' == crc32,
-			use crc32 for verifies. md5 is 'safer', but crc32 is
-			a lot faster. Only makes sense for writing to a file.
-			For other types of checksumming, see HOWTO.
-	stonewall	Wait for preceeding jobs to end before running.
-	numjobs=x	Create 'x' similar entries for this job
-	thread		Use pthreads instead of forked jobs
-	zonesize=x
-	zoneskip=y	Zone options must be paired. If given, the job
-			will skip y bytes for every x read/written. This
-			can be used to gauge hard drive speed over the entire
-			platter, without reading everything. Both x/y can
-			include k/m/g suffix.
-	read_iolog=x	Open and read io pattern from file 'x'. The file format
-                        is described in the HOWTO.
-	write_iolog=x	Write an iolog to file 'x' in the same format as iolog.
-			The iolog options are exclusive, if both given the
-			read iolog will be performed.  Specify a separate file
-			for each job, otherwise the iologs will be interspersed
-			and the file may be corrupt.
-	write_bw_log	Write a bandwidth log.
-	write_lat_log	Write a latency log.
-	lockmem=x	Lock down x amount of memory on the machine, to
-			simulate a machine with less memory available. x can
-			include k/m/g suffix.
-	nice=x		Run job at given nice value.
-	exec_prerun=x	Run 'x' before job io is begun.
-	exec_postrun=x	Run 'x' after job io has finished.
-	ioscheduler=x	Use ioscheduler 'x' for this job.
-	cpuload=x	For a CPU io thread, percentage of CPU time to attempt
-			to burn.
-	cpuchunks=x	Split burn cycles into pieces of x usecs.
-
+The HOWTO or man page has a full list of all options, along with
+descriptions, etc. The --cmdhelp option also lists all options. If
+used with an option argument, it will detail that particular option.
 
 
 Client/server
@@ -362,7 +285,7 @@ are sent to the server. The 'server' string follows the same format as it
 does on the server side, to allow IP/hostname/socket and port strings.
 You can connect to multiple clients as well, to do that you could run:
 
-fio --client=server2 --client=server2 <job file(s)>
+fio --client=server2 <job file(s)> --client=server2 <job file(s)>
 
 
 Platforms

@@ -12,8 +12,10 @@
 #include "smalloc.h"
 #include "filehash.h"
 #include "os/os.h"
+#include "hash.h"
+#include "lib/axmap.h"
 
-#ifdef FIO_HAVE_LINUX_FALLOCATE
+#ifdef CONFIG_LINUX_FALLOCATE
 #include <linux/falloc.h>
 #endif
 
@@ -70,14 +72,15 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 		return 1;
 	}
 
-#ifdef FIO_HAVE_FALLOCATE
+#ifdef CONFIG_POSIX_FALLOCATE
 	if (!td->o.fill_device) {
 		switch (td->o.fallocate_mode) {
 		case FIO_FALLOCATE_NONE:
 			break;
 		case FIO_FALLOCATE_POSIX:
 			dprint(FD_FILE, "posix_fallocate file %s size %llu\n",
-				 f->file_name, f->real_file_size);
+				 f->file_name,
+				 (unsigned long long) f->real_file_size);
 
 			r = posix_fallocate(f->fd, 0, f->real_file_size);
 			if (r > 0) {
@@ -85,27 +88,27 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 						strerror(r));
 			}
 			break;
-#ifdef FIO_HAVE_LINUX_FALLOCATE
+#ifdef CONFIG_LINUX_FALLOCATE
 		case FIO_FALLOCATE_KEEP_SIZE:
 			dprint(FD_FILE,
 				"fallocate(FALLOC_FL_KEEP_SIZE) "
-				"file %s size %llu\n",
-				f->file_name, f->real_file_size);
+				"file %s size %llu\n", f->file_name,
+				(unsigned long long) f->real_file_size);
 
 			r = fallocate(f->fd, FALLOC_FL_KEEP_SIZE, 0,
 					f->real_file_size);
-			if (r != 0) {
+			if (r != 0)
 				td_verror(td, errno, "fallocate");
-			}
+
 			break;
-#endif /* FIO_HAVE_LINUX_FALLOCATE */
+#endif /* CONFIG_LINUX_FALLOCATE */
 		default:
 			log_err("fio: unknown fallocate mode: %d\n",
 				td->o.fallocate_mode);
 			assert(0);
 		}
 	}
-#endif /* FIO_HAVE_FALLOCATE */
+#endif /* CONFIG_POSIX_FALLOCATE */
 
 	if (!new_layout)
 		goto done;
@@ -116,7 +119,7 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 	 */
 	if (!td->o.fill_device) {
 		dprint(FD_FILE, "truncate file %s, size %llu\n", f->file_name,
-							f->real_file_size);
+					(unsigned long long) f->real_file_size);
 		if (ftruncate(f->fd, f->real_file_size) == -1) {
 			td_verror(td, errno, "ftruncate");
 			goto err;
@@ -124,13 +127,14 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 	}
 
 	b = malloc(td->o.max_bs[DDIR_WRITE]);
-	memset(b, 0, td->o.max_bs[DDIR_WRITE]);
 
 	left = f->real_file_size;
 	while (left && !td->terminate) {
 		bs = td->o.max_bs[DDIR_WRITE];
 		if (bs > left)
 			bs = left;
+
+		fill_io_buffer(td, b, bs, bs);
 
 		r = write(f->fd, b, bs);
 
@@ -352,7 +356,8 @@ static int get_file_size(struct thread_data *td, struct fio_file *f)
 
 	if (f->file_offset > f->real_file_size) {
 		log_err("%s: offset extends end (%llu > %llu)\n", td->o.name,
-					f->file_offset, f->real_file_size);
+					(unsigned long long) f->file_offset,
+					(unsigned long long) f->real_file_size);
 		return 1;
 	}
 
@@ -432,10 +437,16 @@ int generic_close_file(struct thread_data fio_unused *td, struct fio_file *f)
 		ret = errno;
 
 	f->fd = -1;
+
+	if (f->shadow_fd != -1) {
+		close(f->shadow_fd);
+		f->shadow_fd = -1;
+	}
+
 	return ret;
 }
 
-static int file_lookup_open(struct fio_file *f, int flags)
+int file_lookup_open(struct fio_file *f, int flags)
 {
 	struct fio_file *__f;
 	int from_hash;
@@ -447,9 +458,6 @@ static int file_lookup_open(struct fio_file *f, int flags)
 		 * racy, need the __f->lock locked
 		 */
 		f->lock = __f->lock;
-		f->lock_owner = __f->lock_owner;
-		f->lock_batch = __f->lock_batch;
-		f->lock_ddir = __f->lock_ddir;
 		from_hash = 1;
 	} else {
 		dprint(FD_FILE, "file not found in hash %s\n", f->file_name);
@@ -460,6 +468,24 @@ static int file_lookup_open(struct fio_file *f, int flags)
 	return from_hash;
 }
 
+static int file_close_shadow_fds(struct thread_data *td)
+{
+	struct fio_file *f;
+	int num_closed = 0;
+	unsigned int i;
+
+	for_each_file(td, f, i) {
+		if (f->shadow_fd == -1)
+			continue;
+
+		close(f->shadow_fd);
+		f->shadow_fd = -1;
+		num_closed++;
+	}
+
+	return num_closed;
+}
+
 int generic_open_file(struct thread_data *td, struct fio_file *f)
 {
 	int is_std = 0;
@@ -467,6 +493,11 @@ int generic_open_file(struct thread_data *td, struct fio_file *f)
 	int from_hash = 0;
 
 	dprint(FD_FILE, "fd open %s\n", f->file_name);
+
+	if (td_trim(td) && f->filetype != FIO_TYPE_BD) {
+		log_err("fio: trim only applies to block device\n");
+		return 1;
+	}
 
 	if (!strcmp(f->file_name, "-")) {
 		if (td_rw(td)) {
@@ -482,14 +513,17 @@ int generic_open_file(struct thread_data *td, struct fio_file *f)
 			f_out = stderr;
 	}
 
+	if (td_trim(td))
+		goto skip_flags;
 	if (td->o.odirect)
 		flags |= OS_O_DIRECT;
 	if (td->o.sync_io)
 		flags |= O_SYNC;
-	if (f->filetype != FIO_TYPE_FILE)
-		flags |= FIO_O_NOATIME;
 	if (td->o.create_on_open)
 		flags |= O_CREAT;
+skip_flags:
+	if (f->filetype != FIO_TYPE_FILE)
+		flags |= FIO_O_NOATIME;
 
 open_again:
 	if (td_write(td)) {
@@ -503,7 +537,7 @@ open_again:
 			f->fd = dup(STDOUT_FILENO);
 		else
 			from_hash = file_lookup_open(f, flags);
-	} else {
+	} else if (td_read(td)) {
 		if (f->filetype == FIO_TYPE_CHAR && !read_only)
 			flags |= O_RDWR;
 		else
@@ -513,6 +547,9 @@ open_again:
 			f->fd = dup(STDIN_FILENO);
 		else
 			from_hash = file_lookup_open(f, flags);
+	} else { //td trim
+		flags |= O_RDWR;
+		from_hash = file_lookup_open(f, flags);
 	}
 
 	if (f->fd == -1) {
@@ -523,8 +560,15 @@ open_again:
 			flags &= ~FIO_O_NOATIME;
 			goto open_again;
 		}
+		if (__e == EMFILE && file_close_shadow_fds(td))
+			goto open_again;
 
-		snprintf(buf, sizeof(buf) - 1, "open(%s)", f->file_name);
+		snprintf(buf, sizeof(buf), "open(%s)", f->file_name);
+
+		if (__e == EINVAL && (flags & OS_O_DIRECT)) {
+			log_err("fio: looks like your file system does not " \
+				"support direct=1/buffered=0\n");
+		}
 
 		td_verror(td, __e, buf);
 	}
@@ -534,9 +578,22 @@ open_again:
 			int fio_unused ret;
 
 			/*
-			 * OK to ignore, we haven't done anything with it
+			 * Stash away descriptor for later close. This is to
+			 * work-around a "feature" on Linux, where a close of
+			 * an fd that has been opened for write will trigger
+			 * udev to call blkid to check partitions, fs id, etc.
+			 * That polutes the device cache, which can slow down
+			 * unbuffered accesses.
 			 */
-			ret = generic_close_file(td, f);
+			if (f->shadow_fd == -1)
+				f->shadow_fd = f->fd;
+			else {
+				/*
+			 	 * OK to ignore, we haven't done anything
+				 * with it
+				 */
+				ret = generic_close_file(td, f);
+			}
 			goto open_again;
 		}
 	}
@@ -652,19 +709,30 @@ static unsigned long long get_fs_free_counts(struct thread_data *td)
 	return ret;
 }
 
+uint64_t get_start_offset(struct thread_data *td)
+{
+	return td->o.start_offset +
+		(td->thread_number - 1) * td->o.offset_increment;
+}
+
 /*
  * Open the files and setup files sizes, creating files if necessary.
  */
 int setup_files(struct thread_data *td)
 {
 	unsigned long long total_size, extend_size;
+	struct thread_options *o = &td->o;
 	struct fio_file *f;
 	unsigned int i;
 	int err = 0, need_extend;
+	int old_state;
 
 	dprint(FD_FILE, "setup files\n");
 
-	if (td->o.read_iolog_file)
+	old_state = td->runstate;
+	td_set_runstate(td, TD_SETTING_UP);
+
+	if (o->read_iolog_file)
 		goto done;
 
 	/*
@@ -678,7 +746,7 @@ int setup_files(struct thread_data *td)
 		err = get_file_sizes(td);
 
 	if (err)
-		return err;
+		goto err_out;
 
 	/*
 	 * check sizes. if the files/devices do not exist and the size
@@ -692,17 +760,18 @@ int setup_files(struct thread_data *td)
 			total_size += f->real_file_size;
 	}
 
-	if (td->o.fill_device)
+	if (o->fill_device)
 		td->fill_device_size = get_fs_free_counts(td);
 
 	/*
 	 * device/file sizes are zero and no size given, punt
 	 */
-	if ((!total_size || total_size == -1ULL) && !td->o.size &&
-	    !(td->io_ops->flags & FIO_NOIO) && !td->o.fill_device) {
-		log_err("%s: you need to specify size=\n", td->o.name);
+	if ((!total_size || total_size == -1ULL) && !o->size &&
+	    !(td->io_ops->flags & FIO_NOIO) && !o->fill_device &&
+	    !(o->nr_files && (o->file_size_low || o->file_size_high))) {
+		log_err("%s: you need to specify size=\n", o->name);
 		td_verror(td, EINVAL, "total_file_size");
-		return 1;
+		goto err_out;
 	}
 
 	/*
@@ -713,30 +782,28 @@ int setup_files(struct thread_data *td)
 	extend_size = total_size = 0;
 	need_extend = 0;
 	for_each_file(td, f, i) {
-		f->file_offset = td->o.start_offset +
-			(td->thread_number - 1) * td->o.offset_increment;
+		f->file_offset = get_start_offset(td);
 
-		if (!td->o.file_size_low) {
+		if (!o->file_size_low) {
 			/*
 			 * no file size range given, file size is equal to
 			 * total size divided by number of files. if that is
 			 * zero, set it to the real file size.
 			 */
-			f->io_size = td->o.size / td->o.nr_files;
+			f->io_size = o->size / o->nr_files;
 			if (!f->io_size)
 				f->io_size = f->real_file_size - f->file_offset;
-		} else if (f->real_file_size < td->o.file_size_low ||
-			   f->real_file_size > td->o.file_size_high) {
-			if (f->file_offset > td->o.file_size_low)
+		} else if (f->real_file_size < o->file_size_low ||
+			   f->real_file_size > o->file_size_high) {
+			if (f->file_offset > o->file_size_low)
 				goto err_offset;
 			/*
 			 * file size given. if it's fixed, use that. if it's a
 			 * range, generate a random size in-between.
 			 */
-			if (td->o.file_size_low == td->o.file_size_high) {
-				f->io_size = td->o.file_size_low
-						- f->file_offset;
-			} else {
+			if (o->file_size_low == o->file_size_high)
+				f->io_size = o->file_size_low - f->file_offset;
+			else {
 				f->io_size = get_rand_file_size(td)
 						- f->file_offset;
 			}
@@ -745,13 +812,16 @@ int setup_files(struct thread_data *td)
 
 		if (f->io_size == -1ULL)
 			total_size = -1ULL;
-		else
+		else {
+                        if (o->size_percent)
+                                f->io_size = (f->io_size * o->size_percent) / 100;
 			total_size += f->io_size;
+		}
 
 		if (f->filetype == FIO_TYPE_FILE &&
 		    (f->io_size + f->file_offset) > f->real_file_size &&
 		    !(td->io_ops->flags & FIO_DISKLESSIO)) {
-			if (!td->o.create_on_open) {
+			if (!o->create_on_open) {
 				need_extend++;
 				extend_size += (f->io_size + f->file_offset);
 			} else
@@ -760,20 +830,17 @@ int setup_files(struct thread_data *td)
 		}
 	}
 
-	if (td->o.size_percent)
-		total_size = (total_size * td->o.size_percent) / 100;
-
-	if (!td->o.size || td->o.size > total_size)
-		td->o.size = total_size;
+	if (!o->size || o->size > total_size)
+		o->size = total_size;
 
 	/*
 	 * See if we need to extend some files
 	 */
 	if (need_extend) {
 		temp_stall_ts = 1;
-		if (!terse_output)
+		if (output_format == FIO_OUTPUT_NORMAL)
 			log_info("%s: Laying out IO file(s) (%u file(s) /"
-				 " %lluMB)\n", td->o.name, need_extend,
+				 " %lluMB)\n", o->name, need_extend,
 					extend_size >> 20);
 
 		for_each_file(td, f, i) {
@@ -784,7 +851,7 @@ int setup_files(struct thread_data *td)
 
 			assert(f->filetype == FIO_TYPE_FILE);
 			fio_file_clear_extend(f);
-			if (!td->o.fill_device) {
+			if (!o->fill_device) {
 				old_len = f->real_file_size;
 				extend_len = f->io_size + f->file_offset -
 						old_len;
@@ -805,25 +872,28 @@ int setup_files(struct thread_data *td)
 	}
 
 	if (err)
-		return err;
+		goto err_out;
 
-	if (!td->o.zone_size)
-		td->o.zone_size = td->o.size;
+	if (!o->zone_size)
+		o->zone_size = o->size;
 
 	/*
 	 * iolog already set the total io size, if we read back
 	 * stored entries.
 	 */
-	if (!td->o.read_iolog_file)
-		td->total_io_size = td->o.size * td->o.loops;
+	if (!o->read_iolog_file)
+		td->total_io_size = o->size * o->loops;
 
 done:
-	if (td->o.create_only)
+	if (o->create_only)
 		td->done = 1;
 
+	td_set_runstate(td, old_state);
 	return 0;
 err_offset:
-	log_err("%s: you need to specify valid offset=\n", td->o.name);
+	log_err("%s: you need to specify valid offset=\n", o->name);
+err_out:
+	td_set_runstate(td, old_state);
 	return 1;
 }
 
@@ -841,28 +911,76 @@ int pre_read_files(struct thread_data *td)
 	return 1;
 }
 
+static int __init_rand_distribution(struct thread_data *td, struct fio_file *f)
+{
+	unsigned int range_size, seed;
+	unsigned long nranges;
+	uint64_t file_size;
+
+	range_size = min(td->o.min_bs[DDIR_READ], td->o.min_bs[DDIR_WRITE]);
+	file_size = min(f->real_file_size, f->io_size);
+
+	nranges = (file_size + range_size - 1) / range_size;
+
+	seed = jhash(f->file_name, strlen(f->file_name), 0) * td->thread_number;
+	if (!td->o.rand_repeatable)
+		seed = td->rand_seeds[4];
+
+	if (td->o.random_distribution == FIO_RAND_DIST_ZIPF)
+		zipf_init(&f->zipf, nranges, td->o.zipf_theta.u.f, seed);
+	else
+		pareto_init(&f->zipf, nranges, td->o.pareto_h.u.f, seed);
+
+	return 1;
+}
+
+static int init_rand_distribution(struct thread_data *td)
+{
+	struct fio_file *f;
+	unsigned int i;
+	int state;
+
+	if (td->o.random_distribution == FIO_RAND_DIST_RANDOM)
+		return 0;
+
+	state = td->runstate;
+	td_set_runstate(td, TD_SETTING_UP);
+	for_each_file(td, f, i)
+		__init_rand_distribution(td, f);
+	td_set_runstate(td, state);
+
+	return 1;
+}
+
 int init_random_map(struct thread_data *td)
 {
-	unsigned long long blocks, num_maps;
+	unsigned long long blocks;
 	struct fio_file *f;
 	unsigned int i;
 
-	if (td->o.norandommap || !td_random(td))
+	if (init_rand_distribution(td))
+		return 0;
+	if (!td_random(td))
 		return 0;
 
 	for_each_file(td, f, i) {
-		blocks = (f->real_file_size + td->o.rw_min_bs - 1) /
-				(unsigned long long) td->o.rw_min_bs;
-		num_maps = (blocks + BLOCKS_PER_MAP - 1) /
-				(unsigned long long) BLOCKS_PER_MAP;
-		if (num_maps == (unsigned long) num_maps) {
-			f->file_map = smalloc(num_maps * sizeof(unsigned long));
-			if (f->file_map) {
-				f->num_maps = num_maps;
+		uint64_t file_size = min(f->real_file_size, f->io_size);
+
+		blocks = file_size / (unsigned long long) td->o.rw_min_bs;
+
+		if (td->o.random_generator == FIO_RAND_GEN_LFSR) {
+			unsigned long seed;
+
+			seed = td->rand_seeds[FIO_RAND_BLOCK_OFF];
+			
+			if (!lfsr_init(&f->lfsr, blocks, seed, seed & 0xF))
 				continue;
-			}
-		} else
-			f->file_map = NULL;
+		} else if (!td->o.norandommap) {
+			f->io_axmap = axmap_new(blocks);
+			if (f->io_axmap)
+				continue;
+		} else if (td->o.norandommap)
+			continue;
 
 		if (!td->o.softrandommap) {
 			log_err("fio: failed allocating random map. If running"
@@ -874,7 +992,6 @@ int init_random_map(struct thread_data *td)
 
 		log_info("fio: file %s failed allocating random map. Running "
 			 "job without.\n", f->file_name);
-		f->num_maps = 0;
 	}
 
 	return 0;
@@ -911,15 +1028,17 @@ void close_and_free_files(struct thread_data *td)
 
 		sfree(f->file_name);
 		f->file_name = NULL;
-		sfree(f->file_map);
-		f->file_map = NULL;
+		axmap_free(f->io_axmap);
+		f->io_axmap = NULL;
 		sfree(f);
 	}
 
 	td->o.filename = NULL;
 	free(td->files);
+	free(td->file_locks);
 	td->files_index = 0;
 	td->files = NULL;
+	td->file_locks = NULL;
 	td->o.nr_files = 0;
 }
 
@@ -963,17 +1082,31 @@ int add_file(struct thread_data *td, const char *fname)
 	}
 
 	f->fd = -1;
-	fio_file_reset(f);
+	f->shadow_fd = -1;
+	fio_file_reset(td, f);
 
 	if (td->files_size <= td->files_index) {
-		int new_size = td->o.nr_files + 1;
+		unsigned int new_size = td->o.nr_files + 1;
 
 		dprint(FD_FILE, "resize file array to %d files\n", new_size);
 
 		td->files = realloc(td->files, new_size * sizeof(f));
+		if (td->files == NULL) {
+			log_err("fio: realloc OOM\n");
+			assert(0);
+		}
+		if (td->o.file_lock_mode != FILE_LOCK_NONE) {
+			td->file_locks = realloc(td->file_locks, new_size);
+			if (!td->file_locks) {
+				log_err("fio: realloc OOM\n");
+				assert(0);
+			}
+			td->file_locks[cur_files] = FILE_LOCK_NONE;
+		}
 		td->files_size = new_size;
 	}
 	td->files[cur_files] = f;
+	f->fileno = cur_files;
 
 	/*
 	 * init function, io engine may not be loaded yet
@@ -997,10 +1130,10 @@ int add_file(struct thread_data *td, const char *fname)
 	case FILE_LOCK_NONE:
 		break;
 	case FILE_LOCK_READWRITE:
-		f->lock = fio_mutex_rw_init();
+		f->rwlock = fio_rwlock_init();
 		break;
 	case FILE_LOCK_EXCLUSIVE:
-		f->lock = fio_mutex_init(1);
+		f->lock = fio_mutex_init(FIO_MUTEX_UNLOCKED);
 		break;
 	default:
 		log_err("fio: unknown lock mode: %d\n", td->o.file_lock_mode);
@@ -1072,57 +1205,34 @@ void lock_file(struct thread_data *td, struct fio_file *f, enum fio_ddir ddir)
 	if (!f->lock || td->o.file_lock_mode == FILE_LOCK_NONE)
 		return;
 
-	if (f->lock_owner == td && f->lock_batch--)
-		return;
-
 	if (td->o.file_lock_mode == FILE_LOCK_READWRITE) {
 		if (ddir == DDIR_READ)
-			fio_mutex_down_read(f->lock);
+			fio_rwlock_read(f->rwlock);
 		else
-			fio_mutex_down_write(f->lock);
+			fio_rwlock_write(f->rwlock);
 	} else if (td->o.file_lock_mode == FILE_LOCK_EXCLUSIVE)
 		fio_mutex_down(f->lock);
 
-	f->lock_owner = td;
-	f->lock_batch = td->o.lockfile_batch;
-	f->lock_ddir = ddir;
+	td->file_locks[f->fileno] = td->o.file_lock_mode;
 }
 
 void unlock_file(struct thread_data *td, struct fio_file *f)
 {
 	if (!f->lock || td->o.file_lock_mode == FILE_LOCK_NONE)
 		return;
-	if (f->lock_batch)
-		return;
 
-	if (td->o.file_lock_mode == FILE_LOCK_READWRITE) {
-		const int is_read = f->lock_ddir == DDIR_READ;
-		int val = fio_mutex_getval(f->lock);
-
-		if ((is_read && val == 1) || (!is_read && val == -1))
-			f->lock_owner = NULL;
-
-		if (is_read)
-			fio_mutex_up_read(f->lock);
-		else
-			fio_mutex_up_write(f->lock);
-	} else if (td->o.file_lock_mode == FILE_LOCK_EXCLUSIVE) {
-		int val = fio_mutex_getval(f->lock);
-
-		if (val == 0)
-			f->lock_owner = NULL;
-
+	if (td->o.file_lock_mode == FILE_LOCK_READWRITE)
+		fio_rwlock_unlock(f->rwlock);
+	else if (td->o.file_lock_mode == FILE_LOCK_EXCLUSIVE)
 		fio_mutex_up(f->lock);
-	}
+
+	td->file_locks[f->fileno] = FILE_LOCK_NONE;
 }
 
 void unlock_file_all(struct thread_data *td, struct fio_file *f)
 {
-	if (f->lock_owner != td)
-		return;
-
-	f->lock_batch = 0;
-	unlock_file(td, f);
+	if (td->file_locks[f->fileno] != FILE_LOCK_NONE)
+		unlock_file(td, f);
 }
 
 static int recurse_dir(struct thread_data *td, const char *dirname)
@@ -1135,7 +1245,7 @@ static int recurse_dir(struct thread_data *td, const char *dirname)
 	if (!D) {
 		char buf[FIO_VERROR_SIZE];
 
-		snprintf(buf, FIO_VERROR_SIZE - 1, "opendir(%s)", dirname);
+		snprintf(buf, FIO_VERROR_SIZE, "opendir(%s)", dirname);
 		td_verror(td, errno, buf);
 		return 1;
 	}
@@ -1195,6 +1305,9 @@ void dup_files(struct thread_data *td, struct thread_data *org)
 
 	td->files = malloc(org->files_index * sizeof(f));
 
+	if (td->o.file_lock_mode != FILE_LOCK_NONE)
+		td->file_locks = malloc(org->files_index);
+
 	for_each_file(org, f, i) {
 		struct fio_file *__f;
 
@@ -1204,7 +1317,7 @@ void dup_files(struct thread_data *td, struct thread_data *org)
 			assert(0);
 		}
 		__f->fd = -1;
-		fio_file_reset(__f);
+		fio_file_reset(td, __f);
 
 		if (f->file_name) {
 			__f->file_name = smalloc_strdup(f->file_name);
@@ -1243,4 +1356,14 @@ void free_release_files(struct thread_data *td)
 	close_files(td);
 	td->files_index = 0;
 	td->nr_normal_files = 0;
+}
+
+void fio_file_reset(struct thread_data *td, struct fio_file *f)
+{
+	f->last_pos = f->file_offset;
+	f->last_start = -1ULL;
+	if (f->io_axmap)
+		axmap_reset(f->io_axmap);
+	if (td->o.random_generator == FIO_RAND_GEN_LFSR)
+		lfsr_reset(&f->lfsr, td->rand_seeds[FIO_RAND_BLOCK_OFF]);
 }

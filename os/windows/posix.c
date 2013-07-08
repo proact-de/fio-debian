@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <windows.h>
 #include <stddef.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -19,21 +20,151 @@
 #include <sys/poll.h>
 
 #include "../os-windows.h"
+#include "../../lib/hweight.h"
+
+extern unsigned long mtime_since_now(struct timeval *);
+extern void fio_gettime(struct timeval *, void *);
+
+/* These aren't defined in the MinGW headers */
+HRESULT WINAPI StringCchCopyA(
+  char *pszDest,
+  size_t cchDest,
+  const char *pszSrc);
+
+HRESULT WINAPI StringCchPrintfA(
+  char *pszDest,
+  size_t cchDest,
+  const char *pszFormat,
+  ...);
+
+int vsprintf_s(
+  char *buffer,
+  size_t numberOfElements,
+  const char *format,
+  va_list argptr);
+
+int win_to_posix_error(DWORD winerr)
+{
+	switch (winerr)
+	{
+	case ERROR_FILE_NOT_FOUND:		return ENOENT;
+	case ERROR_PATH_NOT_FOUND:		return ENOENT;
+	case ERROR_ACCESS_DENIED:		return EACCES;
+	case ERROR_INVALID_HANDLE:		return EBADF;
+	case ERROR_NOT_ENOUGH_MEMORY:	return ENOMEM;
+	case ERROR_INVALID_DATA:		return EINVAL;
+	case ERROR_OUTOFMEMORY:			return ENOMEM;
+	case ERROR_INVALID_DRIVE:		return ENODEV;
+	case ERROR_NOT_SAME_DEVICE:		return EXDEV;
+	case ERROR_WRITE_PROTECT:		return EROFS;
+	case ERROR_BAD_UNIT:			return ENODEV;
+	case ERROR_SHARING_VIOLATION:	return EACCES;
+	case ERROR_LOCK_VIOLATION:		return EACCES;
+	case ERROR_SHARING_BUFFER_EXCEEDED:	return ENOLCK;
+	case ERROR_HANDLE_DISK_FULL:	return ENOSPC;
+	case ERROR_NOT_SUPPORTED:		return ENOSYS;
+	case ERROR_FILE_EXISTS:			return EEXIST;
+	case ERROR_CANNOT_MAKE:			return EPERM;
+	case ERROR_INVALID_PARAMETER:	return EINVAL;
+	case ERROR_NO_PROC_SLOTS:		return EAGAIN;
+	case ERROR_BROKEN_PIPE:			return EPIPE;
+	case ERROR_OPEN_FAILED:			return EIO;
+	case ERROR_NO_MORE_SEARCH_HANDLES:	return ENFILE;
+	case ERROR_CALL_NOT_IMPLEMENTED:	return ENOSYS;
+	case ERROR_INVALID_NAME:		return ENOENT;
+	case ERROR_WAIT_NO_CHILDREN:	return ECHILD;
+	case ERROR_CHILD_NOT_COMPLETE:	return EBUSY;
+	case ERROR_DIR_NOT_EMPTY:		return ENOTEMPTY;
+	case ERROR_SIGNAL_REFUSED:		return EIO;
+	case ERROR_BAD_PATHNAME:		return ENOENT;
+	case ERROR_SIGNAL_PENDING:		return EBUSY;
+	case ERROR_MAX_THRDS_REACHED:	return EAGAIN;
+	case ERROR_BUSY:				return EBUSY;
+	case ERROR_ALREADY_EXISTS:		return EEXIST;
+	case ERROR_NO_SIGNAL_SENT:		return EIO;
+	case ERROR_FILENAME_EXCED_RANGE:	return EINVAL;
+	case ERROR_META_EXPANSION_TOO_LONG:	return EINVAL;
+	case ERROR_INVALID_SIGNAL_NUMBER:	return EINVAL;
+	case ERROR_THREAD_1_INACTIVE:	return EINVAL;
+	case ERROR_BAD_PIPE:			return EINVAL;
+	case ERROR_PIPE_BUSY:			return EBUSY;
+	case ERROR_NO_DATA:				return EPIPE;
+	case ERROR_MORE_DATA:			return EAGAIN;
+	case ERROR_DIRECTORY:			return ENOTDIR;
+	case ERROR_PIPE_CONNECTED:		return EBUSY;
+	case ERROR_NO_TOKEN:			return EINVAL;
+	case ERROR_PROCESS_ABORTED:		return EFAULT;
+	case ERROR_BAD_DEVICE:			return ENODEV;
+	case ERROR_BAD_USERNAME:		return EINVAL;
+	case ERROR_OPEN_FILES:			return EAGAIN;
+	case ERROR_ACTIVE_CONNECTIONS:	return EAGAIN;
+	case ERROR_DEVICE_IN_USE:		return EAGAIN;
+	case ERROR_INVALID_AT_INTERRUPT_TIME:	return EINTR;
+	case ERROR_IO_DEVICE:			return EIO;
+	case ERROR_NOT_OWNER:			return EPERM;
+	case ERROR_END_OF_MEDIA:		return ENOSPC;
+	case ERROR_EOM_OVERFLOW:		return ENOSPC;
+	case ERROR_BEGINNING_OF_MEDIA:	return ESPIPE;
+	case ERROR_SETMARK_DETECTED:	return ESPIPE;
+	case ERROR_NO_DATA_DETECTED:	return ENOSPC;
+	case ERROR_POSSIBLE_DEADLOCK:	return EDEADLOCK;
+	case ERROR_CRC:					return EIO;
+	case ERROR_NEGATIVE_SEEK:		return EINVAL;
+	case ERROR_DISK_FULL:			return ENOSPC;
+	case ERROR_NOACCESS:			return EFAULT;
+	case ERROR_FILE_INVALID:		return ENXIO;
+	}
+
+	return winerr;
+}
+
+int GetNumLogicalProcessors(void)
+{
+	SYSTEM_LOGICAL_PROCESSOR_INFORMATION *processor_info = NULL;
+	DWORD len = 0;
+	DWORD num_processors = 0;
+	DWORD error = 0;
+	DWORD i;
+
+	while (!GetLogicalProcessorInformation(processor_info, &len)) {
+		error = GetLastError();
+		if (error == ERROR_INSUFFICIENT_BUFFER)
+			processor_info = malloc(len);
+		else {
+			log_err("Error: GetLogicalProcessorInformation failed: %d\n", error);
+			return -1;
+		}
+
+		if (processor_info == NULL) {
+			log_err("Error: failed to allocate memory for GetLogicalProcessorInformation");
+			return -1;
+		}
+	}
+
+	for (i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); i++)
+	{
+		if (processor_info[i].Relationship == RelationProcessorCore)
+			num_processors += hweight64(processor_info[i].ProcessorMask);
+	}
+
+	free(processor_info);
+	return num_processors;
+}
 
 long sysconf(int name)
 {
-	long long val = -1;
-	DWORD len;
-	SYSTEM_LOGICAL_PROCESSOR_INFORMATION processorInfo;
+	long val = -1;
+	long val2 = -1;
 	SYSTEM_INFO sysInfo;
 	MEMORYSTATUSEX status;
 
 	switch (name)
 	{
 	case _SC_NPROCESSORS_ONLN:
-		len = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
-		GetLogicalProcessorInformation(&processorInfo, &len);
-		val = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+		val = GetNumLogicalProcessors();
+		if (val == -1)
+			log_err("sysconf(_SC_NPROCESSORS_ONLN) failed\n");
+
 		break;
 
 	case _SC_PAGESIZE:
@@ -43,8 +174,11 @@ long sysconf(int name)
 
 	case _SC_PHYS_PAGES:
 		status.dwLength = sizeof(status);
-		GlobalMemoryStatusEx(&status);
-		val = status.ullTotalPhys;
+		val2 = sysconf(_SC_PAGESIZE);
+		if (GlobalMemoryStatusEx(&status) && val2 != -1)
+			val = status.ullTotalPhys / val2;
+		else
+			log_err("sysconf(_SC_PHYS_PAGES) failed\n");
 		break;
 	default:
 		log_err("sysconf(%d) is not implemented\n", name);
@@ -95,8 +229,8 @@ char *dlerror(void)
 int gettimeofday(struct timeval *restrict tp, void *restrict tzp)
 {
 	FILETIME fileTime;
-	unsigned long long unix_time, windows_time;
-	const time_t MILLISECONDS_BETWEEN_1601_AND_1970 = 11644473600000;
+	uint64_t unix_time, windows_time;
+	const uint64_t MILLISECONDS_BETWEEN_1601_AND_1970 = 11644473600000;
 
 	/* Ignore the timezone parameter */
 	(void)tzp;
@@ -107,18 +241,13 @@ int gettimeofday(struct timeval *restrict tp, void *restrict tzp)
 	 * Its precision is 100 ns but accuracy is only one clock tick, or normally around 15 ms.
 	 */
 	GetSystemTimeAsFileTime(&fileTime);
-	windows_time = ((unsigned long long)fileTime.dwHighDateTime << 32) + fileTime.dwLowDateTime;
+	windows_time = ((uint64_t)fileTime.dwHighDateTime << 32) + fileTime.dwLowDateTime;
 	/* Divide by 10,000 to convert to ms and subtract the time between 1601 and 1970 */
 	unix_time = (((windows_time)/10000) - MILLISECONDS_BETWEEN_1601_AND_1970);
 	/* unix_time is now the number of milliseconds since 1970 (the Unix epoch) */
 	tp->tv_sec = unix_time / 1000;
 	tp->tv_usec = (unix_time % 1000) * 1000;
 	return 0;
-}
-
-void syslog(int priority, const char *message, ... /* argument */)
-{
-	log_err("%s is not implemented\n", __func__);
 }
 
 int sigaction(int sig, const struct sigaction *act,
@@ -160,6 +289,8 @@ void *mmap(void *addr, size_t len, int prot, int flags,
 	if ((flags & MAP_ANON) | (flags & MAP_ANONYMOUS))
 	{
 		allocAddr = VirtualAlloc(addr, len, MEM_COMMIT, vaProt);
+		if (allocAddr == NULL)
+			errno = win_to_posix_error(GetLastError());
 	}
 
 	return allocAddr;
@@ -167,37 +298,71 @@ void *mmap(void *addr, size_t len, int prot, int flags,
 
 int munmap(void *addr, size_t len)
 {
-	return !VirtualFree(addr, 0, MEM_RELEASE);
+	if (!VirtualFree(addr, 0, MEM_RELEASE)) {
+		errno = win_to_posix_error(GetLastError());
+		return -1;
+	}
+
+	return 0;
 }
 
 int fork(void)
 {
 	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
-	return (-1);
+	return -1;
 }
 
 pid_t setsid(void)
 {
 	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
-	return (-1);
+	return -1;
 }
+
+static HANDLE log_file = INVALID_HANDLE_VALUE;
 
 void openlog(const char *ident, int logopt, int facility)
 {
-	log_err("%s is not implemented\n", __func__);
+	if (log_file == INVALID_HANDLE_VALUE)
+		log_file = CreateFileA("syslog.txt", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
 }
 
 void closelog(void)
 {
-	log_err("%s is not implemented\n", __func__);
+	CloseHandle(log_file);
+	log_file = INVALID_HANDLE_VALUE;
+}
+
+void syslog(int priority, const char *message, ... /* argument */)
+{
+	va_list v;
+	int len;
+	char *output;
+	DWORD bytes_written;
+
+	if (log_file == INVALID_HANDLE_VALUE) {
+		log_file = CreateFileA("syslog.txt", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
+	}
+
+	if (log_file == INVALID_HANDLE_VALUE) {
+		log_err("syslog: failed to open log file\n");
+		return;
+	}
+
+	va_start(v, message);
+	len = _vscprintf(message, v);
+	output = malloc(len + sizeof(char));
+	vsprintf(output, message, v);
+	WriteFile(log_file, output, len, &bytes_written, NULL);
+	va_end(v);
+	free(output);
 }
 
 int kill(pid_t pid, int sig)
 {
 	errno = ESRCH;
-	return (-1);
+	return -1;
 }
 
 /*
@@ -218,7 +383,7 @@ int fcntl(int fildes, int cmd, ...)
 		return 0;
 	else if (cmd != F_SETFL) {
 		errno = EINVAL;
-		return (-1);
+		return -1;
 	}
 
 	va_start(ap, 1);
@@ -256,6 +421,7 @@ int clock_gettime(clockid_t clock_id, struct timespec *tp)
 	{
 		static LARGE_INTEGER freq = {{0,0}};
 		LARGE_INTEGER counts;
+		uint64_t t;
 
 		QueryPerformanceCounter(&counts);
 		if (freq.QuadPart == 0)
@@ -264,7 +430,7 @@ int clock_gettime(clockid_t clock_id, struct timespec *tp)
 		tp->tv_sec = counts.QuadPart / freq.QuadPart;
 		/* Get the difference between the number of ns stored
 		 * in 'tv_sec' and that stored in 'counts' */
-		unsigned long long t = tp->tv_sec * freq.QuadPart;
+		t = tp->tv_sec * freq.QuadPart;
 		t = counts.QuadPart - t;
 		/* 't' now contains the number of cycles since the last second.
 		 * We want the number of nanoseconds, so multiply out by 1,000,000,000
@@ -290,12 +456,42 @@ int clock_gettime(clockid_t clock_id, struct timespec *tp)
 
 int mlock(const void * addr, size_t len)
 {
-	return !VirtualLock((LPVOID)addr, len);
+	SIZE_T min, max;
+	BOOL success;
+	HANDLE process = GetCurrentProcess();
+
+	success = GetProcessWorkingSetSize(process, &min, &max);
+	if (!success) {
+		errno = win_to_posix_error(GetLastError());
+		return -1;
+	}
+
+	min += len;
+	max += len;
+	success = SetProcessWorkingSetSize(process, min, max);
+	if (!success) {
+		errno = win_to_posix_error(GetLastError());
+		return -1;
+	}
+
+	success = VirtualLock((LPVOID)addr, len);
+	if (!success) {
+		errno = win_to_posix_error(GetLastError());
+		return -1;
+	}
+
+	return 0;
 }
 
 int munlock(const void * addr, size_t len)
 {
-	return !VirtualUnlock((LPVOID)addr, len);
+	BOOL success = VirtualUnlock((LPVOID)addr, len);
+	if (!success) {
+		errno = win_to_posix_error(GetLastError());
+		return -1;
+	}
+
+	return 0;
 }
 
 pid_t waitpid(pid_t pid, int *stat_loc, int options)
@@ -321,70 +517,23 @@ char *basename(char *path)
 
 	i = strlen(path) - 1;
 
-	while (name[i] != '\\' && name[i] != '/' && i >= 0)
+	while (path[i] != '\\' && path[i] != '/' && i >= 0)
 		i--;
 
-	strcpy(name, path + i);
+	strncpy(name, path + i + 1, MAX_PATH);
 
 	return name;
-}
-
-int posix_fallocate(int fd, off_t offset, off_t len)
-{
-	const int BUFFER_SIZE = 64*1024*1024;
-	int rc = 0;
-	char *buf;
-	unsigned int write_len;
-	unsigned int bytes_written;
-	off_t bytes_remaining = len;
-
-	if (len == 0 || offset < 0)
-		return EINVAL;
-
-	buf = malloc(BUFFER_SIZE);
-
-	if (buf == NULL)
-		return ENOMEM;
-
-	memset(buf, 0, BUFFER_SIZE);
-
-	if (lseek(fd, offset, SEEK_SET) == -1)
-		return errno;
-
-	while (bytes_remaining > 0) {
-		if (bytes_remaining < BUFFER_SIZE)
-			write_len = (unsigned int)bytes_remaining;
-		else
-			write_len = BUFFER_SIZE;
-
-		bytes_written = _write(fd, buf, write_len);
-		if (bytes_written == -1) {
-			rc = errno;
-			break;
-		}
-
-		bytes_remaining -= bytes_written;
-	}
-
-	free(buf);
-	return rc;
-}
-
-int ftruncate(int fildes, off_t length)
-{
-	BOOL bSuccess;
-	int old_pos = tell(fildes);
-	lseek(fildes, length, SEEK_SET);
-	HANDLE hFile = (HANDLE)_get_osfhandle(fildes);
-	bSuccess = SetEndOfFile(hFile);
-	lseek(fildes, old_pos, SEEK_SET);
-	return !bSuccess;
 }
 
 int fsync(int fildes)
 {
 	HANDLE hFile = (HANDLE)_get_osfhandle(fildes);
-	return !FlushFileBuffers(hFile);
+	if (!FlushFileBuffers(hFile)) {
+		errno = win_to_posix_error(GetLastError());
+		return -1;
+	}
+
+	return 0;
 }
 
 int nFileMappings = 0;
@@ -393,7 +542,9 @@ HANDLE fileMappings[1024];
 int shmget(key_t key, size_t size, int shmflg)
 {
 	int mapid = -1;
-	HANDLE hMapping = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, (PAGE_EXECUTE_READWRITE | SEC_RESERVE), size >> 32, size & 0xFFFFFFFF, NULL);
+	uint32_t size_low = size & 0xFFFFFFFF;
+	uint32_t size_high = ((uint64_t)size) >> 32;
+	HANDLE hMapping = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, (PAGE_EXECUTE_READWRITE | SEC_RESERVE), size_high, size_low, NULL);
 	if (hMapping != NULL) {
 		fileMappings[nFileMappings] = hMapping;
 		mapid = nFileMappings;
@@ -410,14 +561,33 @@ void *shmat(int shmid, const void *shmaddr, int shmflg)
 	void* mapAddr;
 	MEMORY_BASIC_INFORMATION memInfo;
 	mapAddr = MapViewOfFile(fileMappings[shmid], FILE_MAP_ALL_ACCESS, 0, 0, 0);
-	VirtualQuery(mapAddr, &memInfo, sizeof(memInfo));
+	if (mapAddr == NULL) {
+		errno = win_to_posix_error(GetLastError());
+		return (void*)-1;
+	}
+
+	if (VirtualQuery(mapAddr, &memInfo, sizeof(memInfo)) == 0) {
+		errno = win_to_posix_error(GetLastError());
+		return (void*)-1;
+	}
+
 	mapAddr = VirtualAlloc(mapAddr, memInfo.RegionSize, MEM_COMMIT, PAGE_READWRITE);
+	if (mapAddr == NULL) {
+		errno = win_to_posix_error(GetLastError());
+		return (void*)-1;
+	}
+
 	return mapAddr;
 }
 
 int shmdt(const void *shmaddr)
 {
-	return !UnmapViewOfFile(shmaddr);
+	if (!UnmapViewOfFile(shmaddr)) {
+		errno = win_to_posix_error(GetLastError());
+		return -1;
+	}
+
+	return 0;
 }
 
 int shmctl(int shmid, int cmd, struct shmid_ds *buf)
@@ -428,21 +598,22 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf)
 	} else {
 		log_err("%s is not implemented\n", __func__);
 	}
-	return (-1);
+	errno = ENOSYS;
+	return -1;
 }
 
 int setuid(uid_t uid)
 {
 	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
-	return (-1);
+	return -1;
 }
 
 int setgid(gid_t gid)
 {
 	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
-	return (-1);
+	return -1;
 }
 
 int nice(int incr)
@@ -457,22 +628,32 @@ int nice(int incr)
 
 int getrusage(int who, struct rusage *r_usage)
 {
-	const time_t SECONDS_BETWEEN_1601_AND_1970 = 11644473600;
+	const uint64_t SECONDS_BETWEEN_1601_AND_1970 = 11644473600;
 	FILETIME cTime, eTime, kTime, uTime;
 	time_t time;
+	HANDLE h;
 
 	memset(r_usage, 0, sizeof(*r_usage));
 
-	HANDLE hProcess = GetCurrentProcess();
-	GetProcessTimes(hProcess, &cTime, &eTime, &kTime, &uTime);
-	time = ((unsigned long long)uTime.dwHighDateTime << 32) + uTime.dwLowDateTime;
+	if (who == RUSAGE_SELF) {
+		h = GetCurrentProcess();
+		GetProcessTimes(h, &cTime, &eTime, &kTime, &uTime);
+	} else if (who == RUSAGE_THREAD) {
+		h = GetCurrentThread();
+		GetThreadTimes(h, &cTime, &eTime, &kTime, &uTime);
+	} else {
+		log_err("fio: getrusage %d is not implemented\n", who);
+		return -1;
+	}
+
+	time = ((uint64_t)uTime.dwHighDateTime << 32) + uTime.dwLowDateTime;
 	/* Divide by 10,000,000 to get the number of seconds and move the epoch from
 	 * 1601 to 1970 */
 	time = (time_t)(((time)/10000000) - SECONDS_BETWEEN_1601_AND_1970);
 	r_usage->ru_utime.tv_sec = time;
 	/* getrusage() doesn't care about anything other than seconds, so set tv_usec to 0 */
 	r_usage->ru_utime.tv_usec = 0;
-	time = ((unsigned long long)kTime.dwHighDateTime << 32) + kTime.dwLowDateTime;
+	time = ((uint64_t)kTime.dwHighDateTime << 32) + kTime.dwLowDateTime;
 	/* Divide by 10,000,000 to get the number of seconds and move the epoch from
 	 * 1601 to 1970 */
 	time = (time_t)(((time)/10000000) - SECONDS_BETWEEN_1601_AND_1970);
@@ -490,7 +671,6 @@ int posix_madvise(void *addr, size_t len, int advice)
 /* Windows doesn't support advice for memory pages. Just ignore it. */
 int msync(void *addr, size_t len, int flags)
 {
-	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
 	return -1;
 }
@@ -503,17 +683,17 @@ int fdatasync(int fildes)
 ssize_t pwrite(int fildes, const void *buf, size_t nbyte,
 		off_t offset)
 {
-	long pos = tell(fildes);
-	ssize_t len = write(fildes, buf, nbyte);
-	lseek(fildes, pos, SEEK_SET);
+	int64_t pos = _telli64(fildes);
+	ssize_t len = _write(fildes, buf, nbyte);
+	_lseeki64(fildes, pos, SEEK_SET);
 	return len;
 }
 
 ssize_t pread(int fildes, void *buf, size_t nbyte, off_t offset)
 {
-	long pos = tell(fildes);
+	int64_t pos = _telli64(fildes);
 	ssize_t len = read(fildes, buf, nbyte);
-	lseek(fildes, pos, SEEK_SET);
+	_lseeki64(fildes, pos, SEEK_SET);
 	return len;
 }
 
@@ -521,53 +701,20 @@ ssize_t readv(int fildes, const struct iovec *iov, int iovcnt)
 {
 	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
-	return (-1);
+	return -1;
 }
 
 ssize_t writev(int fildes, const struct iovec *iov, int iovcnt)
 {
 	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
-	return (-1);
+	return -1;
 }
 
 long long strtoll(const char *restrict str, char **restrict endptr,
 		int base)
 {
 	return _strtoi64(str, endptr, base);
-}
-
-char *strsep(char **stringp, const char *delim)
-{
-	char *orig = *stringp;
-	BOOL gotMatch = FALSE;
-	int i = 0;
-	int j = 0;
-
-	if (*stringp == NULL)
-		return NULL;
-
-	while ((*stringp)[i] != '\0') {
-		j = 0;
-		while (delim[j] != '\0') {
-			if ((*stringp)[i] == delim[j]) {
-				gotMatch = TRUE;
-				(*stringp)[i] = '\0';
-				*stringp = *stringp + i + 1;
-				break;
-			}
-			j++;
-		}
-		if (gotMatch)
-			break;
-
-		i++;
-	}
-
-	if (!gotMatch)
-		*stringp = NULL;
-
-	return orig;
 }
 
 int poll(struct pollfd fds[], nfds_t nfds, int timeout)
@@ -578,11 +725,11 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 	int i;
 	int rc;
 
-	if (timeout != -1)
+	if (timeout != -1) {
 		to = &tv;
-
-	to->tv_sec = timeout / 1000;
-	to->tv_usec = (timeout % 1000) * 1000;
+		to->tv_sec = timeout / 1000;
+		to->tv_usec = (timeout % 1000) * 1000;
+	}
 
 	FD_ZERO(&readfds);
 	FD_ZERO(&writefds);
@@ -629,30 +776,93 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout)
 
 int nanosleep(const struct timespec *rqtp, struct timespec *rmtp)
 {
-	log_err("%s is not implemented\n", __func__);
-	errno = ENOSYS;
-	return -1;
+	struct timeval tv;
+	DWORD ms_remaining;
+	DWORD ms_total = (rqtp->tv_sec * 1000) + (rqtp->tv_nsec / 1000000.0);
+
+	if (ms_total == 0)
+		ms_total = 1;
+
+	ms_remaining = ms_total;
+
+	/* Since Sleep() can sleep for less than the requested time, add a loop to
+	   ensure we only return after the requested length of time has elapsed */
+	do {
+		fio_gettime(&tv, NULL);
+		Sleep(ms_remaining);
+		ms_remaining = ms_total - mtime_since_now(&tv);
+	} while (ms_remaining > 0 && ms_remaining < ms_total);
+
+	/* this implementation will never sleep for less than the requested time */
+	if (rmtp != NULL) {
+		rmtp->tv_sec = 0;
+		rmtp->tv_nsec = 0;
+	}
+
+	return 0;
 }
 
 DIR *opendir(const char *dirname)
 {
-	log_err("%s is not implemented\n", __func__);
-	errno = ENOSYS;
-	return NULL;
+	struct dirent_ctx *dc = NULL;
+
+	/* See if we can open it. If not, we'll return an error here */
+	HANDLE file = CreateFileA(dirname, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (file != INVALID_HANDLE_VALUE) {
+		CloseHandle(file);
+		dc = (struct dirent_ctx*)malloc(sizeof(struct dirent_ctx));
+		StringCchCopyA(dc->dirname, MAX_PATH, dirname);
+		dc->find_handle = INVALID_HANDLE_VALUE;
+	} else {
+		DWORD error = GetLastError();
+		if (error == ERROR_FILE_NOT_FOUND)
+			errno = ENOENT;
+
+		else if (error == ERROR_PATH_NOT_FOUND)
+			errno = ENOTDIR;
+		else if (error == ERROR_TOO_MANY_OPEN_FILES)
+			errno = ENFILE;
+		else if (error == ERROR_ACCESS_DENIED)
+			errno = EACCES;
+		else
+			errno = error;
+	}
+
+	return dc;
 }
 
 int closedir(DIR *dirp)
 {
-	log_err("%s is not implemented\n", __func__);
-	errno = ENOSYS;
-	return -1;
+	if (dirp != NULL && dirp->find_handle != INVALID_HANDLE_VALUE)
+		FindClose(dirp->find_handle);
+
+	free(dirp);
+	return 0;
 }
 
 struct dirent *readdir(DIR *dirp)
 {
-	log_err("%s is not implemented\n", __func__);
-	errno = ENOSYS;
-	return NULL;
+	static struct dirent de;
+	WIN32_FIND_DATA find_data;
+
+	if (dirp == NULL)
+		return NULL;
+
+	if (dirp->find_handle == INVALID_HANDLE_VALUE) {
+		char search_pattern[MAX_PATH];
+		StringCchPrintfA(search_pattern, MAX_PATH, "%s\\*", dirp->dirname);
+		dirp->find_handle = FindFirstFileA(search_pattern, &find_data);
+		if (dirp->find_handle == INVALID_HANDLE_VALUE)
+			return NULL;
+	} else {
+		if (!FindNextFile(dirp->find_handle, &find_data))
+			return NULL;
+	}
+
+	StringCchCopyA(de.d_name, MAX_PATH, find_data.cFileName);
+	de.d_ino = 0;
+
+	return &de;
 }
 
 uid_t geteuid(void)
@@ -660,13 +870,6 @@ uid_t geteuid(void)
 	log_err("%s is not implemented\n", __func__);
 	errno = ENOSYS;
 	return -1;
-}
-
-int inet_aton(char *addr)
-{
-	log_err("%s is not implemented\n", __func__);
-	errno = ENOSYS;
-	return 0;
 }
 
 const char* inet_ntop(int af, const void *restrict src,
@@ -705,6 +908,7 @@ const char* inet_ntop(int af, const void *restrict src,
 		errno = ENOSPC;
 
 	WSACleanup();
+
 	return ret;
 }
 

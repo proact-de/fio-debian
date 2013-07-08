@@ -14,6 +14,8 @@
 static int last_majdev, last_mindev;
 static struct disk_util *last_du;
 
+static struct fio_mutex *disk_util_mutex;
+
 FLIST_HEAD(disk_list);
 
 static struct disk_util *__init_per_file_disk_util(struct thread_data *td,
@@ -102,17 +104,26 @@ static void update_io_tick_disk(struct disk_util *du)
 	memcpy(ldus, &__dus, sizeof(__dus));
 }
 
-void update_io_ticks(void)
+int update_io_ticks(void)
 {
 	struct flist_head *entry;
 	struct disk_util *du;
+	int ret = 0;
 
 	dprint(FD_DISKUTIL, "update io ticks\n");
 
-	flist_for_each(entry, &disk_list) {
-		du = flist_entry(entry, struct disk_util, list);
-		update_io_tick_disk(du);
-	}
+	fio_mutex_down(disk_util_mutex);
+
+	if (!disk_util_exit) {
+		flist_for_each(entry, &disk_list) {
+			du = flist_entry(entry, struct disk_util, list);
+			update_io_tick_disk(du);
+		}
+	} else
+		ret = 1;
+
+	fio_mutex_up(disk_util_mutex);
+	return ret;
 }
 
 static struct disk_util *disk_util_exists(int major, int minor)
@@ -120,13 +131,18 @@ static struct disk_util *disk_util_exists(int major, int minor)
 	struct flist_head *entry;
 	struct disk_util *du;
 
+	fio_mutex_down(disk_util_mutex);
+
 	flist_for_each(entry, &disk_list) {
 		du = flist_entry(entry, struct disk_util, list);
 
-		if (major == du->major && minor == du->minor)
+		if (major == du->major && minor == du->minor) {
+			fio_mutex_up(disk_util_mutex);
 			return du;
+		}
 	}
 
+	fio_mutex_up(disk_util_mutex);
 	return NULL;
 }
 
@@ -260,21 +276,35 @@ static struct disk_util *disk_util_add(struct thread_data *td, int majdev,
 {
 	struct disk_util *du, *__du;
 	struct flist_head *entry;
+	int l;
 
 	dprint(FD_DISKUTIL, "add maj/min %d/%d: %s\n", majdev, mindev, path);
 
 	du = smalloc(sizeof(*du));
+	if (!du) {
+		log_err("fio: smalloc() pool exhausted\n");
+		return NULL;
+	}
+
 	memset(du, 0, sizeof(*du));
 	INIT_FLIST_HEAD(&du->list);
-	sprintf(du->path, "%s/stat", path);
+	l = snprintf(du->path, sizeof(du->path), "%s/stat", path);
+	if (l < 0 || l >= sizeof(du->path)) {
+		log_err("constructed path \"%.100s[...]/stat\" larger than buffer (%zu bytes)\n",
+			path, sizeof(du->path) - 1);
+		sfree(du);
+		return NULL;
+	}
 	strncpy((char *) du->dus.name, basename(path), FIO_DU_NAME_SZ);
 	du->sysfs_root = path;
 	du->major = majdev;
 	du->minor = mindev;
 	INIT_FLIST_HEAD(&du->slavelist);
 	INIT_FLIST_HEAD(&du->slaves);
-	du->lock = fio_mutex_init(1);
+	du->lock = fio_mutex_init(FIO_MUTEX_UNLOCKED);
 	du->users = 0;
+
+	fio_mutex_down(disk_util_mutex);
 
 	flist_for_each(entry, &disk_list) {
 		__du = flist_entry(entry, struct disk_util, list);
@@ -283,6 +313,7 @@ static struct disk_util *disk_util_add(struct thread_data *td, int majdev,
 
 		if (!strcmp((char *) du->dus.name, (char *) __du->dus.name)) {
 			disk_util_free(du);
+			fio_mutex_up(disk_util_mutex);
 			return __du;
 		}
 	}
@@ -293,6 +324,8 @@ static struct disk_util *disk_util_add(struct thread_data *td, int majdev,
 	get_io_ticks(du, &du->last_dus);
 
 	flist_add_tail(&du->list, &disk_list);
+	fio_mutex_up(disk_util_mutex);
+
 	find_add_disk_slaves(td, path, du);
 	return du;
 }
@@ -517,17 +550,21 @@ static void aggregate_slaves_stats(struct disk_util *masterdu)
 		agg->max_util.u.f = 100.0;
 }
 
-void free_disk_util(void)
+void disk_util_prune_entries(void)
 {
-	struct disk_util *du;
+	fio_mutex_down(disk_util_mutex);
 
 	while (!flist_empty(&disk_list)) {
+		struct disk_util *du;
+
 		du = flist_entry(disk_list.next, struct disk_util, list);
 		flist_del(&du->list);
 		disk_util_free(du);
 	}
 
 	last_majdev = last_mindev = -1;
+	fio_mutex_up(disk_util_mutex);
+	fio_mutex_remove(disk_util_mutex);
 }
 
 void print_disk_util(struct disk_util_stat *dus, struct disk_util_agg *agg,
@@ -568,21 +605,90 @@ void print_disk_util(struct disk_util_stat *dus, struct disk_util_agg *agg,
 		log_info("\n");
 }
 
-void show_disk_util(int terse)
+static void print_disk_util_json(struct disk_util *du, struct json_array *array)
+{
+	double util = 0;
+	struct disk_util_stat *dus = &du->dus;
+	struct disk_util_agg *agg = &du->agg;
+	struct json_object *obj;
+
+	obj = json_create_object();
+	json_array_add_value_object(array, obj);
+
+	if (dus->msec)
+		util = (double) 100 * dus->io_ticks / (double) dus->msec;
+	if (util > 100.0)
+		util = 100.0;
+
+
+	json_object_add_value_string(obj, "name", dus->name);
+	json_object_add_value_int(obj, "read_ios", dus->ios[0]);
+	json_object_add_value_int(obj, "write_ios", dus->ios[1]);
+	json_object_add_value_int(obj, "read_merges", dus->merges[0]);
+	json_object_add_value_int(obj, "write_merges", dus->merges[1]);
+	json_object_add_value_int(obj, "read_ticks", dus->ticks[0]);
+	json_object_add_value_int(obj, "write_ticks", dus->ticks[1]);
+	json_object_add_value_int(obj, "in_queue", dus->time_in_queue);
+	json_object_add_value_float(obj, "util", util);
+
+	/*
+	 * If the device has slaves, aggregate the stats for
+	 * those slave devices also.
+	 */
+	if (!agg->slavecount)
+		return;
+	json_object_add_value_int(obj, "aggr_read_ios",
+				agg->ios[0] / agg->slavecount);
+	json_object_add_value_int(obj, "aggr_write_ios",
+				agg->ios[1] / agg->slavecount);
+	json_object_add_value_int(obj, "aggr_read_merges",
+				agg->merges[0] / agg->slavecount);
+	json_object_add_value_int(obj, "aggr_write_merge",
+				agg->merges[1] / agg->slavecount);
+	json_object_add_value_int(obj, "aggr_read_ticks",
+				agg->ticks[0] / agg->slavecount);
+	json_object_add_value_int(obj, "aggr_write_ticks",
+				agg->ticks[1] / agg->slavecount);
+	json_object_add_value_int(obj, "aggr_in_queue",
+				agg->time_in_queue / agg->slavecount);
+	json_object_add_value_float(obj, "aggr_util", agg->max_util.u.f);
+}
+
+void show_disk_util(int terse, struct json_object *parent)
 {
 	struct flist_head *entry;
 	struct disk_util *du;
+	struct json_array *array = NULL;
 
-	if (flist_empty(&disk_list))
+	fio_mutex_down(disk_util_mutex);
+
+	if (flist_empty(&disk_list)) {
+		fio_mutex_up(disk_util_mutex);
 		return;
+	}
 
 	if (!terse)
 		log_info("\nDisk stats (read/write):\n");
+
+	if (output_format == FIO_OUTPUT_JSON) {
+		array = json_create_array();
+		json_object_add_value_array(parent, "disk_util", array);
+	}
 
 	flist_for_each(entry, &disk_list) {
 		du = flist_entry(entry, struct disk_util, list);
 
 		aggregate_slaves_stats(du);
-		print_disk_util(&du->dus, &du->agg, terse);
+		if (output_format == FIO_OUTPUT_JSON)
+			print_disk_util_json(du, array);
+		else
+			print_disk_util(&du->dus, &du->agg, terse);
 	}
+
+	fio_mutex_up(disk_util_mutex);
+}
+
+void setup_disk_util(void)
+{
+	disk_util_mutex = fio_mutex_init(FIO_MUTEX_UNLOCKED);
 }

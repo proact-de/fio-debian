@@ -14,12 +14,8 @@
 
 #include "../file.h"
 
-#define FIO_HAVE_POSIXAIO
-#define FIO_HAVE_SOLARISAIO
-#define FIO_HAVE_POSIXAIO_FSYNC
 #define FIO_HAVE_CPU_AFFINITY
 #define FIO_HAVE_PSHARED_MUTEX
-#define FIO_HAVE_FDATASYNC
 #define FIO_HAVE_CHARDEV_SIZE
 #define FIO_USE_GENERIC_BDEV_SIZE
 #define FIO_USE_GENERIC_INIT_RANDOM_STATE
@@ -27,12 +23,6 @@
 
 #define OS_MAP_ANON		MAP_ANON
 #define OS_RAND_MAX		2147483648UL
-
-#if defined(_BIG_ENDIAN)
-#define FIO_BIG_ENDIAN
-#else
-#define FIO_LITTLE_ENDIAN
-#endif
 
 #define fio_swap16(x)	BSWAP_16(x)
 #define fio_swap32(x)	BSWAP_32(x)
@@ -48,6 +38,9 @@ struct solaris_rand_seed {
 #define POSIX_MADV_DONTNEED	MADV_DONTNEED
 #define POSIX_MADV_RANDOM	MADV_RANDOM
 #endif
+
+#define os_ctime_r(x, y, z)     ctime_r((x), (y), (z))
+#define FIO_OS_HAS_CTIME_R
 
 typedef psetid_t os_cpu_mask_t;
 typedef struct solaris_rand_seed os_random_state_t;

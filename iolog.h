@@ -1,7 +1,10 @@
 #ifndef FIO_IOLOG_H
 #define FIO_IOLOG_H
 
+#include "lib/rbtree.h"
 #include "lib/ieee754.h"
+#include "flist.h"
+#include "ioengine.h"
 
 /*
  * Use for maintaining statistics
@@ -19,10 +22,18 @@ struct io_stat {
  * A single data sample
  */
 struct io_sample {
-	unsigned long time;
-	unsigned long val;
-	enum fio_ddir ddir;
-	unsigned int bs;
+	uint64_t time;
+	uint64_t val;
+	uint32_t ddir;
+	uint32_t bs;
+};
+
+enum {
+	IO_LOG_TYPE_LAT = 1,
+	IO_LOG_TYPE_CLAT,
+	IO_LOG_TYPE_SLAT,
+	IO_LOG_TYPE_BW,
+	IO_LOG_TYPE_IOPS,
 };
 
 /*
@@ -36,11 +47,13 @@ struct io_log {
 	unsigned long max_samples;
 	struct io_sample *log;
 
+	unsigned int log_type;
+
 	/*
 	 * Windowed average, for logging single entries average over some
 	 * period of time.
 	 */
-	struct io_stat avg_window[2];
+	struct io_stat avg_window[DDIR_RWDIR_CNT];
 	unsigned long avg_msec;
 	unsigned long avg_last;
 };
@@ -84,6 +97,7 @@ enum file_log_act {
 	FIO_LOG_UNLINK_FILE,
 };
 
+struct io_u;
 extern int __must_check read_iolog_get(struct thread_data *, struct io_u *);
 extern void log_io_u(struct thread_data *, struct io_u *);
 extern void log_file(struct thread_data *, struct fio_file *, enum file_log_act);
@@ -107,12 +121,11 @@ extern void add_bw_sample(struct thread_data *, enum fio_ddir, unsigned int,
 extern void add_iops_sample(struct thread_data *, enum fio_ddir, struct timeval *);
 extern void init_disk_util(struct thread_data *);
 extern void update_rusage_stat(struct thread_data *);
-extern void update_io_ticks(void);
-extern void setup_log(struct io_log **, unsigned long);
+extern void setup_log(struct io_log **, unsigned long, int);
 extern void finish_log(struct thread_data *, struct io_log *, const char *);
 extern void finish_log_named(struct thread_data *, struct io_log *, const char *, const char *);
 extern void __finish_log(struct io_log *, const char *);
-extern struct io_log *agg_io_log[2];
+extern struct io_log *agg_io_log[DDIR_RWDIR_CNT];
 extern int write_bw_log;
 extern void add_agg_sample(unsigned long, enum fio_ddir, unsigned int);
 

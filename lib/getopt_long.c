@@ -16,8 +16,9 @@
 
 #include "getopt.h"
 
-char *optarg;
-int optind, opterr, optopt;
+char *optarg = NULL;
+int optind = 0, opterr = 0, optopt = 0;
+
 static struct getopt_private_state {
 	const char *optptr;
 	const char *last_optstring;
@@ -44,6 +45,8 @@ int getopt_long_only(int argc, char *const *argv, const char *optstring,
 	const char *carg;
 	const char *osptr;
 	int opt;
+
+	optarg = NULL;
 
 	/* getopt() relies on a number of different global state
 	   variables, which can make this really confusing if there is

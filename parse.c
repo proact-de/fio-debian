@@ -10,13 +10,15 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <math.h>
+#include <float.h>
 
 #include "parse.h"
 #include "debug.h"
 #include "options.h"
+#include "minmax.h"
+#include "lib/ieee754.h"
 
-static struct fio_option *fio_options;
-extern unsigned int fio_get_kb_base(void *);
+static struct fio_option *__fio_options;
 
 static int vp_cmp(const void *p1, const void *p2)
 {
@@ -47,15 +49,15 @@ static void posval_sort(struct fio_option *o, struct value_pair *vpmap)
 static void show_option_range(struct fio_option *o,
 				int (*logger)(const char *format, ...))
 {
-	if (o->type == FIO_OPT_FLOAT_LIST){
-		if (isnan(o->minfp) && isnan(o->maxfp))
+	if (o->type == FIO_OPT_FLOAT_LIST) {
+		if (o->minfp == DBL_MIN && o->maxfp == DBL_MAX)
 			return;
 
 		logger("%20s: min=%f", "range", o->minfp);
-		if (!isnan(o->maxfp))
+		if (o->maxfp != DBL_MAX)
 			logger(", max=%f", o->maxfp);
 		logger("\n");
-	} else {
+	} else if (!o->posval[0].ival) {
 		if (!o->minval && !o->maxval)
 			return;
 
@@ -137,6 +139,19 @@ static unsigned long get_mult_time(char c)
 	}
 }
 
+static int is_separator(char c)
+{
+	switch (c) {
+	case ':':
+	case '-':
+	case ',':
+	case '/':
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 static unsigned long long __get_mult_bytes(const char *p, void *data,
 					   int *percent)
 {
@@ -150,35 +165,40 @@ static unsigned long long __get_mult_bytes(const char *p, void *data,
 
 	c = strdup(p);
 
-	for (i = 0; i < strlen(c); i++)
+	for (i = 0; i < strlen(c); i++) {
 		c[i] = tolower(c[i]);
+		if (is_separator(c[i])) {
+			c[i] = '\0';
+			break;
+		}
+	}
 
-	if (!strcmp("pib", c)) {
+	if (!strncmp("pib", c, 3)) {
 		pow = 5;
 		mult = 1000;
-	} else if (!strcmp("tib", c)) {
+	} else if (!strncmp("tib", c, 3)) {
 		pow = 4;
 		mult = 1000;
-	} else if (!strcmp("gib", c)) {
+	} else if (!strncmp("gib", c, 3)) {
 		pow = 3;
 		mult = 1000;
-	} else if (!strcmp("mib", c)) {
+	} else if (!strncmp("mib", c, 3)) {
 		pow = 2;
 		mult = 1000;
-	} else if (!strcmp("kib", c)) {
+	} else if (!strncmp("kib", c, 3)) {
 		pow = 1;
 		mult = 1000;
-	} else if (!strcmp("p", c) || !strcmp("pb", c))
+	} else if (!strncmp("p", c, 1) || !strncmp("pb", c, 2))
 		pow = 5;
-	else if (!strcmp("t", c) || !strcmp("tb", c))
+	else if (!strncmp("t", c, 1) || !strncmp("tb", c, 2))
 		pow = 4;
-	else if (!strcmp("g", c) || !strcmp("gb", c))
+	else if (!strncmp("g", c, 1) || !strncmp("gb", c, 2))
 		pow = 3;
-	else if (!strcmp("m", c) || !strcmp("mb", c))
+	else if (!strncmp("m", c, 1) || !strncmp("mb", c, 2))
 		pow = 2;
-	else if (!strcmp("k", c) || !strcmp("kb", c))
+	else if (!strncmp("k", c, 1) || !strncmp("kb", c, 2))
 		pow = 1;
-	else if (!strcmp("%", c)) {
+	else if (!strncmp("%", c, 1)) {
 		*percent = 1;
 		free(c);
 		return ret;
@@ -220,7 +240,7 @@ static unsigned long long get_mult_bytes(const char *str, int len, void *data,
 /*
  * Convert string into a floating number. Return 1 for success and 0 otherwise.
  */
-static int str_to_float(const char *str, double *val)
+int str_to_float(const char *str, double *val)
 {
 	return (1 == sscanf(str, "%lf", val));
 }
@@ -260,12 +280,12 @@ int str_to_decimal(const char *str, long long *val, int kilo, void *data)
 	return 0;
 }
 
-static int check_str_bytes(const char *p, long long *val, void *data)
+int check_str_bytes(const char *p, long long *val, void *data)
 {
 	return str_to_decimal(p, val, 1, data);
 }
 
-static int check_str_time(const char *p, long long *val)
+int check_str_time(const char *p, long long *val)
 {
 	return str_to_decimal(p, val, 0, NULL);
 }
@@ -343,6 +363,11 @@ static int opt_len(const char *str)
 	return (int)(postfix - str);
 }
 
+static int str_match_len(const struct value_pair *vp, const char *str)
+{
+	return max(strlen(vp->ival), opt_len(str));
+}
+
 #define val_store(ptr, val, off, or, data)		\
 	do {						\
 		ptr = td_var((data), (off));		\
@@ -356,11 +381,11 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 			   int first, int more, int curr)
 {
 	int il, *ilp;
-	double* flp;
+	fio_fp64_t *flp;
 	long long ull, *ullp;
 	long ul1, ul2;
 	double uf;
-	char **cp;
+	char **cp = NULL;
 	int ret = 0, is_time = 0;
 	const struct value_pair *vp;
 	struct value_pair posval[PARSE_MAX_VP];
@@ -387,7 +412,7 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 			if (!vp->ival || vp->ival[0] == '\0')
 				continue;
 			all_skipped = 0;
-			if (!strncmp(vp->ival, ptr, opt_len(ptr))) {
+			if (!strncmp(vp->ival, ptr, str_match_len(vp, ptr))) {
 				ret = 0;
 				if (o->roff1) {
 					if (vp->or)
@@ -414,24 +439,51 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 	case FIO_OPT_INT:
 	case FIO_OPT_STR_VAL: {
 		fio_opt_str_val_fn *fn = o->cb;
+		char tmp[128], *p;
+
+		strncpy(tmp, ptr, sizeof(tmp) - 1);
+		p = strchr(tmp, ',');
+		if (p)
+			*p = '\0';
 
 		if (is_time)
-			ret = check_str_time(ptr, &ull);
+			ret = check_str_time(tmp, &ull);
 		else
-			ret = check_str_bytes(ptr, &ull, data);
+			ret = check_str_bytes(tmp, &ull, data);
+
+		dprint(FD_PARSE, "  ret=%d, out=%llu\n", ret, ull);
 
 		if (ret)
 			break;
 
 		if (o->maxval && ull > o->maxval) {
-			log_err("max value out of range: %lld"
-					" (%d max)\n", ull, o->maxval);
+			log_err("max value out of range: %llu"
+					" (%u max)\n", ull, o->maxval);
 			return 1;
 		}
 		if (o->minval && ull < o->minval) {
-			log_err("min value out of range: %lld"
-					" (%d min)\n", ull, o->minval);
+			log_err("min value out of range: %llu"
+					" (%u min)\n", ull, o->minval);
 			return 1;
+		}
+		if (o->posval[0].ival) {
+			posval_sort(o, posval);
+
+			ret = 1;
+			for (i = 0; i < PARSE_MAX_VP; i++) {
+				vp = &posval[i];
+				if (!vp->ival || vp->ival[0] == '\0')
+					continue;
+				if (vp->oval == ull) {
+					ret = 0;
+					break;
+				}
+			}
+			if (ret) {
+				log_err("fio: value %llu not allowed:\n", ull);
+				show_option_values(o);
+				return 1;
+			}
 		}
 
 		if (fn)
@@ -444,11 +496,31 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 					else
 						val_store(ilp, ull, o->off1, 0, data);
 				}
-				if (!more) {
+				if (curr == 1) {
 					if (o->roff2)
 						*(unsigned int *) o->roff2 = ull;
 					else if (o->off2)
 						val_store(ilp, ull, o->off2, 0, data);
+				}
+				if (curr == 2) {
+					if (o->roff3)
+						*(unsigned int *) o->roff3 = ull;
+					else if (o->off3)
+						val_store(ilp, ull, o->off3, 0, data);
+				}
+				if (!more) {
+					if (curr < 1) {
+						if (o->roff2)
+							*(unsigned int *) o->roff2 = ull;
+						else if (o->off2)
+							val_store(ilp, ull, o->off2, 0, data);
+					}
+					if (curr < 2) {
+						if (o->roff3)
+							*(unsigned int *) o->roff3 = ull;
+						else if (o->off3)
+							val_store(ilp, ull, o->off3, 0, data);
+					}
 				}
 			} else {
 				if (first) {
@@ -468,34 +540,62 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 		break;
 	}
 	case FIO_OPT_FLOAT_LIST: {
+		char *cp2;
 
 		if (first) {
-			ul2 = 1;
+			/*
+			** Initialize precision to 0 and zero out list
+			** in case specified list is shorter than default
+			*/
+			ul2 = 0;
 			ilp = td_var(data, o->off2);
 			*ilp = ul2;
+
+			flp = td_var(data, o->off1);
+			for(i = 0; i < o->maxlen; i++)
+				flp[i].u.f = 0.0;
 		}
 		if (curr >= o->maxlen) {
 			log_err("the list exceeding max length %d\n",
 					o->maxlen);
 			return 1;
 		}
-		if(!str_to_float(ptr, &uf)){
+		if (!str_to_float(ptr, &uf)) {
 			log_err("not a floating point value: %s\n", ptr);
 			return 1;
 		}
-		if (!isnan(o->maxfp) && uf > o->maxfp) {
+		if (uf > o->maxfp) {
 			log_err("value out of range: %f"
 				" (range max: %f)\n", uf, o->maxfp);
 			return 1;
 		}
-		if (!isnan(o->minfp) && uf < o->minfp) {
+		if (uf < o->minfp) {
 			log_err("value out of range: %f"
 				" (range min: %f)\n", uf, o->minfp);
 			return 1;
 		}
 
 		flp = td_var(data, o->off1);
-		flp[curr] = uf;
+		flp[curr].u.f = uf;
+
+		dprint(FD_PARSE, "  out=%f\n", uf);
+
+		/*
+		** Calculate precision for output by counting
+		** number of digits after period. Find first
+		** period in entire remaining list each time
+		*/
+		cp2 = strchr(ptr, '.');
+		if (cp2 != NULL) {
+			int len = 0;
+
+			while (*++cp2 != '\0' && *cp2 >= '0' && *cp2 <= '9')
+				len++;
+
+			ilp = td_var(data, o->off2);
+			if (len > *ilp)
+				*ilp = len;
+		}
 
 		break;
 	}
@@ -509,8 +609,6 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 				cp = td_var(data, o->off1);
 
 			*cp = strdup(ptr);
-		} else {
-			cp = NULL;
 		}
 
 		if (fn)
@@ -524,7 +622,7 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 				if (!vp->ival || vp->ival[0] == '\0')
 					continue;
 				all_skipped = 0;
-				if (!strncmp(vp->ival, ptr, opt_len(ptr))) {
+				if (!strncmp(vp->ival, ptr, str_match_len(vp, ptr))) {
 					char *rest;
 
 					ret = 0;
@@ -598,12 +696,43 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 				else
 					val_store(ilp, ul2, o->off2, 0, data);
 			}
-			if (o->roff3 && o->roff4) {
-				*(unsigned int *) o->roff3 = ul1;
-				*(unsigned int *) o->roff4 = ul2;
-			} else if (o->off3 && o->off4) {
-				val_store(ilp, ul1, o->off3, 0, data);
-				val_store(ilp, ul2, o->off4, 0, data);
+			if (curr == 1) {
+				if (o->roff3 && o->roff4) {
+					*(unsigned int *) o->roff3 = ul1;
+					*(unsigned int *) o->roff4 = ul2;
+				} else if (o->off3 && o->off4) {
+					val_store(ilp, ul1, o->off3, 0, data);
+					val_store(ilp, ul2, o->off4, 0, data);
+				}
+			}
+			if (curr == 2) {
+				if (o->roff5 && o->roff6) {
+					*(unsigned int *) o->roff5 = ul1;
+					*(unsigned int *) o->roff6 = ul2;
+				} else if (o->off5 && o->off6) {
+					val_store(ilp, ul1, o->off5, 0, data);
+					val_store(ilp, ul2, o->off6, 0, data);
+				}
+			}
+			if (!more) {
+				if (curr < 1) {
+					if (o->roff3 && o->roff4) {
+						*(unsigned int *) o->roff3 = ul1;
+						*(unsigned int *) o->roff4 = ul2;
+					} else if (o->off3 && o->off4) {
+						val_store(ilp, ul1, o->off3, 0, data);
+						val_store(ilp, ul2, o->off4, 0, data);
+					}
+				}
+				if (curr < 2) {
+					if (o->roff5 && o->roff6) {
+						*(unsigned int *) o->roff5 = ul1;
+						*(unsigned int *) o->roff6 = ul2;
+					} else if (o->off5 && o->off6) {
+						val_store(ilp, ul1, o->off5, 0, data);
+						val_store(ilp, ul2, o->off6, 0, data);
+					}
+				}
 			}
 		}
 
@@ -619,6 +748,8 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 			ret = 1;
 		else
 			il = 1;
+
+		dprint(FD_PARSE, "  ret=%d, out=%d\n", ret, il);
 
 		if (ret)
 			break;
@@ -707,7 +838,7 @@ static int handle_option(struct fio_option *o, const char *__ptr, void *data)
 			ptr2 = strchr(ptr, ',');
 			if (ptr2 && *(ptr2 + 1) == '\0')
 				*ptr2 = '\0';
-			if (o->type != FIO_OPT_STR_MULTI) {
+			if (o->type != FIO_OPT_STR_MULTI && o->type != FIO_OPT_RANGE) {
 				if (!ptr2)
 					ptr2 = strchr(ptr, ':');
 				if (!ptr2)
@@ -770,14 +901,14 @@ static int opt_cmp(const void *p1, const void *p2)
 
 	if (*(char **)p1) {
 		s = strdup(*((char **) p1));
-		o = get_option(s, fio_options, &foo);
+		o = get_option(s, __fio_options, &foo);
 		if (o)
 			prio1 = o->prio;
 		free(s);
 	}
 	if (*(char **)p2) {
 		s = strdup(*((char **) p2));
-		o = get_option(s, fio_options, &foo);
+		o = get_option(s, __fio_options, &foo);
 		if (o)
 			prio2 = o->prio;
 		free(s);
@@ -788,9 +919,9 @@ static int opt_cmp(const void *p1, const void *p2)
 
 void sort_options(char **opts, struct fio_option *options, int num_opts)
 {
-	fio_options = options;
+	__fio_options = options;
 	qsort(opts, num_opts, sizeof(char *), opt_cmp);
-	fio_options = NULL;
+	__fio_options = NULL;
 }
 
 int parse_cmd_option(const char *opt, const char *val,
@@ -833,9 +964,8 @@ int parse_option(char *opt, const char *input,
 		return 1;
 	}
 
-	if (!handle_option(*o, post, data)) {
+	if (!handle_option(*o, post, data))
 		return 0;
-	}
 
 	log_err("fio: failed parsing %s\n", input);
 	return 1;
@@ -956,6 +1086,8 @@ int show_cmd_help(struct fio_option *options, const char *name)
 			continue;
 		if (!exec_profile && o->prof_name)
 			continue;
+		if (exec_profile && !(o->prof_name && !strcmp(exec_profile, o->prof_name)))
+			continue;
 
 		if (name) {
 			if (!strcmp(name, o->name) ||
@@ -1030,9 +1162,13 @@ void option_init(struct fio_option *o)
 		o->minval = 0;
 		o->maxval = 1;
 	}
+	if (o->type == FIO_OPT_INT) {
+		if (!o->maxval)
+			o->maxval = UINT_MAX;
+	}
 	if (o->type == FIO_OPT_FLOAT_LIST) {
-		o->minfp = NAN;
-		o->maxfp = NAN;
+		o->minfp = DBL_MIN;
+		o->maxfp = DBL_MAX;
 	}
 	if (o->type == FIO_OPT_STR_SET && o->def) {
 		log_err("Option %s: string set option with"
@@ -1040,6 +1176,11 @@ void option_init(struct fio_option *o)
 	}
 	if (!o->cb && (!o->off1 && !o->roff1))
 		log_err("Option %s: neither cb nor offset given\n", o->name);
+	if (!o->category) {
+		log_info("Option %s: no category defined. Setting to misc\n", o->name);
+		o->category = FIO_OPT_C_GENERAL;
+		o->group = FIO_OPT_G_INVALID;
+	}
 	if (o->type == FIO_OPT_STR || o->type == FIO_OPT_STR_STORE ||
 	    o->type == FIO_OPT_STR_MULTI)
 		return;
@@ -1059,8 +1200,11 @@ void options_init(struct fio_option *options)
 
 	dprint(FD_PARSE, "init options\n");
 
-	for (o = &options[0]; o->name; o++)
+	for (o = &options[0]; o->name; o++) {
 		option_init(o);
+		if (o->inverse)
+			o->inv_opt = find_option(options, o->inverse);
+	}
 }
 
 void options_free(struct fio_option *options, void *data)

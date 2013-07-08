@@ -26,86 +26,26 @@
 #include <time.h>
 
 #include "fio.h"
-#include "hash.h"
 #include "smalloc.h"
-#include "verify.h"
-#include "trim.h"
-#include "diskutil.h"
-#include "profile.h"
-#include "lib/rand.h"
-#include "memalign.h"
-#include "server.h"
-
-uintptr_t page_mask;
-uintptr_t page_size;
-
-static int endian_check(void)
-{
-	union {
-		uint8_t c[8];
-		uint64_t v;
-	} u;
-	int le = 0, be = 0;
-
-	u.v = 0x12;
-	if (u.c[7] == 0x12)
-		be = 1;
-	else if (u.c[0] == 0x12)
-		le = 1;
-
-#if defined(FIO_LITTLE_ENDIAN)
-	if (be)
-		return 1;
-#elif defined(FIO_BIG_ENDIAN)
-	if (le)
-		return 1;
-#else
-	return 1;
-#endif
-
-	if (!le && !be)
-		return 1;
-
-	return 0;
-}
 
 int main(int argc, char *argv[], char *envp[])
 {
-	long ps;
-
-	if (endian_check()) {
-		log_err("fio: endianness settings appear wrong.\n");
-		log_err("fio: please report this to fio@vger.kernel.org\n");
+	if (initialize_fio(envp))
 		return 1;
-	}
 
-	arch_init(envp);
-
-	sinit();
-
-	/*
-	 * We need locale for number printing, if it isn't set then just
-	 * go with the US format.
-	 */
-	if (!getenv("LC_NUMERIC"))
-		setlocale(LC_NUMERIC, "en_US");
-
-	ps = sysconf(_SC_PAGESIZE);
-	if (ps < 0) {
-		log_err("Failed to get page size\n");
-		return 1;
-	}
-
-	page_size = ps;
-	page_mask = ps - 1;
-
-	fio_keywords_init();
+#if !defined(CONFIG_GETTIMEOFDAY) && !defined(CONFIG_CLOCK_GETTIME)
+#error "No available clock source!"
+#endif
 
 	if (parse_options(argc, argv))
 		return 1;
 
-	if (nr_clients)
-		return fio_handle_clients();
-	else
+	fio_time_init();
+
+	if (nr_clients) {
+		if (fio_start_all_clients())
+			return 1;
+		return fio_handle_clients(&fio_client_ops);
+	} else
 		return fio_backend();
 }

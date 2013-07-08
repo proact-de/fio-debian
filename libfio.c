@@ -25,7 +25,12 @@
 #include <string.h>
 #include <sys/types.h>
 #include <signal.h>
+#include <stdint.h>
+#include <locale.h>
+
 #include "fio.h"
+#include "smalloc.h"
+#include "os/os.h"
 
 /*
  * Just expose an empty list, if the OS does not support disk util stats
@@ -35,6 +40,9 @@ FLIST_HEAD(disk_list);
 #endif
 
 unsigned long arch_flags = 0;
+
+uintptr_t page_mask = 0;
+uintptr_t page_size = 0;
 
 static const char *fio_os_strings[os_nr] = {
 	"Invalid",
@@ -66,20 +74,26 @@ static const char *fio_arch_strings[arch_nr] = {
 
 static void reset_io_counters(struct thread_data *td)
 {
-	td->stat_io_bytes[0] = td->stat_io_bytes[1] = 0;
-	td->this_io_bytes[0] = td->this_io_bytes[1] = 0;
-	td->stat_io_blocks[0] = td->stat_io_blocks[1] = 0;
-	td->this_io_blocks[0] = td->this_io_blocks[1] = 0;
+	int ddir;
+
+	for (ddir = 0; ddir < DDIR_RWDIR_CNT; ddir++) {
+		td->stat_io_bytes[ddir] = 0;
+		td->this_io_bytes[ddir] = 0;
+		td->stat_io_blocks[ddir] = 0;
+		td->this_io_blocks[ddir] = 0;
+		td->rate_bytes[ddir] = 0;
+		td->rate_blocks[ddir] = 0;
+		td->io_issues[ddir] = 0;
+	}
 	td->zone_bytes = 0;
-	td->rate_bytes[0] = td->rate_bytes[1] = 0;
-	td->rate_blocks[0] = td->rate_blocks[1] = 0;
 
 	td->last_was_sync = 0;
+	td->rwmix_issues = 0;
 
 	/*
 	 * reset file done count if we are to start over
 	 */
-	if (td->o.time_based || td->o.loops)
+	if (td->o.time_based || td->o.loops || td->o.do_verify)
 		td->nr_done_files = 0;
 }
 
@@ -107,16 +121,16 @@ void reset_all_stats(struct thread_data *td)
 
 	reset_io_counters(td);
 
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
 		td->io_bytes[i] = 0;
 		td->io_blocks[i] = 0;
 		td->io_issues[i] = 0;
 		td->ts.total_io_u[i] = 0;
+		td->ts.runtime[i] = 0;
+		td->rwmix_issues = 0;
 	}
 
 	fio_gettime(&tv, NULL);
-	td->ts.runtime[0] = 0;
-	td->ts.runtime[1] = 0;
 	memcpy(&td->epoch, &tv, sizeof(tv));
 	memcpy(&td->start, &tv, sizeof(tv));
 }
@@ -125,8 +139,7 @@ void reset_fio_state(void)
 {
 	groupid = 0;
 	thread_number = 0;
-	nr_process = 0;
-	nr_thread = 0;
+	stat_number = 0;
 	done_secs = 0;
 }
 
@@ -159,6 +172,7 @@ void td_set_runstate(struct thread_data *td, int runstate)
 void fio_terminate_threads(int group_id)
 {
 	struct thread_data *td;
+	pid_t pid = getpid();
 	int i;
 
 	dprint(FD_PROCESS, "terminate group_id=%d\n", group_id);
@@ -173,18 +187,84 @@ void fio_terminate_threads(int group_id)
 			/*
 			 * if the thread is running, just let it exit
 			 */
-			if (!td->pid)
+			if (!td->pid || pid == td->pid)
 				continue;
 			else if (td->runstate < TD_RAMP)
 				kill(td->pid, SIGTERM);
 			else {
 				struct ioengine_ops *ops = td->io_ops;
 
-				if (ops && (ops->flags & FIO_SIGTERM))
-					kill(td->pid, SIGTERM);
+				if (ops && ops->terminate)
+					ops->terminate(td);
 			}
 		}
 	}
 }
 
+static int endian_check(void)
+{
+	union {
+		uint8_t c[8];
+		uint64_t v;
+	} u;
+	int le = 0, be = 0;
 
+	u.v = 0x12;
+	if (u.c[7] == 0x12)
+		be = 1;
+	else if (u.c[0] == 0x12)
+		le = 1;
+
+#if defined(CONFIG_LITTLE_ENDIAN)
+	if (be)
+		return 1;
+#elif defined(CONFIG_BIG_ENDIAN)
+	if (le)
+		return 1;
+#else
+	return 1;
+#endif
+
+	if (!le && !be)
+		return 1;
+
+	return 0;
+}
+
+int initialize_fio(char *envp[])
+{
+	long ps;
+
+	if (endian_check()) {
+		log_err("fio: endianness settings appear wrong.\n");
+		log_err("fio: please report this to fio@vger.kernel.org\n");
+		return 1;
+	}
+
+#if !defined(CONFIG_GETTIMEOFDAY) && !defined(CONFIG_CLOCK_GETTIME)
+#error "No available clock source!"
+#endif
+
+	arch_init(envp);
+
+	sinit();
+
+	/*
+	 * We need locale for number printing, if it isn't set then just
+	 * go with the US format.
+	 */
+	if (!getenv("LC_NUMERIC"))
+		setlocale(LC_NUMERIC, "en_US");
+
+	ps = sysconf(_SC_PAGESIZE);
+	if (ps < 0) {
+		log_err("Failed to get page size\n");
+		return 1;
+	}
+
+	page_size = ps;
+	page_mask = ps - 1;
+
+	fio_keywords_init();
+	return 0;
+}
