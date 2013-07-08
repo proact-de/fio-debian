@@ -1,12 +1,6 @@
 #ifndef ARCH_H
 #define ARCH_H
 
-#ifdef __WORDSIZE
-#define BITS_PER_LONG	__WORDSIZE
-#else
-#define BITS_PER_LONG	32
-#endif
-
 enum {
 	arch_x86_64 = 1,
 	arch_i386,
@@ -19,6 +13,7 @@ enum {
 	arch_arm,
 	arch_sh,
 	arch_hppa,
+	arch_mips,
 
 	arch_generic,
 
@@ -31,6 +26,8 @@ enum {
 	ARCH_FLAG_3	= 1 << 2,
 	ARCH_FLAG_4	= 1 << 3,
 };
+
+extern unsigned long arch_flags;
 
 #if defined(__i386__)
 #include "arch-x86.h"

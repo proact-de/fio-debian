@@ -1,13 +1,17 @@
 #ifndef FIO_STAT_H
 #define FIO_STAT_H
 
+#include "iolog.h"
+
 struct group_run_stats {
-	uint64_t max_run[2], min_run[2];
-	uint64_t max_bw[2], min_bw[2];
-	uint64_t io_kb[2];
-	uint64_t agg[2];
+	uint64_t max_run[DDIR_RWDIR_CNT], min_run[DDIR_RWDIR_CNT];
+	uint64_t max_bw[DDIR_RWDIR_CNT], min_bw[DDIR_RWDIR_CNT];
+	uint64_t io_kb[DDIR_RWDIR_CNT];
+	uint64_t agg[DDIR_RWDIR_CNT];
 	uint32_t kb_base;
+	uint32_t unit_base;
 	uint32_t groupid;
+	uint32_t unified_rw_rep;
 };
 
 /*
@@ -116,19 +120,21 @@ struct thread_stat {
 	char name[FIO_JOBNAME_SIZE];
 	char verror[FIO_VERROR_SIZE];
 	uint32_t error;
+	uint32_t thread_number;
 	uint32_t groupid;
 	uint32_t pid;
 	char description[FIO_JOBNAME_SIZE];
 	uint32_t members;
+	uint32_t unified_rw_rep;
 
 	/*
 	 * bandwidth and latency stats
 	 */
-	struct io_stat clat_stat[2];		/* completion latency */
-	struct io_stat slat_stat[2];		/* submission latency */
-	struct io_stat lat_stat[2];		/* total latency */
-	struct io_stat bw_stat[2];		/* bandwidth stats */
-	struct io_stat iops_stat[2];		/* IOPS stats */
+	struct io_stat clat_stat[DDIR_RWDIR_CNT]; /* completion latency */
+	struct io_stat slat_stat[DDIR_RWDIR_CNT]; /* submission latency */
+	struct io_stat lat_stat[DDIR_RWDIR_CNT]; /* total latency */
+	struct io_stat bw_stat[DDIR_RWDIR_CNT]; /* bandwidth stats */
+	struct io_stat iops_stat[DDIR_RWDIR_CNT]; /* IOPS stats */
 
 	/*
 	 * fio system usage accounting
@@ -142,6 +148,7 @@ struct thread_stat {
 	 * IO depth and latency stats
 	 */
 	uint64_t clat_percentiles;
+	uint64_t percentile_precision;
 	fio_fp64_t percentile_list[FIO_IO_U_LIST_MAX_LEN];
 
 	uint32_t io_u_map[FIO_IO_U_MAP_NR];
@@ -149,14 +156,14 @@ struct thread_stat {
 	uint32_t io_u_complete[FIO_IO_U_MAP_NR];
 	uint32_t io_u_lat_u[FIO_IO_U_LAT_U_NR];
 	uint32_t io_u_lat_m[FIO_IO_U_LAT_M_NR];
-	uint32_t io_u_plat[2][FIO_IO_U_PLAT_NR];
+	uint32_t io_u_plat[DDIR_RWDIR_CNT][FIO_IO_U_PLAT_NR];
 	uint64_t total_io_u[3];
 	uint64_t short_io_u[3];
 	uint64_t total_submit;
 	uint64_t total_complete;
 
-	uint64_t io_bytes[2];
-	uint64_t runtime[2];
+	uint64_t io_bytes[DDIR_RWDIR_CNT];
+	uint64_t runtime[DDIR_RWDIR_CNT];
 	uint64_t total_run_time;
 
 	/*
@@ -167,27 +174,33 @@ struct thread_stat {
 	uint32_t first_error;
 
 	uint32_t kb_base;
+	uint32_t unit_base;
 };
 
 struct jobs_eta {
 	uint32_t nr_running;
 	uint32_t nr_ramp;
 	uint32_t nr_pending;
+	uint32_t nr_setting_up;
 	uint32_t files_open;
-	uint32_t m_rate, t_rate;
-	uint32_t m_iops, t_iops;
-	uint32_t rate[2];
-	uint32_t iops[2];
+	uint32_t m_rate[DDIR_RWDIR_CNT], t_rate[DDIR_RWDIR_CNT];
+	uint32_t m_iops[DDIR_RWDIR_CNT], t_iops[DDIR_RWDIR_CNT];
+	uint32_t rate[DDIR_RWDIR_CNT];
+	uint32_t iops[DDIR_RWDIR_CNT];
 	uint64_t elapsed_sec;
 	uint64_t eta_sec;
 	uint32_t is_pow2;
+	uint32_t unit_base;
 
 	/*
 	 * Network 'copy' of run_str[]
 	 */
 	uint32_t nr_threads;
-	uint8_t run_str[0];
+	uint8_t run_str[];
 };
+
+extern void stat_init(void);
+extern void stat_exit(void);
 
 extern void show_thread_status(struct thread_stat *ts, struct group_run_stats *rs);
 extern void show_group_stats(struct group_run_stats *rs);
@@ -195,9 +208,30 @@ extern int calc_thread_status(struct jobs_eta *je, int force);
 extern void display_thread_status(struct jobs_eta *je);
 extern void show_run_stats(void);
 extern void show_running_run_stats(void);
+extern void check_for_running_stats(void);
 extern void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src, int nr);
 extern void sum_group_stats(struct group_run_stats *dst, struct group_run_stats *src);
 extern void init_thread_stat(struct thread_stat *ts);
 extern void init_group_run_stat(struct group_run_stats *gs);
+extern void eta_to_str(char *str, unsigned long eta_sec);
+extern int calc_lat(struct io_stat *is, unsigned long *min, unsigned long *max, double *mean, double *dev);
+extern unsigned int calc_clat_percentiles(unsigned int *io_u_plat, unsigned long nr, fio_fp64_t *plist, unsigned int **output, unsigned int *maxv, unsigned int *minv);
+extern void stat_calc_lat_m(struct thread_stat *ts, double *io_u_lat);
+extern void stat_calc_lat_u(struct thread_stat *ts, double *io_u_lat);
+extern void stat_calc_dist(unsigned int *map, unsigned long total, double *io_u_dist);
+
+static inline int usec_to_msec(unsigned long *min, unsigned long *max,
+			       double *mean, double *dev)
+{
+	if (*min > 1000 && *max > 1000 && *mean > 1000.0 && *dev > 1000.0) {
+		*min /= 1000;
+		*max /= 1000;
+		*mean /= 1000.0;
+		*dev /= 1000.0;
+		return 0;
+	}
+
+	return 1;
+}
 
 #endif

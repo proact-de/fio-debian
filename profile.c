@@ -30,8 +30,11 @@ int load_profile(const char *profile)
 
 	ops = find_profile(profile);
 	if (ops) {
-		ops->prep_cmd();
-		add_job_opts(ops->cmdline);
+		if (ops->prep_cmd()) {
+			log_err("fio: profile %s prep failed\n", profile);
+			return 1;
+		}
+		add_job_opts(ops->cmdline, FIO_CLIENT_TYPE_CLI);
 		return 0;
 	}
 
@@ -42,7 +45,7 @@ int load_profile(const char *profile)
 static int add_profile_options(struct profile_ops *ops)
 {
 	struct fio_option *o;
-	
+
 	if (!ops->options)
 		return 0;
 
@@ -93,8 +96,10 @@ void profile_add_hooks(struct thread_data *td)
 	if (!ops)
 		return;
 
-	if (ops->io_ops)
+	if (ops->io_ops) {
 		td->prof_io_ops = *ops->io_ops;
+		td->flags |= TD_F_PROFILE_OPS;
+	}
 }
 
 int profile_td_init(struct thread_data *td)

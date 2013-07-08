@@ -9,12 +9,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
+#include <libaio.h>
 
 #include "../fio.h"
-
-#ifdef FIO_HAVE_LIBAIO
-
-#define ev_to_iou(ev)	(struct io_u *) ((unsigned long) (ev)->obj)
 
 struct libaio_data {
 	io_context_t aio_ctx;
@@ -32,9 +29,12 @@ struct libaio_options {
 static struct fio_option options[] = {
 	{
 		.name	= "userspace_reap",
+		.lname	= "Libaio userspace reaping",
 		.type	= FIO_OPT_STR_SET,
 		.off1	= offsetof(struct libaio_options, userspace_reap),
 		.help	= "Use alternative user-space reap implementation",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_LIBAIO,
 	},
 	{
 		.name	= NULL,
@@ -62,7 +62,7 @@ static struct io_u *fio_libaio_event(struct thread_data *td, int event)
 	struct io_u *io_u;
 
 	ev = ld->aio_events + event;
-	io_u = ev_to_iou(ev);
+	io_u = container_of(ev->obj, struct io_u, iocb);
 
 	if (ev->res != io_u->xfer_buflen) {
 		if (ev->res > io_u->xfer_buflen)
@@ -255,11 +255,20 @@ static void fio_libaio_cleanup(struct thread_data *td)
 static int fio_libaio_init(struct thread_data *td)
 {
 	struct libaio_data *ld = malloc(sizeof(*ld));
-	int err;
+	struct libaio_options *o = td->eo;
+	int err = 0;
 
 	memset(ld, 0, sizeof(*ld));
 
-	err = io_queue_init(td->o.iodepth, &ld->aio_ctx);
+	/*
+	 * First try passing in 0 for queue depth, since we don't
+	 * care about the user ring. If that fails, the kernel is too old
+	 * and we need the right depth.
+	 */
+	if (!o->userspace_reap)
+		err = io_queue_init(INT_MAX, &ld->aio_ctx);
+	if (o->userspace_reap || err == -EINVAL)
+		err = io_queue_init(td->o.iodepth, &ld->aio_ctx);
 	if (err) {
 		td_verror(td, -err, "io_queue_init");
 		log_err("fio: check /proc/sys/fs/aio-max-nr\n");
@@ -296,27 +305,6 @@ static struct ioengine_ops ioengine = {
 	.options		= options,
 	.option_struct_size	= sizeof(struct libaio_options),
 };
-
-#else /* FIO_HAVE_LIBAIO */
-
-/*
- * When we have a proper configure system in place, we simply wont build
- * and install this io engine. For now install a crippled version that
- * just complains and fails to load.
- */
-static int fio_libaio_init(struct thread_data fio_unused *td)
-{
-	log_err("fio: libaio not available\n");
-	return 1;
-}
-
-static struct ioengine_ops ioengine = {
-	.name		= "libaio",
-	.version	= FIO_IOOPS_VERSION,
-	.init		= fio_libaio_init,
-};
-
-#endif
 
 static void fio_init fio_libaio_register(void)
 {

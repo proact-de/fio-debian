@@ -104,7 +104,9 @@ static struct ioengine_ops *dlopen_ioengine(struct thread_data *td,
 	 * Unlike the included modules, external engines should have a
 	 * non-static ioengine structure that we can reference.
 	 */
-	ops = dlsym(dlhandle, "ioengine");
+	ops = dlsym(dlhandle, engine_lib);
+	if (!ops)
+		ops = dlsym(dlhandle, "ioengine");
 	if (!ops) {
 		td_vmsg(td, -1, dlerror(), "dlsym");
 		dlclose(dlhandle);
@@ -234,7 +236,7 @@ int td_io_getevents(struct thread_data *td, unsigned int min, unsigned int max,
 out:
 	if (r >= 0) {
 		/*
- 		 * Reflect that our submitted requests were retrieved with
+		 * Reflect that our submitted requests were retrieved with
 		 * whatever OS async calls are in the underlying engine.
 		 */
 		td->io_u_in_flight -= r;
@@ -258,6 +260,11 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 
 	assert(fio_file_open(io_u->file));
 
+	/*
+	 * If using a write iolog, store this entry.
+	 */
+	log_io_u(td, io_u);
+
 	io_u->error = 0;
 	io_u->resid = 0;
 
@@ -273,12 +280,19 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 					sizeof(struct timeval));
 	}
 
-	if (ddir_rw(io_u->ddir))
-		td->io_issues[io_u->ddir]++;
+	if (ddir_rw(acct_ddir(io_u)))
+		td->io_issues[acct_ddir(io_u)]++;
 
 	ret = td->io_ops->queue(td, io_u);
 
 	unlock_file(td, io_u->file);
+
+	/*
+	 * If an error was seen and the io engine didn't propagate it
+	 * back to 'td', do so.
+	 */
+	if (io_u->error && !td->error)
+		td_verror(td, io_u->error, "td_io_queue");
 
 	/*
 	 * Add warning for O_DIRECT so that users have an easier time
@@ -293,7 +307,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 			 "support direct IO, or iomem_align= is bad.\n");
 	}
 
-	if (!td->io_ops->commit) {
+	if (!td->io_ops->commit || ddir_trim(io_u->ddir)) {
 		io_u_mark_submit(td, 1);
 		io_u_mark_complete(td, 1);
 	}
@@ -302,8 +316,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 		if (ddir_rw(io_u->ddir)) {
 			io_u_mark_depth(td, 1);
 			td->ts.total_io_u[io_u->ddir]++;
-		} else if (io_u->ddir == DDIR_TRIM)
-			td->ts.total_io_u[2]++;
+		}
 	} else if (ret == FIO_Q_QUEUED) {
 		int r;
 
@@ -360,14 +373,14 @@ int td_io_commit(struct thread_data *td)
 	if (!td->cur_depth || !td->io_u_queued)
 		return 0;
 
-	io_u_mark_depth(td, td->io_u_queued);	
+	io_u_mark_depth(td, td->io_u_queued);
 
 	if (td->io_ops->commit) {
 		ret = td->io_ops->commit(td);
 		if (ret)
 			td_verror(td, -ret, "io commit");
 	}
-	
+
 	/*
 	 * Reflect that events were submitted as async IO requests.
 	 */
@@ -396,7 +409,7 @@ int td_io_open_file(struct thread_data *td, struct fio_file *f)
 		return 1;
 	}
 
-	fio_file_reset(f);
+	fio_file_reset(td, f);
 	fio_file_set_open(f);
 	fio_file_clear_closing(f);
 	disk_util_inc(f->du);
@@ -469,7 +482,9 @@ int td_io_close_file(struct thread_data *td, struct fio_file *f)
 	fio_file_set_closing(f);
 
 	disk_util_dec(f->du);
-	unlock_file_all(td, f);
+
+	if (td->o.file_lock_mode != FILE_LOCK_NONE)
+		unlock_file_all(td, f);
 
 	return put_file(td, f);
 }
@@ -502,7 +517,7 @@ int do_io_u_sync(struct thread_data *td, struct io_u *io_u)
 	if (io_u->ddir == DDIR_SYNC) {
 		ret = fsync(io_u->file->fd);
 	} else if (io_u->ddir == DDIR_DATASYNC) {
-#ifdef FIO_HAVE_FDATASYNC
+#ifdef CONFIG_FDATASYNC
 		ret = fdatasync(io_u->file->fd);
 #else
 		ret = io_u->xfer_buflen;
@@ -532,7 +547,7 @@ int do_io_u_trim(struct thread_data *td, struct io_u *io_u)
 
 	ret = os_trim(f->fd, io_u->offset, io_u->xfer_buflen);
 	if (!ret)
-		return io_u->xfer_buflen;;
+		return io_u->xfer_buflen;
 
 	io_u->error = ret;
 	return 0;

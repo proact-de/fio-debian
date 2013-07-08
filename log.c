@@ -12,6 +12,7 @@ int log_valist(const char *str, va_list args)
 	size_t len;
 
 	len = vsnprintf(buffer, sizeof(buffer), str, args);
+	len = min(len, sizeof(buffer) - 1);
 
 	if (log_syslog)
 		syslog(LOG_INFO, "%s", buffer);
@@ -40,6 +41,7 @@ int log_local(const char *format, ...)
 	va_start(args, format);
 	len = vsnprintf(buffer, sizeof(buffer), format, args);
 	va_end(args);
+	len = min(len, sizeof(buffer) - 1);
 
 	if (log_syslog)
 		syslog(LOG_INFO, "%s", buffer);
@@ -58,14 +60,23 @@ int log_info(const char *format, ...)
 	va_start(args, format);
 	len = vsnprintf(buffer, sizeof(buffer), format, args);
 	va_end(args);
+	len = min(len, sizeof(buffer) - 1);
 
 	if (is_backend)
-		return fio_server_text_output(buffer, len);
+		return fio_server_text_output(FIO_LOG_INFO, buffer, len);
 	else if (log_syslog) {
 		syslog(LOG_INFO, "%s", buffer);
 		return len;
 	} else
 		return fwrite(buffer, len, 1, f_out);
+}
+
+int log_info_flush(void)
+{
+	if (is_backend || log_syslog)
+		return 0;
+
+	return fflush(f_out);
 }
 
 int log_err(const char *format, ...)
@@ -77,9 +88,10 @@ int log_err(const char *format, ...)
 	va_start(args, format);
 	len = vsnprintf(buffer, sizeof(buffer), format, args);
 	va_end(args);
+	len = min(len, sizeof(buffer) - 1);
 
 	if (is_backend)
-		return fio_server_text_output(buffer, len);
+		return fio_server_text_output(FIO_LOG_ERR, buffer, len);
 	else if (log_syslog) {
 		syslog(LOG_INFO, "%s", buffer);
 		return len;
@@ -92,4 +104,15 @@ int log_err(const char *format, ...)
 
 		return fwrite(buffer, len, 1, f_err);
 	}
+}
+
+const char *log_get_level(int level)
+{
+	static const char *levels[] = { "Unknown", "Debug", "Info", "Error",
+						"Unknown" };
+
+	if (level >= FIO_LOG_NR)
+		level = FIO_LOG_NR;
+
+	return levels[level];
 }

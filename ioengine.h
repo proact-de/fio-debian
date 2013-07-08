@@ -1,7 +1,21 @@
 #ifndef FIO_IOENGINE_H
 #define FIO_IOENGINE_H
 
-#define FIO_IOOPS_VERSION	13
+#include "compiler/compiler.h"
+#include "os/os.h"
+#include "log.h"
+#include "io_ddir.h"
+#include "debug.h"
+#include "file.h"
+
+#ifdef CONFIG_LIBAIO
+#include <libaio.h>
+#endif
+#ifdef CONFIG_GUASI
+#include <guasi.h>
+#endif
+
+#define FIO_IOOPS_VERSION	16
 
 enum {
 	IO_U_F_FREE		= 1 << 0,
@@ -18,39 +32,25 @@ enum {
  * The io unit
  */
 struct io_u {
-	union {
-#ifdef FIO_HAVE_LIBAIO
-		struct iocb iocb;
-#endif
-#ifdef FIO_HAVE_POSIXAIO
-		os_aiocb_t aiocb;
-#endif
-#ifdef FIO_HAVE_SGIO
-		struct sg_io_hdr hdr;
-#endif
-#ifdef FIO_HAVE_GUASI
-		guasi_req_t greq;
-#endif
-#ifdef FIO_HAVE_SOLARISAIO
-		aio_result_t resultp;
-#endif
-#ifdef FIO_HAVE_BINJECT
-		struct b_user_cmd buc;
-#endif
-#ifdef FIO_HAVE_RDMA
-		struct ibv_mr *mr;
-#endif
-		void *mmap_data;
-	};
 	struct timeval start_time;
 	struct timeval issue_time;
+
+	struct fio_file *file;
+	unsigned int flags;
+	enum fio_ddir ddir;
+
+	/*
+	 * For replay workloads, we may want to account as a different
+	 * IO type than what is being submitted.
+	 */
+	enum fio_ddir acct_ddir;
 
 	/*
 	 * Allocated/set buffer and length
 	 */
-	void *buf;
 	unsigned long buflen;
 	unsigned long long offset;
+	void *buf;
 
 	/*
 	 * Initial seed for generating the buffer contents
@@ -70,10 +70,33 @@ struct io_u {
 	 */
 	unsigned long buf_filled_len;
 
+	union {
+#ifdef CONFIG_LIBAIO
+		struct iocb iocb;
+#endif
+#ifdef CONFIG_POSIXAIO
+		os_aiocb_t aiocb;
+#endif
+#ifdef FIO_HAVE_SGIO
+		struct sg_io_hdr hdr;
+#endif
+#ifdef CONFIG_GUASI
+		guasi_req_t greq;
+#endif
+#ifdef CONFIG_SOLARISAIO
+		aio_result_t resultp;
+#endif
+#ifdef FIO_HAVE_BINJECT
+		struct b_user_cmd buc;
+#endif
+#ifdef CONFIG_RDMA
+		struct ibv_mr *mr;
+#endif
+		void *mmap_data;
+	};
+
 	unsigned int resid;
 	unsigned int error;
-
-	enum fio_ddir ddir;
 
 	/*
 	 * io engine private data
@@ -84,11 +107,7 @@ struct io_u {
 		void *engine_data;
 	};
 
-	unsigned int flags;
-
-	struct fio_file *file;
-
-	struct flist_head list;
+	struct flist_head verify_list;
 
 	/*
 	 * Callback for io completion
@@ -122,6 +141,9 @@ struct ioengine_ops {
 	int (*open_file)(struct thread_data *, struct fio_file *);
 	int (*close_file)(struct thread_data *, struct fio_file *);
 	int (*get_file_size)(struct thread_data *, struct fio_file *);
+	void (*terminate)(struct thread_data *);
+	int (*io_u_init)(struct thread_data *, struct io_u *);
+	void (*io_u_free)(struct thread_data *, struct io_u *);
 	int option_struct_size;
 	struct fio_option *options;
 	void *data;
@@ -136,10 +158,10 @@ enum fio_ioengine_flags {
 	FIO_NODISKUTIL  = 1 << 4,	/* diskutil can't handle filename */
 	FIO_UNIDIR	= 1 << 5,	/* engine is uni-directional */
 	FIO_NOIO	= 1 << 6,	/* thread does only pseudo IO */
-	FIO_SIGTERM	= 1 << 7,	/* needs SIGTERM to exit */
-	FIO_PIPEIO	= 1 << 8,	/* input/output no seekable */
-	FIO_BARRIER	= 1 << 9,	/* engine supports barriers */
-	FIO_MEMALIGN	= 1 << 10,	/* engine wants aligned memory */
+	FIO_PIPEIO	= 1 << 7,	/* input/output no seekable */
+	FIO_BARRIER	= 1 << 8,	/* engine supports barriers */
+	FIO_MEMALIGN	= 1 << 9,	/* engine wants aligned memory */
+	FIO_BIT_BASED	= 1 << 10,	/* engine uses a bit base (e.g. uses Kbit as opposed to KB) */
 };
 
 /*
@@ -166,17 +188,19 @@ extern int fio_show_ioengine_help(const char *engine);
 /*
  * io unit handling
  */
-#define queue_full(td)	flist_empty(&(td)->io_u_freelist)
+#define queue_full(td)	io_u_qempty(&(td)->io_u_freelist)
 extern struct io_u *__get_io_u(struct thread_data *);
 extern struct io_u *get_io_u(struct thread_data *);
 extern void put_io_u(struct thread_data *, struct io_u *);
 extern void clear_io_u(struct thread_data *, struct io_u *);
 extern void requeue_io_u(struct thread_data *, struct io_u **);
-extern int __must_check io_u_sync_complete(struct thread_data *, struct io_u *, unsigned long *);
-extern int __must_check io_u_queued_complete(struct thread_data *, int, unsigned long *);
+extern int __must_check io_u_sync_complete(struct thread_data *, struct io_u *, uint64_t *);
+extern int __must_check io_u_queued_complete(struct thread_data *, int, uint64_t *);
 extern void io_u_queued(struct thread_data *, struct io_u *);
+extern void io_u_quiesce(struct thread_data *);
 extern void io_u_log_error(struct thread_data *, struct io_u *);
 extern void io_u_mark_depth(struct thread_data *, unsigned int);
+extern void fill_io_buffer(struct thread_data *, void *, unsigned int, unsigned int);
 extern void io_u_fill_buffer(struct thread_data *td, struct io_u *, unsigned int, unsigned int);
 void io_u_mark_complete(struct thread_data *, unsigned int);
 void io_u_mark_submit(struct thread_data *, unsigned int);
@@ -202,5 +226,13 @@ static inline void dprint_io_u(struct io_u *io_u, const char *p)
 #else
 #define dprint_io_u(io_u, p)
 #endif
+
+static inline enum fio_ddir acct_ddir(struct io_u *io_u)
+{
+	if (io_u->acct_ddir != -1)
+		return io_u->acct_ddir;
+
+	return io_u->ddir;
+}
 
 #endif

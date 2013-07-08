@@ -10,9 +10,9 @@
 
 #include "fio.h"
 #include "verify.h"
-#include "smalloc.h"
 #include "trim.h"
 #include "lib/rand.h"
+#include "lib/hweight.h"
 
 #include "crc/md5.h"
 #include "crc/crc64.h"
@@ -308,14 +308,6 @@ static inline void *io_u_verify_off(struct verify_header *hdr, struct vcont *vc)
 	return vc->io_u->buf + vc->hdr_num * hdr->len + hdr_size(hdr);
 }
 
-static unsigned int hweight8(unsigned int w)
-{
-	unsigned int res = w - ((w >> 1) & 0x55);
-
-	res = (res & 0x33) + ((res >> 2) & 0x33);
-	return (res + (res >> 4)) & 0x0F;
-}
-
 static int verify_io_u_pattern(struct verify_header *hdr, struct vcont *vc)
 {
 	struct thread_data *td = vc->td;
@@ -603,8 +595,7 @@ int verify_io_u_async(struct thread_data *td, struct io_u *io_u)
 		td->cur_depth--;
 		io_u->flags &= ~IO_U_F_IN_CUR_DEPTH;
 	}
-	flist_del(&io_u->list);
-	flist_add_tail(&io_u->list, &td->verify_list);
+	flist_add_tail(&io_u->verify_list, &td->verify_list);
 	io_u->flags |= IO_U_F_FREE_DEF;
 	pthread_mutex_unlock(&td->io_u_lock);
 
@@ -690,6 +681,7 @@ int verify_io_u(struct thread_data *td, struct io_u *io_u)
 			.hdr_num	= hdr_num,
 			.td		= td,
 		};
+		unsigned int verify_type;
 
 		if (ret && td->o.verify_fatal)
 			break;
@@ -708,7 +700,12 @@ int verify_io_u(struct thread_data *td, struct io_u *io_u)
 			return EILSEQ;
 		}
 
-		switch (hdr->verify_type) {
+		if (td->o.verify != VERIFY_NONE)
+			verify_type = td->o.verify;
+		else
+			verify_type = hdr->verify_type;
+
+		switch (verify_type) {
 		case VERIFY_MD5:
 			ret = verify_io_u_md5(hdr, &vc);
 			break;
@@ -747,6 +744,10 @@ int verify_io_u(struct thread_data *td, struct io_u *io_u)
 			log_err("Bad verify type %u\n", hdr->verify_type);
 			ret = EINVAL;
 		}
+
+		if (ret && verify_type != hdr->verify_type)
+			log_err("fio: verify type mismatch (%u media, %u given)\n",
+					hdr->verify_type, verify_type);
 	}
 
 done:
@@ -1004,6 +1005,14 @@ int get_next_verify(struct thread_data *td, struct io_u *io_u)
 	return 1;
 }
 
+void fio_verify_init(struct thread_data *td)
+{
+	if (td->o.verify == VERIFY_CRC32C_INTEL ||
+	    td->o.verify == VERIFY_CRC32C) {
+		crc32c_intel_probe();
+	}
+}
+
 static void *verify_async_thread(void *data)
 {
 	struct thread_data *td = data;
@@ -1042,15 +1051,14 @@ static void *verify_async_thread(void *data)
 			continue;
 
 		while (!flist_empty(&list)) {
-			io_u = flist_entry(list.next, struct io_u, list);
-			flist_del_init(&io_u->list);
+			io_u = flist_entry(list.next, struct io_u, verify_list);
+			flist_del(&io_u->verify_list);
 
 			ret = verify_io_u(td, io_u);
 			put_io_u(td, io_u);
 			if (!ret)
 				continue;
-			if (td->o.continue_on_error & ERROR_TYPE_VERIFY &&
-			    td_non_fatal_error(ret)) {
+			if (td_non_fatal_error(td, ERROR_TYPE_VERIFY_BIT, ret)) {
 				update_error_count(td, ret);
 				td_clear_error(td);
 				ret = 0;

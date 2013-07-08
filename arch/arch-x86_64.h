@@ -1,6 +1,17 @@
 #ifndef ARCH_X86_64_h
 #define ARCH_X86_64_h
 
+static inline void do_cpuid(unsigned int *eax, unsigned int *ebx,
+			    unsigned int *ecx, unsigned int *edx)
+{
+	asm volatile("cpuid"
+		: "=a" (*eax), "=b" (*ebx), "=r" (*ecx), "=d" (*edx)
+		: "0" (*eax), "2" (*ecx)
+		: "memory");
+}
+
+#include "arch-x86-common.h"
+
 #define FIO_ARCH	(arch_x86_64)
 
 #ifndef __NR_ioprio_set
@@ -18,16 +29,14 @@
 #define __NR_sys_vmsplice	278
 #endif
 
-#ifndef __NR_async_exec
-#define __NR_async_exec		286
-#define __NR_async_wait		287
-#define __NR_umem_add		288
-#define __NR_async_thread	289
+#ifndef __NR_shmget
+#define __NR_shmget		 29
+#define __NR_shmat		 30
+#define __NR_shmctl		 31
+#define __NR_shmdt		 67
 #endif
 
 #define	FIO_HUGE_PAGE		2097152
-
-#define FIO_HAVE_SYSLET
 
 #define nop		__asm__ __volatile__("rep;nop": : :"memory")
 #define read_barrier()	__asm__ __volatile__("lfence":::"memory")

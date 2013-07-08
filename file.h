@@ -5,6 +5,9 @@
 #include "compiler/compiler.h"
 #include "io_ddir.h"
 #include "flist.h"
+#include "lib/zipf.h"
+#include "lib/axmap.h"
+#include "lib/lfsr.h"
 
 /*
  * The type of object we are working on
@@ -60,8 +63,8 @@ struct fio_file {
 	struct flist_head hash_list;
 	enum fio_filetype filetype;
 
-	void *file_data;
 	int fd;
+	int shadow_fd;
 #ifdef WIN32
 	HANDLE hFile;
 	HANDLE ioCP;
@@ -72,6 +75,7 @@ struct fio_file {
 	 */
 	char *file_name;
 	unsigned int major, minor;
+	int fileno;
 
 	void *mmap_ptr;
 	size_t mmap_sz;
@@ -80,36 +84,40 @@ struct fio_file {
 	/*
 	 * size of the file, offset into file, and io size from that offset
 	 */
-	unsigned long long real_file_size;
-	unsigned long long file_offset;
-	unsigned long long io_size;
+	uint64_t real_file_size;
+	uint64_t file_offset;
+	uint64_t io_size;
 
-	unsigned long long last_pos;
-	unsigned long long last_start;
+	uint64_t last_pos;
+	uint64_t last_start;
 
-	unsigned long long first_write;
-	unsigned long long last_write;
+	uint64_t first_write;
+	uint64_t last_write;
 
 	/*
 	 * For use by the io engine
 	 */
-	unsigned long long file_pos;
+	uint64_t engine_data;
 
 	/*
 	 * if io is protected by a semaphore, this is set
 	 */
-	struct fio_mutex *lock;
-	void *lock_owner;
-	unsigned int lock_batch;
-	enum fio_ddir lock_ddir;
+	union {
+		struct fio_mutex *lock;
+		struct fio_rwlock *rwlock;
+	};
 
 	/*
 	 * block map for random io
 	 */
-	unsigned long *file_map;
-	unsigned long num_maps;
-	unsigned long last_free_lookup;
-	unsigned failed_rands;
+	struct axmap *io_axmap;
+
+	struct fio_lfsr lfsr;
+
+	/*
+	 * Used for zipf random distribution
+	 */
+	struct zipf_state zipf;
 
 	int references;
 	enum fio_file_flags flags;
@@ -146,11 +154,13 @@ FILE_FLAG_FNS(partial_mmap);
 struct thread_data;
 extern void close_files(struct thread_data *);
 extern void close_and_free_files(struct thread_data *);
+extern uint64_t get_start_offset(struct thread_data *);
 extern int __must_check setup_files(struct thread_data *);
 extern int __must_check file_invalidate_cache(struct thread_data *, struct fio_file *);
 extern int __must_check generic_open_file(struct thread_data *, struct fio_file *);
 extern int __must_check generic_close_file(struct thread_data *, struct fio_file *);
 extern int __must_check generic_get_file_size(struct thread_data *, struct fio_file *);
+extern int __must_check file_lookup_open(struct fio_file *f, int flags);
 extern int __must_check pre_read_files(struct thread_data *);
 extern int add_file(struct thread_data *, const char *);
 extern int add_file_exclusive(struct thread_data *, const char *);
@@ -165,16 +175,6 @@ extern int init_random_map(struct thread_data *);
 extern void dup_files(struct thread_data *, struct thread_data *);
 extern int get_fileno(struct thread_data *, const char *);
 extern void free_release_files(struct thread_data *);
-
-static inline void fio_file_reset(struct fio_file *f)
-{
-	f->last_free_lookup = 0;
-	f->failed_rands = 0;
-	f->last_pos = f->file_offset;
-	f->last_start = -1ULL;
-	f->file_pos = -1ULL;
-	if (f->file_map)
-		memset(f->file_map, 0, f->num_maps * sizeof(unsigned long));
-}
+void fio_file_reset(struct thread_data *, struct fio_file *);
 
 #endif

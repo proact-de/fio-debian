@@ -20,8 +20,8 @@ list all available tracing options.
 .BI \-\-output \fR=\fPfilename
 Write output to \fIfilename\fR.
 .TP
-.BI \-\-timeout \fR=\fPtimeout
-Limit run time to \fItimeout\fR seconds.
+.BI \-\-runtime \fR=\fPruntime
+Limit run time to \fIruntime\fR seconds.
 .TP
 .B \-\-latency\-log
 Generate per-job latency logs.
@@ -50,12 +50,15 @@ List all commands defined by \fIioengine\fR, or print help for \fIcommand\fR def
 .BI \-\-showcmd \fR=\fPjobfile
 Convert \fIjobfile\fR to a set of command-line options.
 .TP
-.B \-\-readonly
-Enable read-only safety checks.
-.TP
 .BI \-\-eta \fR=\fPwhen
 Specifies when real-time ETA estimate should be printed.  \fIwhen\fR may
 be one of `always', `never' or `auto'.
+.TP
+.BI \-\-eta\-newline \fR=\fPtime
+Force an ETA newline for every `time` period passed.
+.TP
+.BI \-\-status\-interval \fR=\fPtime
+Report full output status every `time` period passed.
 .TP
 .BI \-\-readonly
 Turn on safety read-only checks, preventing any attempted write.
@@ -80,6 +83,9 @@ Background a fio server, writing the pid to the given pid file.
 .TP
 .BI \-\-client \fR=\fPhost
 Instead of running the jobs locally, send and run them on the given host.
+.TP
+.BI \-\-idle\-prof \fR=\fPoption
+Report cpu idleness on a system or percpu basis (\fIoption\fP=system,percpu) or run unit work calibration only (\fIoption\fP=calibrate).
 .SH "JOB FILE FORMAT"
 Job files are in `ini' format. They consist of one or more
 job definitions, which begin with a job name in square brackets and
@@ -151,6 +157,34 @@ a number of files by separating the names with a `:' character. `\-' is a
 reserved name, meaning stdin or stdout, depending on the read/write direction
 set.
 .TP
+.BI filename_format \fR=\fPstr
+If sharing multiple files between jobs, it is usually necessary to have
+fio generate the exact names that you want. By default, fio will name a file
+based on the default file format specification of
+\fBjobname.jobnumber.filenumber\fP. With this option, that can be
+customized. Fio will recognize and replace the following keywords in this
+string:
+.RS
+.RS
+.TP
+.B $jobname
+The name of the worker thread or process.
+.TP
+.B $jobnum
+The incremental number of the worker thread or process.
+.TP
+.B $filenum
+The incremental number of the file for that worker thread or process.
+.RE
+.P
+To have dependent jobs share a set of files, this option can be set to
+have fio generate filenames that are shared between the two. For instance,
+if \fBtestfiles.$filenum\fR is specified, file number 4 for any job will
+be named \fBtestfiles.4\fR. The default of \fB$jobname.$jobnum.$filenum\fR
+will be used if no other format specifier is given.
+.RE
+.P
+.TP
 .BI lockfile \fR=\fPstr
 Fio defaults to not locking any files before it does IO to them. If a file or
 file descriptor is shared, fio can serialize IO to that file to make the end
@@ -169,10 +203,6 @@ Only one thread or process may do IO at the time, excluding all others.
 Read-write locking on the file. Many readers may access the file at the same
 time, but writes get exclusive access.
 .RE
-.P
-The option may be post-fixed with a lock batch number. If set, then each
-thread/process may do that amount of IOs to the file before giving up the lock.
-Since lock acquisition is expensive, batching the lock/unlocks will speed up IO.
 .RE
 .P
 .BI opendir \fR=\fPstr
@@ -242,6 +272,11 @@ new offset.
 The base unit for a kilobyte. The defacto base is 2^10, 1024.  Storage
 manufacturers like to use 10^3 or 1000 as a base ten unit instead, for obvious
 reasons. Allow values are 1024 or 1000, with 1024 being the default.
+.TP
+.BI unified_rw_reporting \fR=\fPbool
+Fio normally reports statistics on a per data direction basis, meaning that
+read, write, and trim are accounted and reported separately. If this option is
+set, the fio will sum the results and report them as "mixed" instead.
 .TP
 .BI randrepeat \fR=\fPbool
 Seed the random number generator in a predictable way so results are repeatable
@@ -413,6 +448,9 @@ Basic \fIpread\fR\|(2) or \fIpwrite\fR\|(2) I/O.
 Basic \fIreadv\fR\|(2) or \fIwritev\fR\|(2) I/O. Will emulate queuing by
 coalescing adjacents IOs into a single submission.
 .TP
+.B pvsync
+Basic \fIpreadv\fR\|(2) or \fIpwritev\fR\|(2) I/O.
+.TP
 .B libaio
 Linux native asynchronous I/O. This ioengine defines engine specific options.
 .TP
@@ -472,7 +510,22 @@ and channel semantics (Send/Recv) for the InfiniBand, RoCE and iWARP protocols.
 .B external
 Loads an external I/O engine object file.  Append the engine filename as
 `:\fIenginepath\fR'.
+.TP
+.B falloc
+   IO engine that does regular linux native fallocate callt to simulate data
+transfer as fio ioengine
+.br
+  DDIR_READ  does fallocate(,mode = FALLOC_FL_KEEP_SIZE,)
+.br
+  DIR_WRITE does fallocate(,mode = 0)
+.br
+  DDIR_TRIM does fallocate(,mode = FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE)
+.TP
+.B e4defrag
+IO engine that does regular EXT4_IOC_MOVE_EXT ioctls to simulate defragment activity
+request to DDIR_WRITE event
 .RE
+.P
 .RE
 .TP
 .BI iodepth \fR=\fPint
@@ -549,7 +602,7 @@ Also see the sync_file_range(2) man page.  This option is Linux specific.
 If writing, setup the file first and do overwrites.  Default: false.
 .TP
 .BI end_fsync \fR=\fPbool
-Sync file contents when job exits.  Default: false.
+Sync file contents when a write stage has completed.  Default: false.
 .TP
 .BI fsync_on_close \fR=\fPbool
 If true, sync file contents on close.  This differs from \fBend_fsync\fR in that
@@ -565,6 +618,41 @@ overrides the first. This may interfere with a given rate setting, if fio is
 asked to limit reads or writes to a certain rate. If that is the case, then
 the distribution may be skewed. Default: 50.
 .TP
+.BI random_distribution \fR=\fPstr:float
+By default, fio will use a completely uniform random distribution when asked
+to perform random IO. Sometimes it is useful to skew the distribution in
+specific ways, ensuring that some parts of the data is more hot than others.
+Fio includes the following distribution models:
+.RS
+.TP
+.B random
+Uniform random distribution
+.TP
+.B zipf
+Zipf distribution
+.TP
+.B pareto
+Pareto distribution
+.TP
+.RE
+.P
+When using a zipf or pareto distribution, an input value is also needed to
+define the access pattern. For zipf, this is the zipf theta. For pareto,
+it's the pareto power. Fio includes a test program, genzipf, that can be
+used visualize what the given input values will yield in terms of hit rates.
+If you wanted to use zipf with a theta of 1.2, you would use
+random_distribution=zipf:1.2 as the option. If a non-uniform model is used,
+fio will disable use of the random map.
+.TP
+.BI percentage_random \fR=\fPint
+For a random workload, set how big a percentage should be random. This defaults
+to 100%, in which case the workload is fully random. It can be set from
+anywhere from 0 to 100.  Setting it to 0 would make the workload fully
+sequential.
+.TP
+.BI percentage_sequential \fR=\fPint
+See \fBpercentage_random\fR.
+.TP
 .B norandommap
 Normally \fBfio\fR will cover every block of the file when doing random I/O. If
 this parameter is given, a new offset will be chosen without looking at past
@@ -575,6 +663,26 @@ See \fBnorandommap\fR. If fio runs with the random block map enabled and it
 fails to allocate the map, if this option is set it will continue without a
 random block map. As coverage will not be as complete as with random maps, this
 option is disabled by default.
+.TP
+.BI random_generator \fR=\fPstr
+Fio supports the following engines for generating IO offsets for random IO:
+.RS
+.TP
+.B tausworthe
+Strong 2^88 cycle random number generator
+.TP
+.B lfsr
+Linear feedback shift register generator
+.TP
+.RE
+.P
+Tausworthe is a strong random number generator, but it requires tracking on the
+side if we want to ensure that blocks are only read or written once. LFSR
+guarantees that we never generate the same offset twice, and it's also less
+computationally expensive. It's not a true random generator, however, though
+for IO purposes it's typically good enough. LFSR only works with single block
+sizes, not with workloads that use multiple block sizes. If used with such a
+workload, fio may read or write some blocks multiple times.
 .TP
 .BI nice \fR=\fPint
 Run job with given nice value.  See \fInice\fR\|(2).
@@ -594,7 +702,12 @@ Pretend to spend CPU time for given number of microseconds, sleeping the rest
 of the time specified by \fBthinktime\fR.  Only valid if \fBthinktime\fR is set.
 .TP
 .BI thinktime_blocks \fR=\fPint
-Number of blocks to issue before waiting \fBthinktime\fR microseconds.
+Only valid if thinktime is set - control how many blocks to issue, before
+waiting \fBthinktime\fR microseconds. If not set, defaults to 1 which will
+make fio wait \fBthinktime\fR microseconds after every block. This
+effectively makes any queue depth setting redundant, since no more than 1 IO
+will be queued before we have to complete it and do our thinktime. In other
+words, this setting effectively caps the queue depth if the latter is larger.
 Default: 1.
 .TP
 .BI rate \fR=\fPint
@@ -624,12 +737,38 @@ is used for read vs write seperation.
 Average bandwidth for \fBrate\fR and \fBratemin\fR over this number of
 milliseconds.  Default: 1000ms.
 .TP
+.BI max_latency \fR=\fPint
+If set, fio will exit the job if it exceeds this maximum latency. It will exit
+with an ETIME error.
+.TP
 .BI cpumask \fR=\fPint
 Set CPU affinity for this job. \fIint\fR is a bitmask of allowed CPUs the job
 may run on.  See \fBsched_setaffinity\fR\|(2).
 .TP
 .BI cpus_allowed \fR=\fPstr
 Same as \fBcpumask\fR, but allows a comma-delimited list of CPU numbers.
+.TP
+.BI numa_cpu_nodes \fR=\fPstr
+Set this job running on spcified NUMA nodes' CPUs. The arguments allow
+comma delimited list of cpu numbers, A-B ranges, or 'all'.
+.TP
+.BI numa_mem_policy \fR=\fPstr
+Set this job's memory policy and corresponding NUMA nodes. Format of
+the argements:
+.RS
+.TP
+.B <mode>[:<nodelist>]
+.TP
+.B mode
+is one of the following memory policy:
+.TP
+.B default, prefer, bind, interleave, local
+.TP
+.RE
+For \fBdefault\fR and \fBlocal\fR memory policy, no \fBnodelist\fR is
+needed to be specified. For \fBprefer\fR, only one node is
+allowed. For \fBbind\fR and \fBinterleave\fR, \fBnodelist\fR allows
+comma delimited list of numbers, A-B ranges, or 'all'.
 .TP
 .BI startdelay \fR=\fPint
 Delay start of job for the specified number of seconds.
@@ -918,7 +1057,7 @@ Disable measurements of throughput/bandwidth numbers. See \fBdisable_lat\fR.
 .TP
 .BI lockmem \fR=\fPint
 Pin the specified amount of memory with \fBmlock\fR\|(2).  Can be used to
-simulate a smaller amount of memory.
+simulate a smaller amount of memory. The amount specified is per worker.
 .TP
 .BI exec_prerun \fR=\fPstr
 Before running the job, execute the specified command with \fBsystem\fR\|(3).
@@ -940,6 +1079,27 @@ given time in milliseconds.
 .BI disk_util \fR=\fPbool
 Generate disk utilization statistics if the platform supports it. Default: true.
 .TP
+.BI clocksource \fR=\fPstr
+Use the given clocksource as the base of timing. The supported options are:
+.RS
+.TP
+.B gettimeofday
+gettimeofday(2)
+.TP
+.B clock_gettime
+clock_gettime(2)
+.TP
+.B cpu
+Internal CPU clock source
+.TP
+.RE
+.P
+\fBcpu\fR is the preferred clocksource if it is reliable, as it is very fast
+(and fio is heavy on time calls). Fio will automatically use this clocksource
+if it's supported and considered reliable on the system it is running on,
+unless another clocksource is specifically set. For x86/x86-64 CPUs, this
+means supporting TSC Invariant.
+.TP
 .BI gtod_reduce \fR=\fPbool
 Enable all of the gettimeofday() reducing options (disable_clat, disable_slat,
 disable_bw) plus reduce precision of the timeout somewhat to really shrink the
@@ -955,6 +1115,23 @@ threads/processes that run IO workloads need only copy that segment, instead of
 entering the kernel with a gettimeofday() call. The CPU set aside for doing
 these time calls will be excluded from other uses. Fio will manually clear it
 from the CPU mask of other jobs.
+.TP
+.BI ignore_error \fR=\fPstr
+Sometimes you want to ignore some errors during test in that case you can specify
+error list for each error type.
+.br
+ignore_error=READ_ERR_LIST,WRITE_ERR_LIST,VERIFY_ERR_LIST
+.br
+errors for given error type is separated with ':'.
+Error may be symbol ('ENOSPC', 'ENOMEM') or an integer.
+.br
+Example: ignore_error=EAGAIN,ENOSPC:122 .
+.br	
+This option will ignore EAGAIN from READ, and ENOSPC and 122(EDQUOT) from WRITE. 
+.TP
+.BI error_dump \fR=\fPbool
+If set dump every error even if it is non fatal, true by default. If disabled
+only fatal error will be dumped
 .TP
 .BI cgroup \fR=\fPstr
 Add job to this control group. If it doesn't exist, it will be created.
@@ -1016,6 +1193,12 @@ Some parameters are only valid when a specific ioengine is in use. These are
 used identically to normal parameters, with the caveat that when used on the
 command line, the must come after the ioengine that defines them is selected.
 .TP
+.BI (cpu)cpuload \fR=\fPint
+Attempt to use the specified percentage of CPU cycles.
+.TP
+.BI (cpu)cpuchunks \fR=\fPint
+Split the load into cycles of the given time. In microseconds.
+.TP
 .BI (libaio)userspace_reap
 Normally, with the libaio engine in use, fio will use
 the io_getevents system call to reap newly returned events.
@@ -1032,6 +1215,9 @@ used and must be omitted.
 .BI (net,netsplice)port \fR=\fPint
 The TCP or UDP port to bind to or connect to.
 .TP
+.BI (net,netsplice)nodelay \fR=\fPbool
+Set TCP_NODELAY on TCP connections.
+.TP
 .BI (net,netsplice)protocol \fR=\fPstr "\fR,\fP proto" \fR=\fPstr
 The network protocol to use. Accepted values are:
 .RS
@@ -1041,7 +1227,7 @@ The network protocol to use. Accepted values are:
 Transmission control protocol
 .TP
 .B udp
-Unreliable datagram protocol
+User datagram protocol
 .TP
 .B unix
 UNIX domain socket
@@ -1057,6 +1243,29 @@ used and the port is invalid.
 For TCP network connections, tell fio to listen for incoming
 connections rather than initiating an outgoing connection. The
 hostname must be omitted if this option is used.
+.TP
+.BI (net, pingpong) \fR=\fPbool
+Normal a network writer will just continue writing data, and a network reader
+will just consume packages. If pingpong=1 is set, a writer will send its normal
+payload to the reader, then wait for the reader to send the same payload back.
+This allows fio to measure network latencies. The submission and completion
+latencies then measure local time spent sending or receiving, and the
+completion latency measures how long it took for the other end to receive and
+send back.
+.TP
+.BI (e4defrag,donorname) \fR=\fPstr
+File will be used as a block donor (swap extents between files)
+.TP
+.BI (e4defrag,inplace) \fR=\fPint
+Configure donor file block allocation strategy		
+.RS
+.BI 0(default) :
+Preallocate donor's file on init
+.TP
+.BI 1:
+allocate space immidietly inside defragment event, and free right after event
+.RE
+.TP
 .SH OUTPUT
 While running, \fBfio\fR will display the status of the created jobs.  For
 example:
