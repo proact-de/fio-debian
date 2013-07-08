@@ -1,0 +1,18 @@
+Description: Delete config log and .d-files on clean.
+  Makefile of fio 2.1.1 leaves them which prevents repeated builds
+  with dpkg-buildpackage due to:
+  dpkg-source: info: local changes detected, …
+Author: Martin Steigerwald <ms@teamix.de>
+
+---
+--- a/Makefile
++++ b/Makefile
+@@ -265,7 +265,7 @@
+ 	$(QUIET_LINK)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_LFSR_TEST_OBJS) $(LIBS) $(LDFLAGS)
+ 
+ clean: FORCE
+-	-rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) core.* core gfio FIO-VERSION-FILE *.d config-host.mak config-host.h
++	-rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) core.* core gfio FIO-VERSION-FILE *.d */*.d config.log config-host.mak config-host.h
+ 
+ distclean: clean FORCE
+ 	@rm -f cscope.out
