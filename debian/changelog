@@ -1,6 +1,8 @@
 fio (2.1.1-1) UNRELEASED; urgency=low
 
   * Imported Upstream version 2.1.1
+  * debian/patches/ftbfs-fix-for-mips-architecture:
+    Dropped. Applied upstream.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 08 Jul 2013 11:56:23 +0200
 
