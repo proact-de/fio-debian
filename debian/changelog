@@ -7,6 +7,8 @@ fio (2.1.1-1) UNRELEASED; urgency=low
     Delete config.log and *.d files as leaving them behind make
     repeated dpkg-buildpackage builds fail with:
     dpkg-source: info: local changes detected, …
+  * debian/control: Added build dependency zlib1g-dev as fio can use
+    zlib to compress client/server communication.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 08 Jul 2013 11:56:23 +0200
 
