@@ -1,3 +1,11 @@
+fio (2.1.1-1~1.gbp9b0b49) UNRELEASED; urgency=low
+
+  ** SNAPSHOT build @9b0b49f36d7f699f3621b0cc3632fcedeb26b3b2 **
+
+  * Imported Upstream version 2.1.1
+
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 08 Jul 2013 11:56:23 +0200
+
 fio (2.0.8-2) unstable; urgency=low
 
   * debian/patches/ftbfs-fix-for-mips-architecture: 
