@@ -9,6 +9,7 @@ fio (2.1.1-1) UNRELEASED; urgency=low
     dpkg-source: info: local changes detected, …
   * debian/control: Added build dependency zlib1g-dev as fio can use
     zlib to compress client/server communication.
+  * Switched to xz compression. Saved almost 37 KiB on binary package.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 08 Jul 2013 11:56:23 +0200
 
