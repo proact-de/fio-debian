@@ -1,7 +1,6 @@
 fio (2.1.1-1) unstable; urgency=low
 
   * Imported Upstream version 2.1.1
-  * Updated to Standards-Version to 3.9.4, no changes needed. 
   * debian/patches/ftbfs-fix-for-mips-architecture:
     Dropped. Applied upstream.
   * debian/patches/makefile-clean-delete-config-log-and-d-files:
@@ -13,6 +12,7 @@ fio (2.1.1-1) unstable; urgency=low
   * debian/control: Added build dependency zlib1g-dev as fio can use
     zlib to compress client/server communication.
   * Switched to xz compression. Saved almost 37 KiB on binary package.
+  * Updated to Standards-Version to 3.9.4, no changes needed. 
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 05 Aug 2013 16:15:21 +0200
 
