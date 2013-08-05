@@ -1,3 +1,4 @@
 makefile
 makefile-hardening
 makefile-clean-delete-config-log-and-d-files
+manpage-spelling
