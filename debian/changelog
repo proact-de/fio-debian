@@ -1,4 +1,4 @@
-fio (2.1.1-1) UNRELEASED; urgency=low
+fio (2.1.1-1) unstable; urgency=low
 
   * Imported Upstream version 2.1.1
   * Updated to Standards-Version to 3.9.4, no changes needed. 
@@ -14,7 +14,7 @@ fio (2.1.1-1) UNRELEASED; urgency=low
     zlib to compress client/server communication.
   * Switched to xz compression. Saved almost 37 KiB on binary package.
 
- -- Martin Steigerwald <ms@teamix.de>  Mon, 05 Aug 2013 16:07:23 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 05 Aug 2013 16:15:21 +0200
 
 fio (2.0.8-2) unstable; urgency=low
 
