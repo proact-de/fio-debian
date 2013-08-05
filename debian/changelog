@@ -13,8 +13,11 @@ fio (2.1.1-1) unstable; urgency=low
     zlib to compress client/server communication.
   * Switched to xz compression. Saved almost 37 KiB on binary package.
   * Updated to Standards-Version to 3.9.4, no changes needed. 
+  * debian/patches/fio_generate_plots-gnuplot:
+    Make test for gnuplot work with empty strings (Closes: #700580).
+    Thanks to Hervé Werner for providing bug report and fix.
 
- -- Martin Steigerwald <ms@teamix.de>  Mon, 05 Aug 2013 16:15:21 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 05 Aug 2013 16:47:21 +0200
 
 fio (2.0.8-2) unstable; urgency=low
 

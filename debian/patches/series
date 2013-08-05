@@ -2,3 +2,5 @@ makefile
 makefile-hardening
 makefile-clean-delete-config-log-and-d-files
 manpage-spelling
+fio_generate_plots-gnuplot
+fio_generate_plots

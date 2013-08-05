@@ -1,0 +1,17 @@
+Description: Make test for gnuplot work with empty strings
+  This way it also works if gnuplot is not installed. Fixes:
+  /usr/bin/fio_generate_plots: -: not found
+  http://bugs.debian.org/700580 
+Author: Martin Steigerwald <ms@teamix.de>
+
+--- a/fio_generate_plots
++++ b/fio_generate_plots
+@@ -22,7 +22,7 @@
+ fi
+ 
+ GNUPLOT=$(which gnuplot)
+-if [ ! -x $GNUPLOT ]
++if [ ! -x "$GNUPLOT" ]
+ then
+ 	echo You need gnuplot installed to generate graphs
+ 	exit 1
