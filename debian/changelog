@@ -1,12 +1,12 @@
 fio (2.1.2-1) UNRELEASED; urgency=low
 
-  * Imported Upstream version 2.1.2
+  * Imported Upstream version 2.1.2.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 27 Aug 2013 16:30:19 +0200
 
 fio (2.1.1-1) unstable; urgency=low
 
-  * Imported Upstream version 2.1.1
+  * Imported Upstream version 2.1.1.
   * debian/patches/ftbfs-fix-for-mips-architecture:
     Dropped. Applied upstream.
   * debian/patches/makefile-clean-delete-config-log-and-d-files:
