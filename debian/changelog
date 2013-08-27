@@ -1,3 +1,10 @@
+fio (2.1.2-1) UNRELEASED; urgency=low
+
+  * Removed initial patch make gnuplot test work with empty string patch reference from series file.
+  * Imported Upstream version 2.1.2
+
+ -- Martin Steigerwald <ms@teamix.de>  Tue, 27 Aug 2013 16:30:19 +0200
+
 fio (2.1.1-1) unstable; urgency=low
 
   * Imported Upstream version 2.1.1
