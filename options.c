@@ -271,6 +271,7 @@ static int ignore_error_type(struct thread_data *td, int etype, char *str)
 		if (!error[i]) {
 			log_err("Unknown error %s, please use number value \n",
 				  fname);
+			free(error);
 			return 1;
 		}
 		i++;
@@ -375,23 +376,6 @@ static int str_rwmix_write_cb(void *data, unsigned long long *val)
 	td->o.rwmix[DDIR_READ] = 100 - *val;
 	return 0;
 }
-
-static int str_perc_rand_cb(void *data, unsigned long long *val)
-{
-	struct thread_data *td = data;
-
-	td->o.perc_rand = *val;
-	return 0;
-}
-
-static int str_perc_seq_cb(void *data, unsigned long long *val)
-{
-	struct thread_data *td = data;
-
-	td->o.perc_rand = 100 - *val;
-	return 0;
-}
-
 
 static int str_exitall_cb(void)
 {
@@ -550,7 +534,7 @@ static int str_numa_mpol_cb(void *data, char *input)
 {
 	struct thread_data *td = data;
 	const char * const policy_types[] =
-		{ "default", "prefer", "bind", "interleave", "local" };
+		{ "default", "prefer", "bind", "interleave", "local", NULL };
 	int i;
 
 	char *nodelist = strchr(input, ':');
@@ -1574,6 +1558,17 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_INVALID,
 	},
 	{
+		.name	= "bs_is_seq_rand",
+		.lname	= "Block size division is seq/random (not read/write)",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(bs_is_seq_rand),
+		.help	= "Consider any blocksize setting to be sequential,ramdom",
+		.def	= "0",
+		.parent = "blocksize",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_INVALID,
+	},
+	{
 		.name	= "randrepeat",
 		.lname	= "Random repeatable",
 		.type	= FIO_OPT_BOOL,
@@ -1668,10 +1663,12 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.name	= "percentage_random",
 		.lname	= "Percentage Random",
 		.type	= FIO_OPT_INT,
-		.cb	= str_perc_rand_cb,
+		.off1	= td_var_offset(perc_rand[DDIR_READ]),
+		.off2	= td_var_offset(perc_rand[DDIR_WRITE]),
+		.off3	= td_var_offset(perc_rand[DDIR_TRIM]),
 		.maxval	= 100,
 		.help	= "Percentage of seq/random mix that should be random",
-		.def	= "100",
+		.def	= "100,100,100",
 		.interval = 5,
 		.inverse = "percentage_sequential",
 		.category = FIO_OPT_C_IO,
@@ -1680,13 +1677,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	{
 		.name	= "percentage_sequential",
 		.lname	= "Percentage Sequential",
-		.type	= FIO_OPT_INT,
-		.cb	= str_perc_seq_cb,
-		.maxval	= 100,
-		.help	= "Percentage of seq/random mix that should be sequential",
-		.def	= "0",
-		.interval = 5,
-		.inverse = "percentage_random",
+		.type	= FIO_OPT_DEPRECATED,
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_RANDOM,
 	},

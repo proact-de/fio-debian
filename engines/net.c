@@ -37,6 +37,8 @@ struct netio_options {
 	unsigned int listen;
 	unsigned int pingpong;
 	unsigned int nodelay;
+	unsigned int ttl;
+	char * interface;
 };
 
 struct udp_close_msg {
@@ -129,6 +131,26 @@ static struct fio_option options[] = {
 		.group	= FIO_OPT_G_NETIO,
 	},
 	{
+		.name	= "interface",
+		.lname	= "net engine interface",
+		.type	= FIO_OPT_STR_STORE,
+		.off1	= offsetof(struct netio_options, interface),
+		.help	= "Network interface to use",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_NETIO,
+	},
+	{
+		.name	= "ttl",
+		.lname	= "net engine multicast ttl",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct netio_options, ttl),
+		.def    = "1",
+		.minval	= 0,
+		.help	= "Time-to-live value for outgoing UDP multicast packets",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_NETIO,
+	},
+	{
 		.name	= NULL,
 	},
 };
@@ -163,6 +185,20 @@ static int poll_wait(struct thread_data *td, int fd, short events)
 
 	return -1;
 }
+
+static int fio_netio_is_multicast(const char *mcaddr)
+{
+	in_addr_t addr = inet_network(mcaddr);
+	if (addr == -1)
+		return 0;
+
+	if (inet_network("224.0.0.0") <= addr &&
+	    inet_network("239.255.255.255") >= addr)
+		return 1;
+
+	return 0;
+}
+
 
 static int fio_netio_prep(struct thread_data *td, struct io_u *io_u)
 {
@@ -378,11 +414,20 @@ static int fio_netio_recv(struct thread_data *td, struct io_u *io_u)
 
 	do {
 		if (o->proto == FIO_TYPE_UDP) {
-			socklen_t len = sizeof(nd->addr);
-			struct sockaddr *from = (struct sockaddr *) &nd->addr;
+			socklen_t l;
+			socklen_t *len = &l;
+			struct sockaddr *from;
+
+			if (o->listen) {
+				from = (struct sockaddr *) &nd->addr;
+				*len = sizeof(nd->addr);
+			} else {
+				from = NULL;
+				len = NULL;
+			}
 
 			ret = recvfrom(io_u->file->fd, io_u->xfer_buf,
-					io_u->xfer_buflen, flags, from, &len);
+					io_u->xfer_buflen, flags, from, len);
 			if (is_udp_close(io_u, ret)) {
 				td->done = 1;
 				return 0;
@@ -508,9 +553,30 @@ static int fio_netio_connect(struct thread_data *td, struct fio_file *f)
 	}
 #endif
 
-	if (o->proto == FIO_TYPE_UDP)
+	if (o->proto == FIO_TYPE_UDP) {
+		if (!fio_netio_is_multicast(td->o.filename))
+			return 0;
+
+		if (o->interface) {
+			struct in_addr interface_addr;
+			if (inet_aton(o->interface, &interface_addr) == 0) {
+				log_err("fio: interface not valid interface IP\n");
+				close(f->fd);
+				return 1;
+			}
+			if (setsockopt(f->fd, IPPROTO_IP, IP_MULTICAST_IF, &interface_addr, sizeof(interface_addr)) < 0) {
+				td_verror(td, errno, "setsockopt IP_MULTICAST_IF");
+				close(f->fd);
+				return 1;
+			}
+		}
+		if (setsockopt(f->fd, IPPROTO_IP, IP_MULTICAST_TTL, &o->ttl, sizeof(o->ttl)) < 0) {
+			td_verror(td, errno, "setsockopt IP_MULTICAST_TTL");
+			close(f->fd);
+			return 1;
+		}
 		return 0;
-	else if (o->proto == FIO_TYPE_TCP) {
+	} else if (o->proto == FIO_TYPE_TCP) {
 		socklen_t len = sizeof(nd->addr);
 
 		if (connect(f->fd, (struct sockaddr *) &nd->addr, len) < 0) {
@@ -619,7 +685,7 @@ static int fio_netio_udp_recv_open(struct thread_data *td, struct fio_file *f)
 
 	ret = recvfrom(f->fd, (void *) &msg, sizeof(msg), MSG_WAITALL, to, &len);
 	if (ret < 0) {
-		td_verror(td, errno, "sendto udp link open");
+		td_verror(td, errno, "recvfrom udp link open");
 		return ret;
 	}
 
@@ -777,8 +843,11 @@ static int fio_netio_setup_listen_inet(struct thread_data *td, short port)
 {
 	struct netio_data *nd = td->io_ops->data;
 	struct netio_options *o = td->eo;
+	struct ip_mreq mr;
+	struct sockaddr_in sin;
 	int fd, opt, type;
 
+	memset(&sin, 0, sizeof(sin));
 	if (o->proto == FIO_TYPE_TCP)
 		type = SOCK_STREAM;
 	else
@@ -793,17 +862,46 @@ static int fio_netio_setup_listen_inet(struct thread_data *td, short port)
 	opt = 1;
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *) &opt, sizeof(opt)) < 0) {
 		td_verror(td, errno, "setsockopt");
+		close(fd);
 		return 1;
 	}
 #ifdef SO_REUSEPORT
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (void *) &opt, sizeof(opt)) < 0) {
 		td_verror(td, errno, "setsockopt");
+		close(fd);
 		return 1;
 	}
 #endif
 
+	if (td->o.filename){
+		if(o->proto != FIO_TYPE_UDP ||
+		   !fio_netio_is_multicast(td->o.filename)) {
+			log_err("fio: hostname not valid for non-multicast inbound network IO\n");
+			close(fd);
+			return 1;
+		}
+
+		inet_aton(td->o.filename, &sin.sin_addr);
+
+		mr.imr_multiaddr = sin.sin_addr;
+		if (o->interface) {
+			if (inet_aton(o->interface, &mr.imr_interface) == 0) {
+				log_err("fio: interface not valid interface IP\n");
+				close(fd);
+				return 1;
+			}
+		} else {
+			mr.imr_interface.s_addr = htonl(INADDR_ANY);
+		}
+		if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0) {
+			td_verror(td, errno, "setsockopt IP_ADD_MEMBERSHIP");
+			close(fd);
+			return 1;
+		}
+	}
+
 	nd->addr.sin_family = AF_INET;
-	nd->addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	nd->addr.sin_addr.s_addr = sin.sin_addr.s_addr ? sin.sin_addr.s_addr : htonl(INADDR_ANY);
 	nd->addr.sin_port = htons(port);
 
 	if (bind(fd, (struct sockaddr *) &nd->addr, sizeof(nd->addr)) < 0) {
@@ -878,11 +976,6 @@ static int fio_netio_init(struct thread_data *td)
 			return 1;
 		}
 		o->listen = td_read(td);
-	}
-
-	if (o->proto != FIO_TYPE_UNIX && o->listen && td->o.filename) {
-		log_err("fio: hostname not valid for inbound network IO\n");
-		return 1;
 	}
 
 	if (o->listen)
