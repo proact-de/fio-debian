@@ -701,7 +701,10 @@ static void td_fill_rand_seeds_os(struct thread_data *td)
 		td->rand_seeds[FIO_RAND_BLOCK_OFF] = FIO_RANDSEED * td->thread_number;
 
 	os_random_seed(td->rand_seeds[FIO_RAND_BLOCK_OFF], &td->random_state);
-	os_random_seed(td->rand_seeds[FIO_RAND_SEQ_RAND_OFF], &td->seq_rand_state);
+
+	os_random_seed(td->rand_seeds[FIO_RAND_SEQ_RAND_READ_OFF], &td->seq_rand_state[DDIR_READ]);
+	os_random_seed(td->rand_seeds[FIO_RAND_SEQ_RAND_WRITE_OFF], &td->seq_rand_state[DDIR_WRITE]);
+	os_random_seed(td->rand_seeds[FIO_RAND_SEQ_RAND_TRIM_OFF], &td->seq_rand_state[DDIR_TRIM]);
 }
 
 static void td_fill_rand_seeds_internal(struct thread_data *td)
@@ -723,7 +726,9 @@ static void td_fill_rand_seeds_internal(struct thread_data *td)
 		td->rand_seeds[FIO_RAND_BLOCK_OFF] = FIO_RANDSEED * td->thread_number;
 
 	init_rand_seed(&td->__random_state, td->rand_seeds[FIO_RAND_BLOCK_OFF]);
-	init_rand_seed(&td->__seq_rand_state, td->rand_seeds[FIO_RAND_SEQ_RAND_OFF]);
+	init_rand_seed(&td->__seq_rand_state[DDIR_READ], td->rand_seeds[FIO_RAND_SEQ_RAND_READ_OFF]);
+	init_rand_seed(&td->__seq_rand_state[DDIR_WRITE], td->rand_seeds[FIO_RAND_SEQ_RAND_WRITE_OFF]);
+	init_rand_seed(&td->__seq_rand_state[DDIR_TRIM], td->rand_seeds[FIO_RAND_SEQ_RAND_TRIM_OFF]);
 }
 
 void td_fill_rand_seeds(struct thread_data *td)
@@ -1030,20 +1035,31 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 				fio_server_send_add_job(td);
 
 			if (!(td->io_ops->flags & FIO_NOIO)) {
-				char *c1, *c2, *c3, *c4, *c5, *c6;
+				char *c1, *c2, *c3, *c4;
+				char *c5 = NULL, *c6 = NULL;
 
 				c1 = fio_uint_to_kmg(o->min_bs[DDIR_READ]);
 				c2 = fio_uint_to_kmg(o->max_bs[DDIR_READ]);
 				c3 = fio_uint_to_kmg(o->min_bs[DDIR_WRITE]);
 				c4 = fio_uint_to_kmg(o->max_bs[DDIR_WRITE]);
-				c5 = fio_uint_to_kmg(o->min_bs[DDIR_TRIM]);
-				c6 = fio_uint_to_kmg(o->max_bs[DDIR_TRIM]);
 
-				log_info("%s: (g=%d): rw=%s, bs=%s-%s/%s-%s/%s-%s,"
-					 " ioengine=%s, iodepth=%u\n",
-						td->o.name, td->groupid,
-						ddir_str(o->td_ddir),
-						c1, c2, c3, c4, c5, c6,
+				if (!o->bs_is_seq_rand) {
+					c5 = fio_uint_to_kmg(o->min_bs[DDIR_TRIM]);
+					c6 = fio_uint_to_kmg(o->max_bs[DDIR_TRIM]);
+				}
+
+				log_info("%s: (g=%d): rw=%s, ", td->o.name,
+							td->groupid,
+							ddir_str(o->td_ddir));
+
+				if (o->bs_is_seq_rand)
+					log_info("bs(seq/rand)=%s-%s/%s-%s, ",
+							c1, c2, c3, c4);
+				else
+					log_info("bs=%s-%s/%s-%s/%s-%s, ",
+							c1, c2, c3, c4, c5, c6);
+
+				log_info("ioengine=%s, iodepth=%u\n",
 						td->io_ops->name, o->iodepth);
 
 				free(c1);
@@ -1755,8 +1771,6 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 		case FIO_GETOPT_IOENGINE: {
 			const char *opt = l_opts[lidx].name;
 			char *val = optarg;
-			opt = l_opts[lidx].name;
-			val = optarg;
 			ret = fio_cmd_ioengine_option_parse(td, opt, val);
 			break;
 		}

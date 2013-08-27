@@ -105,6 +105,7 @@ struct thread_options {
 	unsigned int softrandommap;
 	unsigned int bs_unaligned;
 	unsigned int fsync_on_close;
+	unsigned int bs_is_seq_rand;
 
 	unsigned int random_distribution;
 
@@ -113,7 +114,7 @@ struct thread_options {
 
 	unsigned int random_generator;
 
-	unsigned int perc_rand;
+	unsigned int perc_rand[DDIR_RWDIR_CNT];
 
 	unsigned int hugepage_size;
 	unsigned int rw_min_bs;
@@ -317,6 +318,7 @@ struct thread_options_pack {
 	uint32_t softrandommap;
 	uint32_t bs_unaligned;
 	uint32_t fsync_on_close;
+	uint32_t bs_is_seq_rand;
 
 	uint32_t random_distribution;
 	fio_fp64_t zipf_theta;
@@ -324,7 +326,7 @@ struct thread_options_pack {
 
 	uint32_t random_generator;
 
-	uint32_t perc_rand;
+	uint32_t perc_rand[DDIR_RWDIR_CNT];
 
 	uint32_t hugepage_size;
 	uint32_t rw_min_bs;

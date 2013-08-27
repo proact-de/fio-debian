@@ -344,9 +344,10 @@ that is given). If \fBfilesize\fR is not specified, each created file is the
 same size.
 .TP
 .BI blocksize \fR=\fPint[,int] "\fR,\fB bs" \fR=\fPint[,int]
-Block size for I/O units.  Default: 4k.  Values for reads and writes can be
-specified separately in the format \fIread\fR,\fIwrite\fR, either of
-which may be empty to leave that value at its default.
+Block size for I/O units.  Default: 4k.  Values for reads, writes, and trims
+can be specified separately in the format \fIread\fR,\fIwrite\fR,\fItrim\fR
+either of which may be empty to leave that value at its default. If a trailing
+comma isn't given, the remainder will inherit the last value set.
 .TP
 .BI blocksize_range \fR=\fPirange[,irange] "\fR,\fB bsrange" \fR=\fPirange[,irange]
 Specify a range of I/O block sizes.  The issued I/O unit will always be a
@@ -377,6 +378,12 @@ the minimum blocksize given.  Minimum alignment is typically 512b
 for using direct IO, though it usually depends on the hardware block size.
 This option is mutually exclusive with using a random map for files, so it
 will turn off that option.
+.TP
+.BI bs_is_seq_rand \fR=\fPbool
+If this option is set, fio will use the normal read,write blocksize settings as
+sequential,random instead. Any random read or write will use the WRITE
+blocksize settings, and any sequential read or write will use the READ
+blocksize setting.
 .TP
 .B zero_buffers
 Initialise buffers with all zeros. Default: fill buffers with random data.
@@ -648,10 +655,8 @@ fio will disable use of the random map.
 For a random workload, set how big a percentage should be random. This defaults
 to 100%, in which case the workload is fully random. It can be set from
 anywhere from 0 to 100.  Setting it to 0 would make the workload fully
-sequential.
-.TP
-.BI percentage_sequential \fR=\fPint
-See \fBpercentage_random\fR.
+sequential. It is possible to set different values for reads, writes, and
+trim. To do so, simply use a comma separated list. See \fBblocksize\fR.
 .TP
 .B norandommap
 Normally \fBfio\fR will cover every block of the file when doing random I/O. If
@@ -1061,9 +1066,15 @@ simulate a smaller amount of memory. The amount specified is per worker.
 .TP
 .BI exec_prerun \fR=\fPstr
 Before running the job, execute the specified command with \fBsystem\fR\|(3).
+.RS
+Output is redirected in a file called \fBjobname.prerun.txt\fR
+.RE
 .TP
 .BI exec_postrun \fR=\fPstr
 Same as \fBexec_prerun\fR, but the command is executed after the job completes.
+.RS
+Output is redirected in a file called \fBjobname.postrun.txt\fR
+.RE
 .TP
 .BI ioscheduler \fR=\fPstr
 Attempt to switch the device hosting the file to the specified I/O scheduler.
@@ -1210,10 +1221,17 @@ iodepth_batch_complete=0).
 .BI (net,netsplice)hostname \fR=\fPstr
 The host name or IP address to use for TCP or UDP based IO.
 If the job is a TCP listener or UDP reader, the hostname is not
-used and must be omitted.
+used and must be omitted unless it is a valid UDP multicast address.
 .TP
 .BI (net,netsplice)port \fR=\fPint
 The TCP or UDP port to bind to or connect to.
+.TP
+.BI (net,netsplice)interface \fR=\fPstr
+The IP address of the network interface used to send or receive UDP multicast
+packets.
+.TP
+.BI (net,netsplice)ttl \fR=\fPint
+Time-to-live value for outgoing UDP multicast packets. Default: 1
 .TP
 .BI (net,netsplice)nodelay \fR=\fPbool
 Set TCP_NODELAY on TCP connections.
@@ -1245,13 +1263,14 @@ connections rather than initiating an outgoing connection. The
 hostname must be omitted if this option is used.
 .TP
 .BI (net, pingpong) \fR=\fPbool
-Normal a network writer will just continue writing data, and a network reader
+Normaly a network writer will just continue writing data, and a network reader
 will just consume packages. If pingpong=1 is set, a writer will send its normal
 payload to the reader, then wait for the reader to send the same payload back.
 This allows fio to measure network latencies. The submission and completion
 latencies then measure local time spent sending or receiving, and the
 completion latency measures how long it took for the other end to receive and
-send back.
+send back. For UDP multicast traffic pingpong=1 should only be set for a single
+reader when multiple readers are listening to the same address.
 .TP
 .BI (e4defrag,donorname) \fR=\fPstr
 File will be used as a block donor (swap extents between files)

@@ -380,7 +380,7 @@ static int str_match_len(const struct value_pair *vp, const char *str)
 static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 			   int first, int more, int curr)
 {
-	int il, *ilp;
+	int il=0, *ilp;
 	fio_fp64_t *flp;
 	long long ull, *ullp;
 	long ul1, ul2;
@@ -788,6 +788,7 @@ static int __handle_option(struct fio_option *o, const char *ptr, void *data,
 	}
 	case FIO_OPT_DEPRECATED:
 		log_info("Option %s is deprecated\n", o->name);
+		ret = 1;
 		break;
 	default:
 		log_err("Bad option type %u\n", o->type);

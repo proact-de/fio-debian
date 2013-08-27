@@ -443,9 +443,11 @@ bs=int		The block size used for the io units. Defaults to 4k. Values
 		can be given for both read and writes. If a single int is
 		given, it will apply to both. If a second int is specified
 		after a comma, it will apply to writes only. In other words,
-		the format is either bs=read_and_write or bs=read,write.
-		bs=4k,8k will thus use 4k blocks for reads, and 8k blocks
-		for writes. If you only wish to set the write size, you
+		the format is either bs=read_and_write or bs=read,write,trim.
+		bs=4k,8k will thus use 4k blocks for reads, 8k blocks for
+		writes, and 8k for trims. You can terminate the list with
+		a trailing comma. bs=4k,8k, would use the default value for
+		trims.. If you only wish to set the write size, you
 		can do so by passing an empty read size - bs=,8k will set
 		8k for writes and leave the read default value.
 
@@ -502,6 +504,11 @@ blocksize_unaligned
 bs_unaligned	If this option is given, any byte size value within bsrange
 		may be used as a block range. This typically wont work with
 		direct IO, as that normally requires sector alignment.
+
+bs_is_seq_rand	If this option is set, fio will use the normal read,write
+		blocksize settings as sequential,random instead. Any random
+		read or write will use the WRITE blocksize settings, and any
+		sequential read or write will use the READ blocksize setting.
 
 zero_buffers	If this option is given, fio will init the IO buffers to
 		all zeroes. The default is to fill them with random data.
@@ -773,12 +780,10 @@ percentage_random=int	For a random workload, set how big a percentage should
 		is fully random. It can be set from anywhere from 0 to 100.
 		Setting it to 0 would make the workload fully sequential. Any
 		setting in between will result in a random mix of sequential
-		and random IO, at the given percentages.
+		and random IO, at the given percentages. It is possible to
+		set different values for reads, writes, and trim. To do so,
+		simply use a comma separated list. See blocksize.
 	
-percentage_sequential=int	See percentage_random. It is guaranteed that
-		they add up to 100. The later setting has priority, each
-		will adjust the other.
-
 norandommap	Normally fio will cover every block of the file when doing
 		random IO. If this option is given, fio will just get a
 		new random offset without looking at past io history. This
@@ -1261,10 +1266,12 @@ lockmem=int	Pin down the specified amount of memory with mlock(2). Can
 		The amount specified is per worker.
 
 exec_prerun=str	Before running this job, issue the command specified
-		through system(3).
+		through system(3). Output is redirected in a file called
+		jobname.prerun.txt.
 
 exec_postrun=str After the job completes, issue the command specified
-		 though system(3).
+		 though system(3). Output is redirected in a file called
+		 jobname.postrun.txt.
 
 ioscheduler=str	Attempt to switch the device hosting the file to the specified
 		io scheduler before running.
@@ -1436,10 +1443,19 @@ that defines them is selected.
 [netsplice] hostname=str
 [net] hostname=str The host name or IP address to use for TCP or UDP based IO.
 		If the job is a TCP listener or UDP reader, the hostname is not
-		used and must be omitted.
+		used and must be omitted unless it is a valid UDP multicast
+		address.
 
 [netsplice] port=int
 [net] port=int	The TCP or UDP port to bind to or connect to.
+
+[netsplice] interface=str
+[net] interface=str  The IP address of the network interface used to send or
+		receive UDP multicast
+
+[netsplice] ttl=int
+[net] ttl=int	Time-to-live value for outgoing UDP multicast packets.
+		Default: 1
 
 [netsplice] nodelay=bool
 [net] nodelay=bool	Set TCP_NODELAY on TCP connections.
@@ -1461,7 +1477,7 @@ that defines them is selected.
 [net] listen	For TCP network connections, tell fio to listen for incoming
 		connections rather than initiating an outgoing connection. The
 		hostname must be omitted if this option is used.
-[net] pingpong	Normal a network writer will just continue writing data, and
+[net] pingpong	Normaly a network writer will just continue writing data, and
 		a network reader will just consume packages. If pingpong=1
 		is set, a writer will send its normal payload to the reader,
 		then wait for the reader to send the same payload back. This
@@ -1469,6 +1485,9 @@ that defines them is selected.
 		and completion latencies then measure local time spent
 		sending or receiving, and the completion latency measures
 		how long it took for the other end to receive and send back.
+		For UDP multicast traffic pingpong=1 should only be set for a
+		single reader when multiple readers are listening to the same
+		address.
 
 [e4defrag] donorname=str
 	        File will be used as a block donor(swap extents between files)
