@@ -1,7 +1,8 @@
 fio (2.1.2-1) UNRELEASED; urgency=low
 
   * Imported Upstream version 2.1.2.
-  * debian/patches/Makefile: Refreshed.
+  * debian/patches/makefile: Refreshed.
+  * debian/patches/makefile-hardening: Refreshed.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 27 Aug 2013 16:30:19 +0200
 
