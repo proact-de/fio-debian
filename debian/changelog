@@ -5,6 +5,7 @@ fio (2.1.2-1) UNRELEASED; urgency=low
     * makefile:  Refreshed.
     * makefile-hardening: Refreshed.
     * fio_generate_plots-gnuplot: Removed. Applied upstream.
+  * debian/control: Add python dependency for tools/fio2gnuplot.py.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 27 Aug 2013 16:30:19 +0200
 
