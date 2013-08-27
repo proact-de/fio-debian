@@ -1,8 +1,10 @@
 fio (2.1.2-1) UNRELEASED; urgency=low
 
   * Imported Upstream version 2.1.2.
-  * debian/patches/makefile: Refreshed.
-  * debian/patches/makefile-hardening: Refreshed.
+  * debian/patches:
+    * makefile:  Refreshed.
+    * makefile-hardening: Refreshed.
+    * fio_generate_plots-gnuplot: Removed. Applied upstream.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 27 Aug 2013 16:30:19 +0200
 
