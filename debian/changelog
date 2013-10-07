@@ -1,4 +1,4 @@
-fio (2.1.2-1) UNRELEASED; urgency=low
+fio (2.1.3-1) UNRELEASED; urgency=low
 
   * Imported Upstream version 2.1.2.
   * debian/patches:
@@ -6,8 +6,10 @@ fio (2.1.2-1) UNRELEASED; urgency=low
     * makefile-hardening: Refreshed.
     * fio_generate_plots-gnuplot: Removed. Applied upstream.
   * debian/control: Add python dependency for tools/fio2gnuplot.py.
+  * Add as binary dependency instead. I think dh_python stuff is not required, but am not sure.
+  * Imported Upstream version 2.1.3.
 
- -- Martin Steigerwald <ms@teamix.de>  Tue, 27 Aug 2013 16:30:19 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 07 Oct 2013 10:28:41 +0200
 
 fio (2.1.1-1) unstable; urgency=low
 
