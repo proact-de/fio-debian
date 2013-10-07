@@ -13,8 +13,10 @@ fio (2.1.3-1) unstable; urgency=low
     - makefile-clean-delete-config-log-and-d-files: Refreshed.
     - manpage-spelling: Removed. Applied upstream.
     - fio2gnuplot-manpage: Added. Fix lintian tag manpage-section-mismatch.
+  * debian/source/options:
+    - Removed, let default setting decide which compression level to use.
 
- -- Martin Steigerwald <ms@teamix.de>  Mon, 07 Oct 2013 10:28:41 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 07 Oct 2013 11:53:41 +0200
 
 fio (2.1.1-1) unstable; urgency=low
 
