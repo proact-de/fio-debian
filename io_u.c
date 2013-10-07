@@ -1136,10 +1136,9 @@ struct io_u *__get_io_u(struct thread_data *td)
 again:
 	if (!io_u_rempty(&td->io_u_requeues))
 		io_u = io_u_rpop(&td->io_u_requeues);
-	else if (!io_u_qempty(&td->io_u_freelist))
+	else if (!io_u_qempty(&td->io_u_freelist)) {
 		io_u = io_u_qpop(&td->io_u_freelist);
 
-	if (io_u) {
 		io_u->buflen = 0;
 		io_u->resid = 0;
 		io_u->file = NULL;
@@ -1413,6 +1412,9 @@ static void account_io_completion(struct thread_data *td, struct io_u *io_u,
 		add_bw_sample(td, idx, bytes, &icd->time);
 
 	add_iops_sample(td, idx, bytes, &icd->time);
+
+	if (td->o.number_ios && !--td->o.number_ios)
+		td->done = 1;
 }
 
 static long long usec_for_io(struct thread_data *td, enum fio_ddir ddir)
