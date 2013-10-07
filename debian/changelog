@@ -6,7 +6,7 @@ fio (2.1.3-1) UNRELEASED; urgency=low
     * makefile-hardening: Refreshed.
     * fio_generate_plots-gnuplot: Removed. Applied upstream.
   * debian/control: Add python dependency for tools/fio2gnuplot.py.
-  * Add as binary dependency instead. I think dh_python stuff is not required, but am not sure.
+  * Add as binary dependency instead. I think dh_python stuff is not required.
   * Imported Upstream version 2.1.3.
 
  -- Martin Steigerwald <ms@teamix.de>  Mon, 07 Oct 2013 10:28:41 +0200
