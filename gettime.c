@@ -13,7 +13,7 @@
 #include "hash.h"
 #include "os/os.h"
 
-#ifdef ARCH_HAVE_CPU_CLOCK
+#if defined(ARCH_HAVE_CPU_CLOCK) && !defined(ARCH_CPU_CLOCK_CYCLES_PER_USEC)
 static unsigned long cycles_per_usec;
 static unsigned long inv_cycles_per_usec;
 #endif
@@ -32,7 +32,7 @@ static pthread_key_t tv_tls_key;
 
 enum fio_cs fio_clock_source = FIO_PREFERRED_CLOCK_SOURCE;
 int fio_clock_source_set = 0;
-enum fio_cs fio_clock_source_inited = CS_INVAL;
+static enum fio_cs fio_clock_source_inited = CS_INVAL;
 
 #ifdef FIO_DEBUG_TIME
 
@@ -177,7 +177,11 @@ static void *__fio_gettime(struct timeval *tp)
 		} else if (tv)
 			tv->last_cycles = t;
 
+#ifdef ARCH_CPU_CLOCK_CYCLES_PER_USEC
+		usecs = t / ARCH_CPU_CLOCK_CYCLES_PER_USEC;
+#else
 		usecs = (t * inv_cycles_per_usec) / 16777216UL;
+#endif
 		tp->tv_sec = usecs / 1000000;
 		tp->tv_usec = usecs % 1000000;
 		break;
@@ -205,7 +209,7 @@ void fio_gettime(struct timeval *tp, void fio_unused *caller)
 
 	gtod_log_caller(caller);
 #endif
-	if (fio_tv) {
+	if (fio_unlikely(fio_tv)) {
 		memcpy(tp, fio_tv, sizeof(*tp));
 		return;
 	}
@@ -229,7 +233,7 @@ void fio_gettime(struct timeval *tp, void fio_unused *caller)
 	}
 }
 
-#ifdef ARCH_HAVE_CPU_CLOCK
+#if defined(ARCH_HAVE_CPU_CLOCK) && !defined(ARCH_CPU_CLOCK_CYCLES_PER_USEC)
 static unsigned long get_cycles_per_usec(void)
 {
 	struct timeval s, e;
@@ -318,16 +322,20 @@ static int calibrate_cpu_clock(void)
 #else
 static int calibrate_cpu_clock(void)
 {
+#ifdef ARCH_CPU_CLOCK_CYCLES_PER_USEC
+	return 0;
+#else
 	return 1;
-}
 #endif
+}
+#endif // ARCH_HAVE_CPU_CLOCK
 
 #ifndef CONFIG_TLS_THREAD
 void fio_local_clock_init(int is_thread)
 {
 	struct tv_valid *t;
 
-	t = calloc(sizeof(*t), 1);
+	t = calloc(1, sizeof(*t));
 	if (pthread_setspecific(tv_tls_key, t))
 		log_err("fio: can't set TLS key\n");
 }
@@ -526,10 +534,10 @@ int fio_monotonic_clocktest(void)
 	struct clock_thread *threads;
 	unsigned int nr_cpus = cpus_online();
 	struct clock_entry *entries;
-	unsigned long tentries, failed;
+	unsigned long tentries, failed = 0;
 	struct clock_entry *prev, *this;
 	uint32_t seq = 0;
-	int i;
+	unsigned int i;
 
 	log_info("cs: reliable_tsc: %s\n", tsc_reliable ? "yes" : "no");
 
@@ -552,7 +560,11 @@ int fio_monotonic_clocktest(void)
 		pthread_mutex_init(&t->lock, NULL);
 		pthread_mutex_init(&t->started, NULL);
 		pthread_mutex_lock(&t->lock);
-		pthread_create(&t->thread, NULL, clock_thread_fn, t);
+		if (pthread_create(&t->thread, NULL, clock_thread_fn, t)) {
+			failed++;
+			nr_cpus = i;
+			break;
+		}
 	}
 
 	for (i = 0; i < nr_cpus; i++) {
@@ -567,7 +579,7 @@ int fio_monotonic_clocktest(void)
 		pthread_mutex_unlock(&t->lock);
 	}
 
-	for (failed = i = 0; i < nr_cpus; i++) {
+	for (i = 0; i < nr_cpus; i++) {
 		struct clock_thread *t = &threads[i];
 		void *ret;
 

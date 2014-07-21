@@ -61,6 +61,8 @@ typedef struct drand48_data os_random_state_t;
 
 #define fio_cpu_clear(mask, cpu)	(void) CPU_CLR((cpu), (mask))
 #define fio_cpu_set(mask, cpu)		(void) CPU_SET((cpu), (mask))
+#define fio_cpu_isset(mask, cpu)	CPU_ISSET((cpu), (mask))
+#define fio_cpu_count(mask)		CPU_COUNT((mask))
 
 static inline int fio_cpuset_init(os_cpu_mask_t *mask)
 {
@@ -194,6 +196,12 @@ static inline int fio_lookup_raw(dev_t dev, int *majdev, int *mindev)
 #define FIO_O_NOATIME	O_NOATIME
 #else
 #define FIO_O_NOATIME	0
+#endif
+
+#ifdef O_ATOMIC
+#define OS_O_ATOMIC	O_ATOMIC
+#else
+#define OS_O_ATOMIC	040000000
 #endif
 
 #ifdef MADV_REMOVE

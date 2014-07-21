@@ -17,6 +17,8 @@ void add_opt_posval(const char *, const char *, const char *);
 void del_opt_posval(const char *, const char *);
 struct thread_data;
 void fio_options_free(struct thread_data *);
+char *get_name_idx(char *, int);
+int set_name_idx(char *, char *, int);
 
 extern struct fio_option fio_options[FIO_MAX_OPTS];
 
@@ -94,6 +96,9 @@ enum opt_category_group {
 	__FIO_OPT_G_NETIO,
 	__FIO_OPT_G_LIBAIO,
 	__FIO_OPT_G_ACT,
+	__FIO_OPT_G_LATPROF,
+        __FIO_OPT_G_RBD,
+        __FIO_OPT_G_GFAPI,
 	__FIO_OPT_G_NR,
 
 	FIO_OPT_G_RATE		= (1U << __FIO_OPT_G_RATE),
@@ -122,6 +127,9 @@ enum opt_category_group {
 	FIO_OPT_G_NETIO		= (1U << __FIO_OPT_G_NETIO),
 	FIO_OPT_G_LIBAIO	= (1U << __FIO_OPT_G_LIBAIO),
 	FIO_OPT_G_ACT		= (1U << __FIO_OPT_G_ACT),
+	FIO_OPT_G_LATPROF	= (1U << __FIO_OPT_G_LATPROF),
+	FIO_OPT_G_RBD		= (1U << __FIO_OPT_G_RBD),
+	FIO_OPT_G_GFAPI		= (1U << __FIO_OPT_G_GFAPI),
 	FIO_OPT_G_INVALID	= (1U << __FIO_OPT_G_NR),
 };
 

@@ -15,7 +15,7 @@ include config-host.mak
 endif
 
 DEBUGFLAGS = -D_FORTIFY_SOURCE=2 -DFIO_INC_DEBUG
-CPPFLAGS= -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 $(DEBUGFLAGS)
+CPPFLAGS= -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -DFIO_INTERNAL $(DEBUGFLAGS)
 OPTFLAGS= -O3 -g -ffast-math
 CFLAGS	= -std=gnu99 -Wwrite-strings -Wall -Wdeclaration-after-statement $(OPTFLAGS) $(EXTFLAGS) $(BUILD_CFLAGS)
 LIBS	+= -lm $(EXTLIBS)
@@ -35,7 +35,8 @@ SOURCE := gettime.c ioengines.c init.c stat.c log.c time.c filesetup.c \
 		cconv.c lib/prio_tree.c json.c lib/zipf.c lib/axmap.c \
 		lib/lfsr.c gettime-thread.c helpers.c lib/flist_sort.c \
 		lib/hweight.c lib/getrusage.c idletime.c td_error.c \
-		profiles/tiobench.c profiles/act.c io_u_queue.c
+		profiles/tiobench.c profiles/act.c io_u_queue.c filelock.c \
+		lib/tp.c
 
 ifdef CONFIG_64BIT_LLP64
   CFLAGS += -DBITS_PER_LONG=32
@@ -76,6 +77,9 @@ endif
 ifdef CONFIG_WINDOWSAIO
   SOURCE += engines/windowsaio.c
 endif
+ifdef CONFIG_RBD
+  SOURCE += engines/rbd.c
+endif
 ifndef CONFIG_STRSEP
   SOURCE += lib/strsep.c
 endif
@@ -87,6 +91,14 @@ ifndef CONFIG_GETOPT_LONG_ONLY
 endif
 ifndef CONFIG_INET_ATON
   SOURCE += lib/inet_aton.c
+endif
+ifdef CONFIG_GFAPI
+  SOURCE += engines/glusterfs.c
+  SOURCE += engines/glusterfs_sync.c
+  SOURCE += engines/glusterfs_async.c
+  ifdef CONFIG_GF_FADVISE
+    CFLAGS += "-DGFAPI_USE_FADVISE"
+  endif
 endif
 
 ifeq ($(CONFIG_TARGET_OS), Linux)
@@ -106,6 +118,10 @@ ifeq ($(CONFIG_TARGET_OS), SunOS)
 endif
 ifeq ($(CONFIG_TARGET_OS), FreeBSD)
   LIBS	 += -lpthread -lrt
+  LDFLAGS += -rdynamic
+endif
+ifeq ($(CONFIG_TARGET_OS), OpenBSD)
+  LIBS	 += -lpthread
   LDFLAGS += -rdynamic
 endif
 ifeq ($(CONFIG_TARGET_OS), NetBSD)
@@ -128,7 +144,7 @@ ifneq (,$(findstring CYGWIN,$(CONFIG_TARGET_OS)))
   SOURCE := $(filter-out engines/mmap.c,$(SOURCE))
   SOURCE += os/windows/posix.c
   LIBS	 += -lpthread -lpsapi -lws2_32
-  CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format
+  CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format -static
 endif
 
 OBJS = $(SOURCE:.c=.o)
@@ -206,7 +222,7 @@ FIO-VERSION-FILE: FORCE
 
 override CFLAGS += -DFIO_VERSION='"$(FIO_VERSION)"'
 
-.c.o: FORCE FIO-VERSION-FILE
+%.o : %.c
 	$(QUIET_CC)$(CC) -o $@ $(CFLAGS) $(CPPFLAGS) -c $<
 	@$(CC) -MM $(CFLAGS) $(CPPFLAGS) $*.c > $*.d
 	@mv -f $*.d $*.d.tmp
@@ -267,16 +283,21 @@ t/lfsr-test: $(T_LFSR_TEST_OBJS)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_LFSR_TEST_OBJS) $(LIBS)
 
 clean: FORCE
-	-rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) core.* core gfio FIO-VERSION-FILE *.d config-host.mak config-host.h
+	-rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) core.* core gfio FIO-VERSION-FILE *.d lib/*.d crc/*.d engines/*.d profiles/*.d t/*.d config-host.mak config-host.h
 
 distclean: clean FORCE
-	@rm -f cscope.out
+	@rm -f cscope.out fio.pdf fio_generate_plots.pdf fio2gnuplot.pdf
 
 cscope:
 	@cscope -b -R
 
 tools/plot/fio2gnuplot.1:
 	@cat tools/plot/fio2gnuplot.manpage | txt2man -t fio2gnuplot >  tools/plot/fio2gnuplot.1
+
+doc: tools/plot/fio2gnuplot.1
+	@man -t ./fio.1 | ps2pdf - fio.pdf
+	@man -t tools/fio_generate_plots.1 | ps2pdf - fio_generate_plots.pdf
+	@man -t tools/plot/fio2gnuplot.1 | ps2pdf - fio2gnuplot.pdf
 
 install: $(PROGS) $(SCRIPTS) tools/plot/fio2gnuplot.1 FORCE
 	$(INSTALL) -m 755 -d $(DESTDIR)$(bindir)

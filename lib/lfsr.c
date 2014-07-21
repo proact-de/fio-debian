@@ -2,6 +2,7 @@
 #include <math.h>
 
 #include "lfsr.h"
+#include "../compiler/compiler.h"
 
 /*
  * LFSR taps retrieved from:
@@ -132,11 +133,9 @@ int lfsr_next(struct fio_lfsr *fl, uint64_t *off, uint64_t last)
 		if (fl->cycle_length && !--fl->cycle_length) {
 			__lfsr_next(fl, fl->spin + 1);
 			fl->cycle_length = fl->cached_cycle_length;
-			goto check;
-		}
-		__lfsr_next(fl, fl->spin);
-check: ;
-	} while (fl->last_val > fl->max_val);
+		} else
+			__lfsr_next(fl, fl->spin);
+	} while (fio_unlikely(fl->last_val > fl->max_val));
 
 	*off = fl->last_val;
 	return 0;
@@ -187,7 +186,7 @@ static uint8_t *find_lfsr(uint64_t size)
  * Thus, [1] is equivalent to (y * i) % (spin + 1) == 0;
  * Also, the cycle's length will be (x * i) + (y * i) / (spin + 1)
  */
-int prepare_spin(struct fio_lfsr *fl, unsigned int spin)
+static int prepare_spin(struct fio_lfsr *fl, unsigned int spin)
 {
 	uint64_t max = (fl->cached_bit << 1) - 1;
 	uint64_t x, y;

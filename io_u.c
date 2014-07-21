@@ -11,6 +11,7 @@
 #include "trim.h"
 #include "lib/rand.h"
 #include "lib/axmap.h"
+#include "err.h"
 
 struct io_completion_data {
 	int nr;				/* input */
@@ -103,7 +104,7 @@ static int __get_next_rand_offset(struct thread_data *td, struct fio_file *f,
 
 		dprint(FD_RANDOM, "off rand %llu\n", (unsigned long long) r);
 
-		*b = (lastb - 1) * (r / ((uint64_t) rmax + 1.0));
+		*b = lastb * (r / ((uint64_t) rmax + 1.0));
 	} else {
 		uint64_t off = 0;
 
@@ -222,7 +223,7 @@ static int get_next_rand_offset(struct thread_data *td, struct fio_file *f,
 	if (!flist_empty(&td->next_rand_list)) {
 		struct rand_off *r;
 fetch:
-		r = flist_entry(td->next_rand_list.next, struct rand_off, list);
+		r = flist_first_entry(&td->next_rand_list, struct rand_off, list);
 		flist_del(&r->list);
 		*b = r->off;
 		free(r);
@@ -272,7 +273,7 @@ static int get_next_seq_offset(struct thread_data *td, struct fio_file *f,
 {
 	assert(ddir_rw(ddir));
 
-	if (f->last_pos >= f->io_size + get_start_offset(td) && td->o.time_based)
+	if (f->last_pos >= f->io_size + get_start_offset(td, f) && td->o.time_based)
 		f->last_pos = f->last_pos - f->io_size;
 
 	if (f->last_pos < f->real_file_size) {
@@ -414,7 +415,7 @@ static inline int io_u_fits(struct thread_data *td, struct io_u *io_u,
 {
 	struct fio_file *f = io_u->file;
 
-	return io_u->offset + buflen <= f->io_size + get_start_offset(td);
+	return io_u->offset + buflen <= f->io_size + get_start_offset(td, f);
 }
 
 static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
@@ -425,12 +426,10 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
 	unsigned int minbs, maxbs;
 	unsigned long r, rand_max;
 
-	assert(ddir_rw(io_u->ddir));
+	assert(ddir_rw(ddir));
 
 	if (td->o.bs_is_seq_rand)
 		ddir = is_random ? DDIR_WRITE: DDIR_READ;
-	else
-		ddir = io_u->ddir;
 
 	minbs = td->o.min_bs[ddir];
 	maxbs = td->o.max_bs[ddir];
@@ -679,7 +678,7 @@ static void set_rw_ddir(struct thread_data *td, struct io_u *io_u)
 
 void put_file_log(struct thread_data *td, struct fio_file *f)
 {
-	int ret = put_file(td, f);
+	unsigned int ret = put_file(td, f);
 
 	if (ret)
 		td_verror(td, ret, "file close");
@@ -985,6 +984,9 @@ static struct fio_file *get_next_file_rand(struct thread_data *td,
 		if (!fio_file_open(f)) {
 			int err;
 
+			if (td->nr_open_files >= td->o.open_files)
+				return ERR_PTR(-EBUSY);
+
 			err = td_io_open_file(td, f);
 			if (err)
 				continue;
@@ -1026,6 +1028,9 @@ static struct fio_file *get_next_file_rr(struct thread_data *td, int goodf,
 
 		if (!fio_file_open(f)) {
 			int err;
+
+			if (td->nr_open_files >= td->o.open_files)
+				return ERR_PTR(-EBUSY);
 
 			err = td_io_open_file(td, f);
 			if (err) {
@@ -1080,16 +1085,22 @@ static struct fio_file *__get_next_file(struct thread_data *td)
 	else
 		f = get_next_file_rand(td, FIO_FILE_open, FIO_FILE_closing);
 
+	if (IS_ERR(f))
+		return f;
+
 	td->file_service_file = f;
 	td->file_service_left = td->file_service_nr - 1;
 out:
-	dprint(FD_FILE, "get_next_file: %p [%s]\n", f, f->file_name);
+	if (f)
+		dprint(FD_FILE, "get_next_file: %p [%s]\n", f, f->file_name);
+	else
+		dprint(FD_FILE, "get_next_file: NULL\n");
 	return f;
 }
 
 static struct fio_file *get_next_file(struct thread_data *td)
 {
-	if (!(td->flags & TD_F_PROFILE_OPS)) {
+	if (td->flags & TD_F_PROFILE_OPS) {
 		struct prof_io_ops *ops = &td->prof_io_ops;
 
 		if (ops->get_next_file)
@@ -1099,14 +1110,14 @@ static struct fio_file *get_next_file(struct thread_data *td)
 	return __get_next_file(td);
 }
 
-static int set_io_u_file(struct thread_data *td, struct io_u *io_u)
+static long set_io_u_file(struct thread_data *td, struct io_u *io_u)
 {
 	struct fio_file *f;
 
 	do {
 		f = get_next_file(td);
-		if (!f)
-			return 1;
+		if (IS_ERR_OR_NULL(f))
+			return PTR_ERR(f);
 
 		io_u->file = f;
 		get_file(f);
@@ -1126,22 +1137,177 @@ static int set_io_u_file(struct thread_data *td, struct io_u *io_u)
 	return 0;
 }
 
+static void lat_fatal(struct thread_data *td, struct io_completion_data *icd,
+		      unsigned long tusec, unsigned long max_usec)
+{
+	if (!td->error)
+		log_err("fio: latency of %lu usec exceeds specified max (%lu usec)\n", tusec, max_usec);
+	td_verror(td, ETIMEDOUT, "max latency exceeded");
+	icd->error = ETIMEDOUT;
+}
+
+static void lat_new_cycle(struct thread_data *td)
+{
+	fio_gettime(&td->latency_ts, NULL);
+	td->latency_ios = ddir_rw_sum(td->io_blocks);
+	td->latency_failed = 0;
+}
+
+/*
+ * We had an IO outside the latency target. Reduce the queue depth. If we
+ * are at QD=1, then it's time to give up.
+ */
+static int __lat_target_failed(struct thread_data *td)
+{
+	if (td->latency_qd == 1)
+		return 1;
+
+	td->latency_qd_high = td->latency_qd;
+
+	if (td->latency_qd == td->latency_qd_low)
+		td->latency_qd_low--;
+
+	td->latency_qd = (td->latency_qd + td->latency_qd_low) / 2;
+
+	dprint(FD_RATE, "Ramped down: %d %d %d\n", td->latency_qd_low, td->latency_qd, td->latency_qd_high);
+
+	/*
+	 * When we ramp QD down, quiesce existing IO to prevent
+	 * a storm of ramp downs due to pending higher depth.
+	 */
+	io_u_quiesce(td);
+	lat_new_cycle(td);
+	return 0;
+}
+
+static int lat_target_failed(struct thread_data *td)
+{
+	if (td->o.latency_percentile.u.f == 100.0)
+		return __lat_target_failed(td);
+
+	td->latency_failed++;
+	return 0;
+}
+
+void lat_target_init(struct thread_data *td)
+{
+	td->latency_end_run = 0;
+
+	if (td->o.latency_target) {
+		dprint(FD_RATE, "Latency target=%llu\n", td->o.latency_target);
+		fio_gettime(&td->latency_ts, NULL);
+		td->latency_qd = 1;
+		td->latency_qd_high = td->o.iodepth;
+		td->latency_qd_low = 1;
+		td->latency_ios = ddir_rw_sum(td->io_blocks);
+	} else
+		td->latency_qd = td->o.iodepth;
+}
+
+void lat_target_reset(struct thread_data *td)
+{
+	if (!td->latency_end_run)
+		lat_target_init(td);
+}
+
+static void lat_target_success(struct thread_data *td)
+{
+	const unsigned int qd = td->latency_qd;
+	struct thread_options *o = &td->o;
+
+	td->latency_qd_low = td->latency_qd;
+
+	/*
+	 * If we haven't failed yet, we double up to a failing value instead
+	 * of bisecting from highest possible queue depth. If we have set
+	 * a limit other than td->o.iodepth, bisect between that.
+	 */
+	if (td->latency_qd_high != o->iodepth)
+		td->latency_qd = (td->latency_qd + td->latency_qd_high) / 2;
+	else
+		td->latency_qd *= 2;
+
+	if (td->latency_qd > o->iodepth)
+		td->latency_qd = o->iodepth;
+
+	dprint(FD_RATE, "Ramped up: %d %d %d\n", td->latency_qd_low, td->latency_qd, td->latency_qd_high);
+
+	/*
+	 * Same as last one, we are done. Let it run a latency cycle, so
+	 * we get only the results from the targeted depth.
+	 */
+	if (td->latency_qd == qd) {
+		if (td->latency_end_run) {
+			dprint(FD_RATE, "We are done\n");
+			td->done = 1;
+		} else {
+			dprint(FD_RATE, "Quiesce and final run\n");
+			io_u_quiesce(td);
+			td->latency_end_run = 1;
+			reset_all_stats(td);
+			reset_io_stats(td);
+		}
+	}
+
+	lat_new_cycle(td);
+}
+
+/*
+ * Check if we can bump the queue depth
+ */
+void lat_target_check(struct thread_data *td)
+{
+	uint64_t usec_window;
+	uint64_t ios;
+	double success_ios;
+
+	usec_window = utime_since_now(&td->latency_ts);
+	if (usec_window < td->o.latency_window)
+		return;
+
+	ios = ddir_rw_sum(td->io_blocks) - td->latency_ios;
+	success_ios = (double) (ios - td->latency_failed) / (double) ios;
+	success_ios *= 100.0;
+
+	dprint(FD_RATE, "Success rate: %.2f%% (target %.2f%%)\n", success_ios, td->o.latency_percentile.u.f);
+
+	if (success_ios >= td->o.latency_percentile.u.f)
+		lat_target_success(td);
+	else
+		__lat_target_failed(td);
+}
+
+/*
+ * If latency target is enabled, we might be ramping up or down and not
+ * using the full queue depth available.
+ */
+int queue_full(struct thread_data *td)
+{
+	const int qempty = io_u_qempty(&td->io_u_freelist);
+
+	if (qempty)
+		return 1;
+	if (!td->o.latency_target)
+		return 0;
+
+	return td->cur_depth >= td->latency_qd;
+}
 
 struct io_u *__get_io_u(struct thread_data *td)
 {
-	struct io_u *io_u;
+	struct io_u *io_u = NULL;
 
 	td_io_u_lock(td);
 
 again:
 	if (!io_u_rempty(&td->io_u_requeues))
 		io_u = io_u_rpop(&td->io_u_requeues);
-	else if (!io_u_qempty(&td->io_u_freelist)) {
+	else if (!queue_full(td)) {
 		io_u = io_u_qpop(&td->io_u_freelist);
 
+		io_u->file = NULL;
 		io_u->buflen = 0;
 		io_u->resid = 0;
-		io_u->file = NULL;
 		io_u->end_io = NULL;
 	}
 
@@ -1155,6 +1321,7 @@ again:
 		io_u->acct_ddir = -1;
 		td->cur_depth++;
 		io_u->flags |= IO_U_F_IN_CUR_DEPTH;
+		io_u->ipo = NULL;
 	} else if (td->o.verify_async) {
 		/*
 		 * We ran out, wait for async verify threads to finish and
@@ -1269,6 +1436,7 @@ struct io_u *get_io_u(struct thread_data *td)
 	struct fio_file *f;
 	struct io_u *io_u;
 	int do_scramble = 0;
+	long ret = 0;
 
 	io_u = __get_io_u(td);
 	if (!io_u) {
@@ -1294,11 +1462,17 @@ struct io_u *get_io_u(struct thread_data *td)
 		if (read_iolog_get(td, io_u))
 			goto err_put;
 	} else if (set_io_u_file(td, io_u)) {
+		ret = -EBUSY;
 		dprint(FD_IO, "io_u %p, setting file failed\n", io_u);
 		goto err_put;
 	}
 
 	f = io_u->file;
+	if (!f) {
+		dprint(FD_IO, "io_u %p, setting file failed\n", io_u);
+		goto err_put;
+	}
+
 	assert(fio_file_open(f));
 
 	if (ddir_rw(io_u->ddir)) {
@@ -1314,7 +1488,8 @@ struct io_u *get_io_u(struct thread_data *td)
 			if (td->flags & TD_F_REFILL_BUFFERS) {
 				io_u_fill_buffer(td, io_u,
 					io_u->xfer_buflen, io_u->xfer_buflen);
-			} else if (td->flags & TD_F_SCRAMBLE_BUFFERS)
+			} else if ((td->flags & TD_F_SCRAMBLE_BUFFERS) &&
+				   !(td->flags & TD_F_COMPRESS))
 				do_scramble = 1;
 			if (td->flags & TD_F_VER_NONE) {
 				populate_verify_io_u(td, io_u);
@@ -1347,7 +1522,7 @@ out:
 err_put:
 	dprint(FD_IO, "get_io_u failed\n");
 	put_io_u(td, io_u);
-	return NULL;
+	return ERR_PTR(ret);
 }
 
 void io_u_log_error(struct thread_data *td, struct io_u *io_u)
@@ -1373,20 +1548,26 @@ void io_u_log_error(struct thread_data *td, struct io_u *io_u)
 		td_verror(td, io_u->error, "io_u error");
 }
 
+static inline int gtod_reduce(struct thread_data *td)
+{
+	return td->o.disable_clat && td->o.disable_lat && td->o.disable_slat
+		&& td->o.disable_bw;
+}
+
 static void account_io_completion(struct thread_data *td, struct io_u *io_u,
 				  struct io_completion_data *icd,
 				  const enum fio_ddir idx, unsigned int bytes)
 {
 	unsigned long lusec = 0;
 
-	if (!td->o.disable_clat || !td->o.disable_bw)
+	if (!gtod_reduce(td))
 		lusec = utime_since(&io_u->issue_time, &icd->time);
 
 	if (!td->o.disable_lat) {
 		unsigned long tusec;
 
 		tusec = utime_since(&io_u->start_time, &icd->time);
-		add_lat_sample(td, idx, tusec, bytes);
+		add_lat_sample(td, idx, tusec, bytes, io_u->offset);
 
 		if (td->flags & TD_F_PROFILE_OPS) {
 			struct prof_io_ops *ops = &td->prof_io_ops;
@@ -1395,26 +1576,24 @@ static void account_io_completion(struct thread_data *td, struct io_u *io_u,
 				icd->error = ops->io_u_lat(td, tusec);
 		}
 
-		if (td->o.max_latency && tusec > td->o.max_latency) {
-			if (!td->error)
-				log_err("fio: latency of %lu usec exceeds specified max (%u usec)\n", tusec, td->o.max_latency);
-			td_verror(td, ETIMEDOUT, "max latency exceeded");
-			icd->error = ETIMEDOUT;
+		if (td->o.max_latency && tusec > td->o.max_latency)
+			lat_fatal(td, icd, tusec, td->o.max_latency);
+		if (td->o.latency_target && tusec > td->o.latency_target) {
+			if (lat_target_failed(td))
+				lat_fatal(td, icd, tusec, td->o.latency_target);
 		}
 	}
 
 	if (!td->o.disable_clat) {
-		add_clat_sample(td, idx, lusec, bytes);
+		add_clat_sample(td, idx, lusec, bytes, io_u->offset);
 		io_u_mark_latency(td, lusec);
 	}
 
 	if (!td->o.disable_bw)
 		add_bw_sample(td, idx, bytes, &icd->time);
 
-	add_iops_sample(td, idx, bytes, &icd->time);
-
-	if (td->o.number_ios && !--td->o.number_ios)
-		td->done = 1;
+	if (!gtod_reduce(td))
+		add_iops_sample(td, idx, bytes, &icd->time);
 }
 
 static long long usec_for_io(struct thread_data *td, enum fio_ddir ddir)
@@ -1438,6 +1617,22 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 	td_io_u_lock(td);
 	assert(io_u->flags & IO_U_F_FLIGHT);
 	io_u->flags &= ~(IO_U_F_FLIGHT | IO_U_F_BUSY_OK);
+
+	/*
+	 * Mark IO ok to verify
+	 */
+	if (io_u->ipo) {
+		/*
+		 * Remove errored entry from the verification list
+		 */
+		if (io_u->error)
+			unlog_io_piece(td, io_u);
+		else {
+			io_u->ipo->flags &= ~IP_F_IN_FLIGHT;
+			write_barrier();
+		}
+	}
+
 	td_io_u_unlock(td);
 
 	if (ddir_sync(io_u->ddir)) {
@@ -1493,12 +1688,6 @@ static void io_completed(struct thread_data *td, struct io_u *io_u,
 					 utime_since_now(&td->start));
 		}
 
-		if (td_write(td) && idx == DDIR_WRITE &&
-		    td->o.do_verify &&
-		    td->o.verify != VERIFY_NONE &&
-		    !td->o.experimental_verify)
-			log_io_piece(td, io_u);
-
 		icd->bytes_done[idx] += bytes;
 
 		if (io_u->end_io) {
@@ -1529,7 +1718,8 @@ static void init_icd(struct thread_data *td, struct io_completion_data *icd,
 		     int nr)
 {
 	int ddir;
-	if (!td->o.disable_clat || !td->o.disable_bw)
+
+	if (!gtod_reduce(td))
 		fio_gettime(&icd->time, NULL);
 
 	icd->nr = nr;
@@ -1633,14 +1823,17 @@ void io_u_queued(struct thread_data *td, struct io_u *io_u)
 		unsigned long slat_time;
 
 		slat_time = utime_since(&io_u->start_time, &io_u->issue_time);
-		add_slat_sample(td, io_u->ddir, slat_time, io_u->xfer_buflen);
+		add_slat_sample(td, io_u->ddir, slat_time, io_u->xfer_buflen,
+				io_u->offset);
 	}
 }
 
 void fill_io_buffer(struct thread_data *td, void *buf, unsigned int min_write,
 		    unsigned int max_bs)
 {
-	if (!td->o.zero_buffers) {
+	if (td->o.buffer_pattern_bytes)
+		fill_buffer_pattern(td, buf, max_bs);
+	else if (!td->o.zero_buffers) {
 		unsigned int perc = td->o.compress_percentage;
 
 		if (perc) {

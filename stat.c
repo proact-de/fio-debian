@@ -497,7 +497,8 @@ static void show_latencies(struct thread_stat *ts)
 	show_lat_m(io_u_lat_m);
 }
 
-void show_thread_status(struct thread_stat *ts, struct group_run_stats *rs)
+static void show_thread_status_normal(struct thread_stat *ts,
+				      struct group_run_stats *rs)
 {
 	double usr_cpu, sys_cpu;
 	unsigned long runtime;
@@ -585,6 +586,13 @@ void show_thread_status(struct thread_stat *ts, struct group_run_stats *rs)
 					(unsigned long long)ts->total_err_count,
 					ts->first_error,
 					strerror(ts->first_error));
+	}
+	if (ts->latency_depth) {
+		log_info("     latency   : target=%llu, window=%llu, percentile=%.2f%%, depth=%u\n",
+					(unsigned long long)ts->latency_target,
+					(unsigned long long)ts->latency_window,
+					ts->latency_percentile.u.f,
+					ts->latency_depth);
 	}
 }
 
@@ -762,7 +770,7 @@ static void add_ddir_status_json(struct thread_stat *ts,
 	}
 	json_object_add_value_int(dir_object, "bw_min", min);
 	json_object_add_value_int(dir_object, "bw_max", max);
-	json_object_add_value_float(dir_object, "bw_agg", mean);
+	json_object_add_value_float(dir_object, "bw_agg", p_of_agg);
 	json_object_add_value_float(dir_object, "bw_mean", mean);
 	json_object_add_value_float(dir_object, "bw_dev", dev);
 }
@@ -823,7 +831,7 @@ static void show_thread_status_terse_v2(struct thread_stat *ts,
 	log_info("\n");
 
 	/* Additional output if description is set */
-	if (ts->description)
+	if (strlen(ts->description))
 		log_info(";%s", ts->description);
 
 	log_info("\n");
@@ -883,7 +891,8 @@ static void show_thread_status_terse_v3_v4(struct thread_stat *ts,
 		log_info(";%3.2f%%", io_u_lat_m[i]);
 
 	/* disk util stats, if any */
-	show_disk_util(1, NULL);
+	if (is_backend)
+		show_disk_util(1, NULL);
 
 	/* Additional output if continue_on_error set - default off*/
 	if (ts->continue_on_error)
@@ -970,7 +979,14 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 	/* Additional output if continue_on_error set - default off*/
 	if (ts->continue_on_error) {
 		json_object_add_value_int(root, "total_err", ts->total_err_count);
-		json_object_add_value_int(root, "total_err", ts->first_error);
+		json_object_add_value_int(root, "first_error", ts->first_error);
+	}
+
+	if (ts->latency_depth) {
+		json_object_add_value_int(root, "latency_depth", ts->latency_depth);
+		json_object_add_value_int(root, "latency_target", ts->latency_target);
+		json_object_add_value_float(root, "latency_percentile", ts->latency_percentile.u.f);
+		json_object_add_value_int(root, "latency_window", ts->latency_window);
 	}
 
 	/* Additional output if description is set */
@@ -989,6 +1005,18 @@ static void show_thread_status_terse(struct thread_stat *ts,
 		show_thread_status_terse_v3_v4(ts, rs, terse_version);
 	else
 		log_err("fio: bad terse version!? %d\n", terse_version);
+}
+
+struct json_object *show_thread_status(struct thread_stat *ts,
+				       struct group_run_stats *rs)
+{
+	if (output_format == FIO_OUTPUT_TERSE)
+		show_thread_status_terse(ts, rs);
+	else if (output_format == FIO_OUTPUT_JSON)
+		return show_thread_status_json(ts, rs);
+	else
+		show_thread_status_normal(ts, rs);
+	return NULL;
 }
 
 static void sum_stat(struct io_stat *dst, struct io_stat *src, int nr)
@@ -1205,12 +1233,12 @@ static void __show_run_stats(void)
 			/*
 			 * These are per-group shared already
 			 */
-			strncpy(ts->name, td->o.name, FIO_JOBNAME_SIZE);
+			strncpy(ts->name, td->o.name, FIO_JOBNAME_SIZE - 1);
 			if (td->o.description)
 				strncpy(ts->description, td->o.description,
-						FIO_JOBNAME_SIZE);
+						FIO_JOBDESC_SIZE - 1);
 			else
-				memset(ts->description, 0, FIO_JOBNAME_SIZE);
+				memset(ts->description, 0, FIO_JOBDESC_SIZE);
 
 			/*
 			 * If multiple entries in this group, this is
@@ -1244,12 +1272,19 @@ static void __show_run_stats(void)
 			if (!td->error && td->o.continue_on_error &&
 			    td->first_error) {
 				ts->error = td->first_error;
-				strcpy(ts->verror, td->verror);
+				ts->verror[sizeof(ts->verror) - 1] = '\0';
+				strncpy(ts->verror, td->verror, sizeof(ts->verror) - 1);
 			} else  if (td->error) {
 				ts->error = td->error;
-				strcpy(ts->verror, td->verror);
+				ts->verror[sizeof(ts->verror) - 1] = '\0';
+				strncpy(ts->verror, td->verror, sizeof(ts->verror) - 1);
 			}
 		}
+
+		ts->latency_depth = td->latency_qd;
+		ts->latency_target = td->o.latency_target;
+		ts->latency_percentile = td->o.latency_percentile;
+		ts->latency_window = td->o.latency_window;
 
 		sum_thread_stats(ts, &td->ts, idx);
 	}
@@ -1324,7 +1359,7 @@ static void __show_run_stats(void)
 			struct json_object *tmp = show_thread_status_json(ts, rs);
 			json_array_add_value_object(array, tmp);
 		} else
-			show_thread_status(ts, rs);
+			show_thread_status_normal(ts, rs);
 	}
 	if (output_format == FIO_OUTPUT_JSON) {
 		/* disk util stats, if any */
@@ -1352,6 +1387,16 @@ static void __show_run_stats(void)
 	else if (output_format == FIO_OUTPUT_NORMAL) {
 		show_disk_util(0, NULL);
 		show_idle_prof_stats(FIO_OUTPUT_NORMAL, NULL);
+	}
+
+	if ( !(output_format == FIO_OUTPUT_TERSE) && append_terse_output) {
+		log_info("\nAdditional Terse Output:\n");
+
+		for (i = 0; i < nr_ts; i++) {
+			ts = &threadstats[i];
+			rs = &runstats[ts->groupid];
+			show_thread_status_terse(ts, rs);
+		}
 	}
 
 	log_info_flush();
@@ -1428,7 +1473,12 @@ void show_running_run_stats(void)
 	fio_mutex_down(stat_mutex);
 
 	if (!pthread_create(&thread, NULL, __show_running_run_stats, NULL)) {
-		pthread_detach(thread);
+		int err;
+
+		err = pthread_detach(thread);
+		if (err)
+			log_err("fio: DU thread detach failed: %s\n", strerror(err));
+
 		return;
 	}
 
@@ -1437,8 +1487,9 @@ void show_running_run_stats(void)
 
 static int status_interval_init;
 static struct timeval status_time;
+static int status_file_disabled;
 
-#define FIO_STATUS_FILE		"/tmp/fio-dump-status"
+#define FIO_STATUS_FILE		"fio-dump-status"
 
 static int check_status_file(void)
 {
@@ -1446,9 +1497,15 @@ static int check_status_file(void)
 	const char *temp_dir;
 	char fio_status_file_path[PATH_MAX];
 
+	if (status_file_disabled)
+		return 0;
+
 	temp_dir = getenv("TMPDIR");
-	if (temp_dir == NULL)
+	if (temp_dir == NULL) {
 		temp_dir = getenv("TEMP");
+		if (temp_dir && strlen(temp_dir) >= PATH_MAX)
+			temp_dir = NULL;
+	}
 	if (temp_dir == NULL)
 		temp_dir = "/tmp";
 
@@ -1457,7 +1514,13 @@ static int check_status_file(void)
 	if (stat(fio_status_file_path, &sb))
 		return 0;
 
-	unlink(fio_status_file_path);
+	if (unlink(fio_status_file_path) < 0) {
+		log_err("fio: failed to unlink %s: %s\n", fio_status_file_path,
+							strerror(errno));
+		log_err("fio: disabling status file updates\n");
+		status_file_disabled = 1;
+	}
+
 	return 1;
 }
 
@@ -1500,24 +1563,55 @@ static inline void add_stat_sample(struct io_stat *is, unsigned long data)
 
 static void __add_log_sample(struct io_log *iolog, unsigned long val,
 			     enum fio_ddir ddir, unsigned int bs,
-			     unsigned long t)
+			     unsigned long t, uint64_t offset)
 {
-	const int nr_samples = iolog->nr_samples;
+	uint64_t nr_samples = iolog->nr_samples;
+	struct io_sample *s;
+
+	if (iolog->disabled)
+		return;
 
 	if (!iolog->nr_samples)
 		iolog->avg_last = t;
 
 	if (iolog->nr_samples == iolog->max_samples) {
-		int new_size = sizeof(struct io_sample) * iolog->max_samples*2;
+		size_t new_size;
+		void *new_log;
 
-		iolog->log = realloc(iolog->log, new_size);
-		iolog->max_samples <<= 1;
+		new_size = 2 * iolog->max_samples * log_entry_sz(iolog);
+
+		if (iolog->log_gz && (new_size > iolog->log_gz)) {
+			if (iolog_flush(iolog, 0)) {
+				log_err("fio: failed flushing iolog! Will stop logging.\n");
+				iolog->disabled = 1;
+				return;
+			}
+			nr_samples = iolog->nr_samples;
+		} else {
+			new_log = realloc(iolog->log, new_size);
+			if (!new_log) {
+				log_err("fio: failed extending iolog! Will stop logging.\n");
+				iolog->disabled = 1;
+				return;
+			}
+			iolog->log = new_log;
+			iolog->max_samples <<= 1;
+		}
 	}
 
-	iolog->log[nr_samples].val = val;
-	iolog->log[nr_samples].time = t;
-	iolog->log[nr_samples].ddir = ddir;
-	iolog->log[nr_samples].bs = bs;
+	s = get_sample(iolog, nr_samples);
+
+	s->val = val;
+	s->time = t;
+	io_sample_set_ddir(iolog, s, ddir);
+	s->bs = bs;
+
+	if (iolog->log_offset) {
+		struct io_sample_offset *so = (void *) s;
+
+		so->offset = offset;
+	}
+
 	iolog->nr_samples++;
 }
 
@@ -1527,9 +1621,75 @@ static inline void reset_io_stat(struct io_stat *ios)
 	ios->mean.u.f = ios->S.u.f = 0;
 }
 
+void reset_io_stats(struct thread_data *td)
+{
+	struct thread_stat *ts = &td->ts;
+	int i, j;
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		reset_io_stat(&ts->clat_stat[i]);
+		reset_io_stat(&ts->slat_stat[i]);
+		reset_io_stat(&ts->lat_stat[i]);
+		reset_io_stat(&ts->bw_stat[i]);
+		reset_io_stat(&ts->iops_stat[i]);
+
+		ts->io_bytes[i] = 0;
+		ts->runtime[i] = 0;
+
+		for (j = 0; j < FIO_IO_U_PLAT_NR; j++)
+			ts->io_u_plat[i][j] = 0;
+	}
+
+	for (i = 0; i < FIO_IO_U_MAP_NR; i++) {
+		ts->io_u_map[i] = 0;
+		ts->io_u_submit[i] = 0;
+		ts->io_u_complete[i] = 0;
+		ts->io_u_lat_u[i] = 0;
+		ts->io_u_lat_m[i] = 0;
+		ts->total_submit = 0;
+		ts->total_complete = 0;
+	}
+
+	for (i = 0; i < 3; i++) {
+		ts->total_io_u[i] = 0;
+		ts->short_io_u[i] = 0;
+	}
+}
+
+static void _add_stat_to_log(struct io_log *iolog, unsigned long elapsed)
+{
+	/*
+	 * Note an entry in the log. Use the mean from the logged samples,
+	 * making sure to properly round up. Only write a log entry if we
+	 * had actual samples done.
+	 */
+	if (iolog->avg_window[DDIR_READ].samples) {
+		unsigned long mr;
+
+		mr = iolog->avg_window[DDIR_READ].mean.u.f + 0.50;
+		__add_log_sample(iolog, mr, DDIR_READ, 0, elapsed, 0);
+	}
+	if (iolog->avg_window[DDIR_WRITE].samples) {
+		unsigned long mw;
+
+		mw = iolog->avg_window[DDIR_WRITE].mean.u.f + 0.50;
+		__add_log_sample(iolog, mw, DDIR_WRITE, 0, elapsed, 0);
+	}
+	if (iolog->avg_window[DDIR_TRIM].samples) {
+		unsigned long mw;
+
+		mw = iolog->avg_window[DDIR_TRIM].mean.u.f + 0.50;
+		__add_log_sample(iolog, mw, DDIR_TRIM, 0, elapsed, 0);
+	}
+
+	reset_io_stat(&iolog->avg_window[DDIR_READ]);
+	reset_io_stat(&iolog->avg_window[DDIR_WRITE]);
+	reset_io_stat(&iolog->avg_window[DDIR_TRIM]);
+}
+
 static void add_log_sample(struct thread_data *td, struct io_log *iolog,
 			   unsigned long val, enum fio_ddir ddir,
-			   unsigned int bs)
+			   unsigned int bs, uint64_t offset)
 {
 	unsigned long elapsed, this_window;
 
@@ -1542,7 +1702,7 @@ static void add_log_sample(struct thread_data *td, struct io_log *iolog,
 	 * If no time averaging, just add the log sample.
 	 */
 	if (!iolog->avg_msec) {
-		__add_log_sample(iolog, val, ddir, bs, elapsed);
+		__add_log_sample(iolog, val, ddir, bs, elapsed, offset);
 		return;
 	}
 
@@ -1560,35 +1720,27 @@ static void add_log_sample(struct thread_data *td, struct io_log *iolog,
 	if (this_window < iolog->avg_msec)
 		return;
 
-	/*
-	 * Note an entry in the log. Use the mean from the logged samples,
-	 * making sure to properly round up. Only write a log entry if we
-	 * had actual samples done.
-	 */
-	if (iolog->avg_window[DDIR_READ].samples) {
-		unsigned long mr;
+	_add_stat_to_log(iolog, elapsed);
 
-		mr = iolog->avg_window[DDIR_READ].mean.u.f + 0.50;
-		__add_log_sample(iolog, mr, DDIR_READ, 0, elapsed);
-	}
-	if (iolog->avg_window[DDIR_WRITE].samples) {
-		unsigned long mw;
-
-		mw = iolog->avg_window[DDIR_WRITE].mean.u.f + 0.50;
-		__add_log_sample(iolog, mw, DDIR_WRITE, 0, elapsed);
-	}
-	if (iolog->avg_window[DDIR_TRIM].samples) {
-		unsigned long mw;
-
-		mw = iolog->avg_window[DDIR_TRIM].mean.u.f + 0.50;
-		__add_log_sample(iolog, mw, DDIR_TRIM, 0, elapsed);
-	}
-
-
-	reset_io_stat(&iolog->avg_window[DDIR_READ]);
-	reset_io_stat(&iolog->avg_window[DDIR_WRITE]);
-	reset_io_stat(&iolog->avg_window[DDIR_TRIM]);
 	iolog->avg_last = elapsed;
+}
+
+void finalize_logs(struct thread_data *td)
+{
+	unsigned long elapsed;
+
+	elapsed = mtime_since_now(&td->epoch);
+
+	if (td->clat_log)
+		_add_stat_to_log(td->clat_log, elapsed);
+	if (td->slat_log)
+		_add_stat_to_log(td->slat_log, elapsed);
+	if (td->lat_log)
+		_add_stat_to_log(td->lat_log, elapsed);
+	if (td->bw_log)
+		_add_stat_to_log(td->bw_log, elapsed);
+	if (td->iops_log)
+		_add_stat_to_log(td->iops_log, elapsed);
 }
 
 void add_agg_sample(unsigned long val, enum fio_ddir ddir, unsigned int bs)
@@ -1599,7 +1751,7 @@ void add_agg_sample(unsigned long val, enum fio_ddir ddir, unsigned int bs)
 		return;
 
 	iolog = agg_io_log[ddir];
-	__add_log_sample(iolog, val, ddir, bs, mtime_since_genesis());
+	__add_log_sample(iolog, val, ddir, bs, mtime_since_genesis(), 0);
 }
 
 static void add_clat_percentile_sample(struct thread_stat *ts,
@@ -1612,7 +1764,7 @@ static void add_clat_percentile_sample(struct thread_stat *ts,
 }
 
 void add_clat_sample(struct thread_data *td, enum fio_ddir ddir,
-		     unsigned long usec, unsigned int bs)
+		     unsigned long usec, unsigned int bs, uint64_t offset)
 {
 	struct thread_stat *ts = &td->ts;
 
@@ -1622,14 +1774,14 @@ void add_clat_sample(struct thread_data *td, enum fio_ddir ddir,
 	add_stat_sample(&ts->clat_stat[ddir], usec);
 
 	if (td->clat_log)
-		add_log_sample(td, td->clat_log, usec, ddir, bs);
+		add_log_sample(td, td->clat_log, usec, ddir, bs, offset);
 
 	if (ts->clat_percentiles)
 		add_clat_percentile_sample(ts, usec, ddir);
 }
 
 void add_slat_sample(struct thread_data *td, enum fio_ddir ddir,
-		     unsigned long usec, unsigned int bs)
+		     unsigned long usec, unsigned int bs, uint64_t offset)
 {
 	struct thread_stat *ts = &td->ts;
 
@@ -1639,11 +1791,11 @@ void add_slat_sample(struct thread_data *td, enum fio_ddir ddir,
 	add_stat_sample(&ts->slat_stat[ddir], usec);
 
 	if (td->slat_log)
-		add_log_sample(td, td->slat_log, usec, ddir, bs);
+		add_log_sample(td, td->slat_log, usec, ddir, bs, offset);
 }
 
 void add_lat_sample(struct thread_data *td, enum fio_ddir ddir,
-		    unsigned long usec, unsigned int bs)
+		    unsigned long usec, unsigned int bs, uint64_t offset)
 {
 	struct thread_stat *ts = &td->ts;
 
@@ -1653,7 +1805,7 @@ void add_lat_sample(struct thread_data *td, enum fio_ddir ddir,
 	add_stat_sample(&ts->lat_stat[ddir], usec);
 
 	if (td->lat_log)
-		add_log_sample(td, td->lat_log, usec, ddir, bs);
+		add_log_sample(td, td->lat_log, usec, ddir, bs, offset);
 }
 
 void add_bw_sample(struct thread_data *td, enum fio_ddir ddir, unsigned int bs,
@@ -1679,11 +1831,15 @@ void add_bw_sample(struct thread_data *td, enum fio_ddir ddir, unsigned int bs,
 		if (!delta)
 			continue; /* No entries for interval */
 
-		rate = delta * 1000 / spent / 1024;
+		if (spent)
+			rate = delta * 1000 / spent / 1024;
+		else
+			rate = 0;
+
 		add_stat_sample(&ts->bw_stat[ddir], rate);
 
 		if (td->bw_log)
-			add_log_sample(td, td->bw_log, rate, ddir, bs);
+			add_log_sample(td, td->bw_log, rate, ddir, bs, 0);
 
 		td->stat_io_bytes[ddir] = td->this_io_bytes[ddir];
 	}
@@ -1714,11 +1870,15 @@ void add_iops_sample(struct thread_data *td, enum fio_ddir ddir, unsigned int bs
 		if (!delta)
 			continue; /* No entries for interval */
 
-		iops = (delta * 1000) / spent;
+		if (spent)
+			iops = (delta * 1000) / spent;
+		else
+			iops = 0;
+
 		add_stat_sample(&ts->iops_stat[ddir], iops);
 
 		if (td->iops_log)
-			add_log_sample(td, td->iops_log, iops, ddir, bs);
+			add_log_sample(td, td->iops_log, iops, ddir, bs, 0);
 
 		td->stat_io_blocks[ddir] = td->this_io_blocks[ddir];
 	}

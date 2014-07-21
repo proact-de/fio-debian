@@ -107,6 +107,20 @@ static struct ioengine_ops *dlopen_ioengine(struct thread_data *td,
 	ops = dlsym(dlhandle, engine_lib);
 	if (!ops)
 		ops = dlsym(dlhandle, "ioengine");
+
+	/*
+	 * For some external engines (like C++ ones) it is not that trivial
+	 * to provide a non-static ionengine structure that we can reference.
+	 * Instead we call a method which allocates the required ioengine
+	 * structure.
+	 */
+	if (!ops) {
+		get_ioengine_t get_ioengine = dlsym(dlhandle, "get_ioengine");
+
+		if (get_ioengine)
+			get_ioengine(&ops);
+	}
+
 	if (!ops) {
 		td_vmsg(td, -1, dlerror(), "dlsym");
 		dlclose(dlhandle);
@@ -360,6 +374,9 @@ int td_io_init(struct thread_data *td)
 		if (!td->error)
 			td->error = ret;
 	}
+
+	if (!ret && (td->io_ops->flags & FIO_NOIO))
+		td->flags |= TD_F_NOIO;
 
 	return ret;
 }

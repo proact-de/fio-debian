@@ -17,6 +17,7 @@ enum {
 	os_hpux,
 	os_mac,
 	os_netbsd,
+	os_openbsd,
 	os_solaris,
 	os_windows,
 	os_android,
@@ -30,6 +31,8 @@ enum {
 #include "os-linux.h"
 #elif defined(__FreeBSD__)
 #include "os-freebsd.h"
+#elif defined(__OpenBSD__)
+#include "os-openbsd.h"
 #elif defined(__NetBSD__)
 #include "os-netbsd.h"
 #elif defined(__sun__)
@@ -77,7 +80,10 @@ typedef struct aiocb os_aiocb_t;
 #define fio_getaffinity(pid, mask)	do { } while (0)
 #define fio_cpu_clear(mask, cpu)	do { } while (0)
 #define fio_cpuset_exit(mask)		(-1)
+#define fio_cpus_split(mask, cpu)	(0)
 typedef unsigned long os_cpu_mask_t;
+#else
+extern int fio_cpus_split(os_cpu_mask_t *mask, unsigned int cpu);
 #endif
 
 #ifndef FIO_HAVE_IOPRIO
@@ -88,6 +94,12 @@ typedef unsigned long os_cpu_mask_t;
 #define OS_O_DIRECT			0
 #else
 #define OS_O_DIRECT			O_DIRECT
+#endif
+
+#ifdef OS_O_ATOMIC
+#define FIO_O_ATOMIC			OS_O_ATOMIC
+#else
+#define FIO_O_ATOMIC			0
 #endif
 
 #ifndef FIO_HAVE_HUGETLB
@@ -188,38 +200,42 @@ static inline uint64_t fio_swap64(uint64_t val)
 #endif
 #endif /* FIO_HAVE_BYTEORDER_FUNCS */
 
+#ifdef FIO_INTERNAL
 #define le16_to_cpu(val) ({			\
-	uint16_t *__val = &(val);		\
-	__le16_to_cpu(*__val);			\
+	typecheck(uint16_t, val);		\
+	__le16_to_cpu(val);			\
 })
 #define le32_to_cpu(val) ({			\
-	uint32_t *__val = &(val);		\
-	__le32_to_cpu(*__val);			\
+	typecheck(uint32_t, val);		\
+	__le32_to_cpu(val);			\
 })
 #define le64_to_cpu(val) ({			\
-	uint64_t *__val = &(val);		\
-	__le64_to_cpu(*__val);			\
+	typecheck(uint64_t, val);		\
+	__le64_to_cpu(val);			\
 })
+#endif
+
 #define cpu_to_le16(val) ({			\
-	uint16_t *__val = &(val);		\
-	__cpu_to_le16(*__val);			\
+	typecheck(uint16_t, val);		\
+	__cpu_to_le16(val);			\
 })
 #define cpu_to_le32(val) ({			\
-	uint32_t *__val = &(val);		\
-	__cpu_to_le32(*__val);			\
+	typecheck(uint32_t, val);		\
+	__cpu_to_le32(val);			\
 })
 #define cpu_to_le64(val) ({			\
-	uint64_t *__val = &(val);		\
-	__cpu_to_le64(*__val);			\
+	typecheck(uint64_t, val);		\
+	__cpu_to_le64(val);			\
 })
 
 #ifndef FIO_HAVE_BLKTRACE
-static inline int is_blktrace(const char *fname)
+static inline int is_blktrace(const char *fname, int *need_swap)
 {
 	return 0;
 }
 struct thread_data;
-static inline int load_blktrace(struct thread_data *td, const char *fname)
+static inline int load_blktrace(struct thread_data *td, const char *fname,
+				int need_swap)
 {
 	return 1;
 }
@@ -312,6 +328,22 @@ static inline unsigned int cpus_online(void)
 {
 	return sysconf(_SC_NPROCESSORS_ONLN);
 }
+#endif
+
+#ifndef CPU_COUNT
+#ifdef FIO_HAVE_CPU_AFFINITY
+static inline int CPU_COUNT(os_cpu_mask_t *mask)
+{
+	int max_cpus = cpus_online();
+	int nr_cpus, i;
+
+	for (i = 0, nr_cpus = 0; i < max_cpus; i++)
+		if (fio_cpu_isset(mask, i))
+			nr_cpus++;
+
+	return nr_cpus;
+}
+#endif
 #endif
 
 #ifndef FIO_HAVE_GETTID

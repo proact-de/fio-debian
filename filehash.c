@@ -4,6 +4,7 @@
 #include "fio.h"
 #include "flist.h"
 #include "hash.h"
+#include "filehash.h"
 
 #define HASH_BUCKETS	512
 #define HASH_MASK	(HASH_BUCKETS - 1)
@@ -16,6 +17,18 @@ static struct fio_mutex *hash_lock;
 static unsigned short hash(const char *name)
 {
 	return jhash(name, strlen(name), 0) & HASH_MASK;
+}
+
+void fio_file_hash_lock(void)
+{
+	if (hash_lock)
+		fio_mutex_down(hash_lock);
+}
+
+void fio_file_hash_unlock(void)
+{
+	if (hash_lock)
+		fio_mutex_up(hash_lock);
 }
 
 void remove_file_hash(struct fio_file *f)

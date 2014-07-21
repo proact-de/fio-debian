@@ -28,8 +28,10 @@ struct bssplit {
 	uint32_t perc;
 };
 
+#define OPT_MAGIC	0x4f50544e
+
 struct thread_options {
-	int pad;
+	int magic;
 	char *description;
 	char *name;
 	char *directory;
@@ -43,15 +45,17 @@ struct thread_options {
 	unsigned int kb_base;
 	unsigned int unit_base;
 	unsigned int ddir_seq_nr;
-	long ddir_seq_add;
+	long long ddir_seq_add;
 	unsigned int iodepth;
 	unsigned int iodepth_low;
 	unsigned int iodepth_batch;
 	unsigned int iodepth_batch_complete;
 
 	unsigned long long size;
+	unsigned long long io_limit;
 	unsigned int size_percent;
 	unsigned int fill_device;
+	unsigned int file_append;
 	unsigned long long file_size_low;
 	unsigned long long file_size_high;
 	unsigned long long start_offset;
@@ -72,6 +76,7 @@ struct thread_options {
 	enum file_lock_mode file_lock_mode;
 
 	unsigned int odirect;
+	unsigned int oatomic;
 	unsigned int invalidate_cache;
 	unsigned int create_serialize;
 	unsigned int create_fsync;
@@ -99,13 +104,20 @@ struct thread_options {
 	unsigned int do_disk_util;
 	unsigned int override_sync;
 	unsigned int rand_repeatable;
+	unsigned int allrand_repeatable;
+	unsigned long long rand_seed;
 	unsigned int use_os_rand;
 	unsigned int log_avg_msec;
+	unsigned int log_offset;
+	unsigned int log_gz;
+	unsigned int log_gz_store;
 	unsigned int norandommap;
 	unsigned int softrandommap;
 	unsigned int bs_unaligned;
 	unsigned int fsync_on_close;
 	unsigned int bs_is_seq_rand;
+
+	unsigned int verify_only;
 
 	unsigned int random_distribution;
 
@@ -125,6 +137,7 @@ struct thread_options {
 	unsigned int fdatasync_blocks;
 	unsigned int barrier_blocks;
 	unsigned long long start_delay;
+	unsigned long long start_delay_high;
 	unsigned long long timeout;
 	unsigned long long ramp_time;
 	unsigned int overwrite;
@@ -147,17 +160,16 @@ struct thread_options {
 	unsigned int cpumask_set;
 	os_cpu_mask_t verify_cpumask;
 	unsigned int verify_cpumask_set;
-#ifdef CONFIG_LIBNUMA
-	struct bitmask *numa_cpunodesmask;
+	unsigned int cpus_allowed_policy;
+	char *numa_cpunodes;
 	unsigned int numa_cpumask_set;
 	unsigned short numa_mem_mode;
 	unsigned int numa_mem_prefer_node;
-	struct bitmask *numa_memnodesmask;
+	char *numa_memnodes;
 	unsigned int numa_memmask_set;
-#endif
 	unsigned int iolog;
 	unsigned int rwmixcycle;
-	unsigned int rwmix[2];
+	unsigned int rwmix[DDIR_RWDIR_CNT];
 	unsigned int nice;
 	unsigned int ioprio;
 	unsigned int ioprio_class;
@@ -168,6 +180,8 @@ struct thread_options {
 	unsigned int zero_buffers;
 	unsigned int refill_buffers;
 	unsigned int scramble_buffers;
+	char buffer_pattern[MAX_PATTERN_SIZE];
+	unsigned int buffer_pattern_bytes;
 	unsigned int compress_percentage;
 	unsigned int compress_chunk;
 	unsigned int time_based;
@@ -239,6 +253,10 @@ struct thread_options {
 	unsigned long long number_ios;
 
 	unsigned int sync_file_range;
+
+	unsigned long long latency_target;
+	unsigned long long latency_window;
+	fio_fp64_t latency_percentile;
 };
 
 #define FIO_TOP_STR_MAX		256
@@ -264,8 +282,10 @@ struct thread_options_pack {
 	uint32_t iodepth_batch_complete;
 
 	uint64_t size;
+	uint64_t io_limit;
 	uint32_t size_percent;
 	uint32_t fill_device;
+	uint32_t file_append;
 	uint64_t file_size_low;
 	uint64_t file_size_high;
 	uint64_t start_offset;
@@ -286,6 +306,7 @@ struct thread_options_pack {
 	uint32_t file_lock_mode;
 
 	uint32_t odirect;
+	uint32_t oatomic;
 	uint32_t invalidate_cache;
 	uint32_t create_serialize;
 	uint32_t create_fsync;
@@ -313,8 +334,13 @@ struct thread_options_pack {
 	uint32_t do_disk_util;
 	uint32_t override_sync;
 	uint32_t rand_repeatable;
+	uint32_t allrand_repeatable;
+	uint64_t rand_seed;
 	uint32_t use_os_rand;
 	uint32_t log_avg_msec;
+	uint32_t log_offset;
+	uint32_t log_gz;
+	uint32_t log_gz_store;
 	uint32_t norandommap;
 	uint32_t softrandommap;
 	uint32_t bs_unaligned;
@@ -338,6 +364,7 @@ struct thread_options_pack {
 	uint32_t fdatasync_blocks;
 	uint32_t barrier_blocks;
 	uint64_t start_delay;
+	uint64_t start_delay_high;
 	uint64_t timeout;
 	uint64_t ramp_time;
 	uint32_t overwrite;
@@ -360,9 +387,10 @@ struct thread_options_pack {
 	uint32_t cpumask_set;
 	uint8_t verify_cpumask[FIO_TOP_STR_MAX];
 	uint32_t verify_cpumask_set;
+	uint32_t cpus_allowed_policy;
 	uint32_t iolog;
 	uint32_t rwmixcycle;
-	uint32_t rwmix[2];
+	uint32_t rwmix[DDIR_RWDIR_CNT];
 	uint32_t nice;
 	uint32_t ioprio;
 	uint32_t ioprio_class;
@@ -373,6 +401,8 @@ struct thread_options_pack {
 	uint32_t zero_buffers;
 	uint32_t refill_buffers;
 	uint32_t scramble_buffers;
+	uint8_t buffer_pattern[MAX_PATTERN_SIZE];
+	uint32_t buffer_pattern_bytes;
 	unsigned int compress_percentage;
 	unsigned int compress_chunk;
 	uint32_t time_based;
@@ -444,6 +474,10 @@ struct thread_options_pack {
 	uint64_t number_ios;
 
 	uint32_t sync_file_range;
+
+	uint64_t latency_target;
+	uint64_t latency_window;
+	fio_fp64_t latency_percentile;
 } __attribute__((packed));
 
 extern void convert_thread_options_to_cpu(struct thread_options *o, struct thread_options_pack *top);

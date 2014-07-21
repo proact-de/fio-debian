@@ -14,7 +14,7 @@ struct json_pair;
 struct json_value {
 	int type;
 	union {
-		long integer_number;
+		long long integer_number;
 		double float_number;
 		char *string;
 		struct json_object *object;
@@ -52,7 +52,7 @@ void json_free_object(struct json_object *obj);
 
 int json_object_add_value_type(struct json_object *obj, const char *name, int type, ...);
 #define json_object_add_value_int(obj, name, val) \
-	json_object_add_value_type((obj), name, JSON_TYPE_INTEGER, (val))
+	json_object_add_value_type((obj), name, JSON_TYPE_INTEGER, (long long) (val))
 #define json_object_add_value_float(obj, name, val) \
 	json_object_add_value_type((obj), name, JSON_TYPE_FLOAT, (val))
 #define json_object_add_value_string(obj, name, val) \
@@ -72,6 +72,9 @@ int json_array_add_value_type(struct json_array *array, int type, ...);
 	json_array_add_value_type((obj), JSON_TYPE_OBJECT, (val))
 #define json_array_add_value_array(obj, val) \
 	json_array_add_value_type((obj), JSON_TYPE_ARRAY, (val))
+
+#define json_array_last_value_object(obj) \
+	(obj->values[obj->value_cnt - 1]->object)
 
 void json_print_object(struct json_object *obj);
 #endif

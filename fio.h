@@ -30,7 +30,7 @@
 #include "helpers.h"
 #include "options.h"
 #include "profile.h"
-#include "time.h"
+#include "fio_time.h"
 #include "gettime.h"
 #include "lib/getopt.h"
 #include "lib/rand.h"
@@ -71,6 +71,9 @@ enum {
 	TD_F_SCRAMBLE_BUFFERS	= 16,
 	TD_F_VER_NONE		= 32,
 	TD_F_PROFILE_OPS	= 64,
+	TD_F_COMPRESS		= 128,
+	TD_F_NOIO		= 256,
+	TD_F_COMPRESS_LOG	= 512,
 };
 
 enum {
@@ -85,6 +88,7 @@ enum {
 	FIO_RAND_SEQ_RAND_READ_OFF,
 	FIO_RAND_SEQ_RAND_WRITE_OFF,
 	FIO_RAND_SEQ_RAND_TRIM_OFF,
+	FIO_RAND_START_DELAY,
 	FIO_RAND_NR_OFFS,
 };
 
@@ -108,6 +112,8 @@ struct thread_data {
 	struct io_log *lat_log;
 	struct io_log *bw_log;
 	struct io_log *iops_log;
+
+	struct tp_data *tp_data;
 
 	uint64_t stat_io_bytes[DDIR_RWDIR_CNT];
 	struct timeval bw_sample_time;
@@ -163,6 +169,10 @@ struct thread_data {
 	union {
 		os_random_state_t trim_state;
 		struct frand_state __trim_state;
+	};
+	union {
+		os_random_state_t delay_state;
+		struct frand_state __delay_state;
 	};
 
 	struct frand_state buf_state;
@@ -244,9 +254,21 @@ struct thread_data {
 	struct timeval epoch;	/* time job was started */
 	struct timeval last_issue;
 	struct timeval tv_cache;
+	struct timeval terminate_time;
 	unsigned int tv_cache_nr;
 	unsigned int tv_cache_mask;
 	unsigned int ramp_time_over;
+
+	/*
+	 * Time since last latency_window was started
+	 */
+	struct timeval latency_ts;
+	unsigned int latency_qd;
+	unsigned int latency_qd_high;
+	unsigned int latency_qd_low;
+	unsigned int latency_failed;
+	uint64_t latency_ios;
+	int latency_end_run;
 
 	/*
 	 * read/write mixed workload state
@@ -333,10 +355,10 @@ enum {
 
 #define __td_verror(td, err, msg, func)					\
 	do {								\
-		int e = (err);						\
+		unsigned int ____e = (err);				\
 		if ((td)->error)					\
 			break;						\
-		(td)->error = e;					\
+		(td)->error = ____e;					\
 		if (!(td)->first_error)					\
 			snprintf(td->verror, sizeof(td->verror), "file:%s:%d, func=%s, error=%s", __FILE__, __LINE__, (func), (msg));		\
 	} while (0)
@@ -358,6 +380,7 @@ extern unsigned int stat_number;
 extern int shm_id;
 extern int groupid;
 extern int output_format;
+extern int append_terse_output;
 extern int temp_stall_ts;
 extern uintptr_t page_mask, page_size;
 extern int read_only;
@@ -406,7 +429,7 @@ extern int parse_cmd_line(int, char **, int);
 extern int fio_backend(void);
 extern void reset_fio_state(void);
 extern void clear_io_state(struct thread_data *);
-extern int fio_options_parse(struct thread_data *, char **, int);
+extern int fio_options_parse(struct thread_data *, char **, int, int);
 extern void fio_keywords_init(void);
 extern int fio_cmd_option_parse(struct thread_data *, const char *, char *);
 extern int fio_cmd_ioengine_option_parse(struct thread_data *, const char *, char *);
@@ -421,6 +444,8 @@ extern void add_job_opts(const char **, int);
 extern char *num2str(unsigned long, int, int, int, int);
 extern int ioengine_load(struct thread_data *);
 extern int parse_dryrun(void);
+extern int fio_running_or_pending_io_threads(void);
+extern int fio_set_fd_nonblocking(int, const char *);
 
 extern uintptr_t page_mask;
 extern uintptr_t page_size;
@@ -453,13 +478,24 @@ enum {
 	TD_PRE_READING,
 	TD_VERIFYING,
 	TD_FSYNCING,
+	TD_FINISHING,
 	TD_EXITED,
 	TD_REAPED,
 };
 
 extern void td_set_runstate(struct thread_data *, int);
+extern int td_bump_runstate(struct thread_data *, int);
+extern void td_restore_runstate(struct thread_data *, int);
+
+/*
+ * Allow 60 seconds for a job to quit on its own, otherwise reap with
+ * a vengeance.
+ */
+#define FIO_REAP_TIMEOUT	60
+
 #define TERMINATE_ALL		(-1)
 extern void fio_terminate_threads(int);
+extern void fio_mark_td_terminate(struct thread_data *);
 
 /*
  * Memory helpers
@@ -479,9 +515,16 @@ extern void reset_all_stats(struct thread_data *);
  * blktrace support
  */
 #ifdef FIO_HAVE_BLKTRACE
-extern int is_blktrace(const char *);
-extern int load_blktrace(struct thread_data *, const char *);
+extern int is_blktrace(const char *, int *);
+extern int load_blktrace(struct thread_data *, const char *, int);
 #endif
+
+/*
+ * Latency target helpers
+ */
+extern void lat_target_check(struct thread_data *);
+extern void lat_target_init(struct thread_data *);
+extern void lat_target_reset(struct thread_data *);
 
 #define for_each_td(td, i)	\
 	for ((i) = 0, (td) = &threads[0]; (i) < (int) thread_number; (i)++, (td)++)
@@ -556,7 +599,7 @@ static inline unsigned int td_min_bs(struct thread_data *td)
 	return min(td->o.min_bs[DDIR_TRIM], min_bs);
 }
 
-static inline int is_power_of_2(unsigned int val)
+static inline int is_power_of_2(unsigned long val)
 {
 	return (val != 0 && ((val & (val - 1)) == 0));
 }
@@ -586,7 +629,9 @@ static inline void td_io_u_free_notify(struct thread_data *td)
 extern const char *fio_get_arch_string(int);
 extern const char *fio_get_os_string(int);
 
+#ifdef FIO_INTERNAL
 #define ARRAY_SIZE(x) (sizeof((x)) / (sizeof((x)[0])))
+#endif
 
 enum {
 	FIO_OUTPUT_TERSE	= 0,
@@ -603,6 +648,11 @@ enum {
 enum {
 	FIO_RAND_GEN_TAUSWORTHE = 0,
 	FIO_RAND_GEN_LFSR,
+};
+
+enum {
+	FIO_CPUS_SHARED		= 0,
+	FIO_CPUS_SPLIT,
 };
 
 #endif

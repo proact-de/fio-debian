@@ -8,7 +8,7 @@ static unsigned int bs = 4096;
 static unsigned int nthreads = 1;
 static char *dir;
 
-char sz_idx[80], bs_idx[80], loop_idx[80], dir_idx[80], t_idx[80];
+static char sz_idx[80], bs_idx[80], loop_idx[80], dir_idx[80], t_idx[80];
 
 static const char *tb_opts[] = {
 	"buffered=0", sz_idx, bs_idx, loop_idx, dir_idx, t_idx,
@@ -21,12 +21,23 @@ static const char *tb_opts[] = {
 	"name=randread", "stonewall", "rw=randread", NULL,
 };
 
+struct tiobench_options {
+	unsigned int pad;
+	unsigned long long size;
+	unsigned int loops;
+	unsigned int bs;
+	unsigned int nthreads;
+	char *dir;
+};
+
+static struct tiobench_options tiobench_options;
+
 static struct fio_option options[] = {
 	{
 		.name	= "size",
 		.lname	= "Tiobench size",
 		.type	= FIO_OPT_STR_VAL,
-		.roff1	= &size,
+		.off1	= offsetof(struct tiobench_options, size),
 		.help	= "Size in MB",
 		.category = FIO_OPT_C_PROFILE,
 		.group	= FIO_OPT_G_TIOBENCH,
@@ -35,7 +46,7 @@ static struct fio_option options[] = {
 		.name	= "block",
 		.lname	= "Tiobench block",
 		.type	= FIO_OPT_INT,
-		.roff1	= &bs,
+		.off1	= offsetof(struct tiobench_options, bs),
 		.help	= "Block size in bytes",
 		.def	= "4k",
 		.category = FIO_OPT_C_PROFILE,
@@ -45,7 +56,7 @@ static struct fio_option options[] = {
 		.name	= "numruns",
 		.lname	= "Tiobench numruns",
 		.type	= FIO_OPT_INT,
-		.roff1	= &loops,
+		.off1	= offsetof(struct tiobench_options, loops),
 		.help	= "Number of runs",
 		.category = FIO_OPT_C_PROFILE,
 		.group	= FIO_OPT_G_TIOBENCH,
@@ -54,7 +65,7 @@ static struct fio_option options[] = {
 		.name	= "dir",
 		.lname	= "Tiobench directory",
 		.type	= FIO_OPT_STR_STORE,
-		.roff1	= &dir,
+		.off1	= offsetof(struct tiobench_options, dir),
 		.help	= "Test directory",
 		.category = FIO_OPT_C_PROFILE,
 		.group	= FIO_OPT_G_TIOBENCH,
@@ -63,7 +74,7 @@ static struct fio_option options[] = {
 		.name	= "threads",
 		.lname	= "Tiobench threads",
 		.type	= FIO_OPT_INT,
-		.roff1	= &nthreads,
+		.off1	= offsetof(struct tiobench_options, nthreads),
 		.help	= "Number of Threads",
 		.category = FIO_OPT_C_PROFILE,
 		.group	= FIO_OPT_G_TIOBENCH,
@@ -102,9 +113,10 @@ static int tb_prep_cmdline(void)
 static struct profile_ops tiobench_profile = {
 	.name		= "tiobench",
 	.desc		= "tiotest/tiobench benchmark",
-	.options	= options,
 	.prep_cmd	= tb_prep_cmdline,
 	.cmdline	= tb_opts,
+	.options	= options,
+	.opt_data	= &tiobench_options,
 };
 
 static void fio_init tiobench_register(void)

@@ -4,7 +4,7 @@
  * IO engine that does regular fallocate to simulate data transfer 
  * as fio ioengine.
  * DDIR_READ  does fallocate(,mode = FALLOC_FL_KEEP_SIZE,)
- * DDIR_WRITE does fallocate(,mode = 0) : fallocate with size extention 
+ * DDIR_WRITE does fallocate(,mode = 0) : fallocate with size extension
  * DDIR_TRIM  does fallocate(,mode = FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE)
  *
  */
@@ -23,7 +23,7 @@
  * generic_open_file is not appropriate because does not allow to perform
  * TRIM in to file
  */
-int open_file(struct thread_data *td, struct fio_file *f)
+static int open_file(struct thread_data *td, struct fio_file *f)
 {
 	int from_hash = 0;
 
@@ -43,9 +43,10 @@ open_again:
 
 	if (f->fd == -1) {
 		char buf[FIO_VERROR_SIZE];
-		int __e = errno;
+		int e = errno;
+
 		snprintf(buf, sizeof(buf), "open(%s)", f->file_name);
-		td_verror(td, __e, buf);
+		td_verror(td, e, buf);
 	}
 
 	if (!from_hash && f->fd != -1) {

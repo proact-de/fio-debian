@@ -27,10 +27,12 @@
 #include <signal.h>
 #include <stdint.h>
 #include <locale.h>
+#include <fcntl.h>
 
 #include "fio.h"
 #include "smalloc.h"
 #include "os/os.h"
+#include "filelock.h"
 
 /*
  * Just expose an empty list, if the OS does not support disk util stats
@@ -52,8 +54,10 @@ static const char *fio_os_strings[os_nr] = {
 	"HP-UX",
 	"OSX",
 	"NetBSD",
+	"OpenBSD",
 	"Solaris",
-	"Windows"
+	"Windows",
+	"Android",
 };
 
 static const char *fio_arch_strings[arch_nr] = {
@@ -83,7 +87,6 @@ static void reset_io_counters(struct thread_data *td)
 		td->this_io_blocks[ddir] = 0;
 		td->rate_bytes[ddir] = 0;
 		td->rate_blocks[ddir] = 0;
-		td->io_issues[ddir] = 0;
 	}
 	td->zone_bytes = 0;
 
@@ -133,6 +136,8 @@ void reset_all_stats(struct thread_data *td)
 	fio_gettime(&tv, NULL);
 	memcpy(&td->epoch, &tv, sizeof(tv));
 	memcpy(&td->start, &tv, sizeof(tv));
+
+	lat_target_reset(td);
 }
 
 void reset_fio_state(void)
@@ -169,6 +174,26 @@ void td_set_runstate(struct thread_data *td, int runstate)
 	td->runstate = runstate;
 }
 
+int td_bump_runstate(struct thread_data *td, int new_state)
+{
+	int old_state = td->runstate;
+
+	td_set_runstate(td, new_state);
+	return old_state;
+}
+
+void td_restore_runstate(struct thread_data *td, int old_state)
+{
+	td_set_runstate(td, old_state);
+}
+
+void fio_mark_td_terminate(struct thread_data *td)
+{
+	fio_gettime(&td->terminate_time, NULL);
+	write_barrier();
+	td->terminate = 1;
+}
+
 void fio_terminate_threads(int group_id)
 {
 	struct thread_data *td;
@@ -181,7 +206,11 @@ void fio_terminate_threads(int group_id)
 		if (group_id == TERMINATE_ALL || groupid == td->groupid) {
 			dprint(FD_PROCESS, "setting terminate on %s/%d\n",
 						td->o.name, (int) td->pid);
-			td->terminate = 1;
+
+			if (td->terminate)
+				continue;
+
+			fio_mark_td_terminate(td);
 			td->o.start_delay = 0;
 
 			/*
@@ -199,6 +228,39 @@ void fio_terminate_threads(int group_id)
 			}
 		}
 	}
+}
+
+int fio_running_or_pending_io_threads(void)
+{
+	struct thread_data *td;
+	int i;
+
+	for_each_td(td, i) {
+		if (td->flags & TD_F_NOIO)
+			continue;
+		if (td->runstate < TD_EXITED)
+			return 1;
+	}
+
+	return 0;
+}
+
+int fio_set_fd_nonblocking(int fd, const char *who)
+{
+	int flags;
+
+	flags = fcntl(fd, F_GETFL);
+	if (flags < 0)
+		log_err("fio: %s failed to get file flags: %s\n", who, strerror(errno));
+	else {
+		int new_flags = flags | O_NONBLOCK;
+
+		new_flags = fcntl(fd, F_SETFL, new_flags);
+		if (new_flags < 0)
+			log_err("fio: %s failed to get file flags: %s\n", who, strerror(errno));
+	}
+
+	return flags;
 }
 
 static int endian_check(void)
@@ -248,6 +310,11 @@ int initialize_fio(char *envp[])
 	arch_init(envp);
 
 	sinit();
+
+	if (fio_filelock_init()) {
+		log_err("fio: failed initializing filelock subsys\n");
+		return 1;
+	}
 
 	/*
 	 * We need locale for number printing, if it isn't set then just

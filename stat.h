@@ -12,7 +12,7 @@ struct group_run_stats {
 	uint32_t unit_base;
 	uint32_t groupid;
 	uint32_t unified_rw_rep;
-};
+} __attribute__((packed));
 
 /*
  * How many depth levels to log
@@ -114,6 +114,7 @@ struct group_run_stats {
 
 #define MAX_PATTERN_SIZE	512
 #define FIO_JOBNAME_SIZE	128
+#define FIO_JOBDESC_SIZE	256
 #define FIO_VERROR_SIZE		128
 
 struct thread_stat {
@@ -123,7 +124,7 @@ struct thread_stat {
 	uint32_t thread_number;
 	uint32_t groupid;
 	uint32_t pid;
-	char description[FIO_JOBNAME_SIZE];
+	char description[FIO_JOBDESC_SIZE];
 	uint32_t members;
 	uint32_t unified_rw_rep;
 
@@ -175,14 +176,22 @@ struct thread_stat {
 
 	uint32_t kb_base;
 	uint32_t unit_base;
-};
+
+	uint32_t latency_depth;
+	uint64_t latency_target;
+	fio_fp64_t latency_percentile;
+	uint64_t latency_window;
+} __attribute__((packed));
 
 struct jobs_eta {
 	uint32_t nr_running;
 	uint32_t nr_ramp;
+
 	uint32_t nr_pending;
 	uint32_t nr_setting_up;
+
 	uint32_t files_open;
+
 	uint32_t m_rate[DDIR_RWDIR_CNT], t_rate[DDIR_RWDIR_CNT];
 	uint32_t m_iops[DDIR_RWDIR_CNT], t_iops[DDIR_RWDIR_CNT];
 	uint32_t rate[DDIR_RWDIR_CNT];
@@ -197,12 +206,14 @@ struct jobs_eta {
 	 */
 	uint32_t nr_threads;
 	uint8_t run_str[];
-};
+} __attribute__((packed));
+
+extern struct jobs_eta *get_jobs_eta(int force, size_t *size);
 
 extern void stat_init(void);
 extern void stat_exit(void);
 
-extern void show_thread_status(struct thread_stat *ts, struct group_run_stats *rs);
+extern struct json_object * show_thread_status(struct thread_stat *ts, struct group_run_stats *rs);
 extern void show_group_stats(struct group_run_stats *rs);
 extern int calc_thread_status(struct jobs_eta *je, int force);
 extern void display_thread_status(struct jobs_eta *je);
@@ -219,6 +230,7 @@ extern unsigned int calc_clat_percentiles(unsigned int *io_u_plat, unsigned long
 extern void stat_calc_lat_m(struct thread_stat *ts, double *io_u_lat);
 extern void stat_calc_lat_u(struct thread_stat *ts, double *io_u_lat);
 extern void stat_calc_dist(unsigned int *map, unsigned long total, double *io_u_dist);
+extern void reset_io_stats(struct thread_data *);
 
 static inline int usec_to_msec(unsigned long *min, unsigned long *max,
 			       double *mean, double *dev)
@@ -233,5 +245,10 @@ static inline int usec_to_msec(unsigned long *min, unsigned long *max,
 
 	return 1;
 }
+/*
+ * Worst level condensing would be 1:5, so allow enough room for that
+ */
+#define __THREAD_RUNSTR_SZ(nr)	((nr) * 5)
+#define THREAD_RUNSTR_SZ	__THREAD_RUNSTR_SZ(thread_number)
 
 #endif
