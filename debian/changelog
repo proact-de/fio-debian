@@ -1,7 +1,6 @@
-fio (2.1.11-1) UNRELEASED; urgency=medium
+fio (2.1.11-1) unstable; urgency=medium
 
   * dh_builddeb without -z9, so use xz, but do not set default level.
-  * Ignore contents of .pc/.
   * Imported Upstream version 2.1.11.
   * debian/patches:
     - makefile-hardening: Adapted to new C++ build option.
