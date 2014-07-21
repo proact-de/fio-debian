@@ -7,7 +7,7 @@ Author: Martin Steigerwald <ms@teamix.de>
 ---
 --- a/Makefile
 +++ b/Makefile
-@@ -184,14 +184,14 @@
+@@ -200,14 +200,14 @@
  else
  	INSTALL = install
  endif
