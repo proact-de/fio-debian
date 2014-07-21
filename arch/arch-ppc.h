@@ -1,5 +1,5 @@
 #ifndef ARCH_PPC_H
-#define ARCH_PPH_H
+#define ARCH_PPC_H
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -82,6 +82,7 @@ static inline unsigned long long get_cpu_clock(void)
 	return ret;
 }
 
+#if 0
 static void atb_child(void)
 {
 	arch_flags |= ARCH_FLAG_1;
@@ -106,14 +107,17 @@ static void atb_clocktest(void)
 			arch_flags |= ARCH_FLAG_1;
 	}
 }
+#endif
 
 #define ARCH_HAVE_INIT
 extern int tsc_reliable;
 
 static inline int arch_init(char *envp[])
 {
+#if 0
 	tsc_reliable = 1;
 	atb_clocktest();
+#endif
 	return 0;
 }
 

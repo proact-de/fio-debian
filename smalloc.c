@@ -16,6 +16,7 @@
 #include "mutex.h"
 #include "arch/arch.h"
 #include "os/os.h"
+#include "smalloc.h"
 
 #define SMALLOC_REDZONE		/* define to detect memory corruption */
 
@@ -30,7 +31,7 @@
 #define SMALLOC_POST_RED	0x5aa55aa5U
 
 unsigned int smalloc_pool_size = INITIAL_SIZE;
-const int int_mask = sizeof(int) - 1;
+static const int int_mask = sizeof(int) - 1;
 
 struct pool {
 	struct fio_mutex *lock;			/* protects this pool */
@@ -179,6 +180,7 @@ static int find_next_zero(int word, int start)
 static int add_pool(struct pool *pool, unsigned int alloc_size)
 {
 	int bitmap_blocks;
+	int mmap_flags;
 	void *ptr;
 
 #ifdef SMALLOC_REDZONE
@@ -197,8 +199,14 @@ static int add_pool(struct pool *pool, unsigned int alloc_size)
 	pool->nr_blocks = bitmap_blocks;
 	pool->free_blocks = bitmap_blocks * SMALLOC_BPB;
 
-	ptr = mmap(NULL, alloc_size, PROT_READ|PROT_WRITE,
-			MAP_SHARED | OS_MAP_ANON, -1, 0);
+	mmap_flags = OS_MAP_ANON;
+#ifdef CONFIG_ESX
+	mmap_flags |= MAP_PRIVATE;
+#else
+	mmap_flags |= MAP_SHARED;
+#endif
+	ptr = mmap(NULL, alloc_size, PROT_READ|PROT_WRITE, mmap_flags, -1, 0);
+
 	if (ptr == MAP_FAILED)
 		goto out_fail;
 

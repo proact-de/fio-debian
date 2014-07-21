@@ -15,7 +15,7 @@
 #include <guasi.h>
 #endif
 
-#define FIO_IOOPS_VERSION	16
+#define FIO_IOOPS_VERSION	19
 
 enum {
 	IO_U_F_FREE		= 1 << 0,
@@ -50,12 +50,13 @@ struct io_u {
 	 */
 	unsigned long buflen;
 	unsigned long long offset;
+	unsigned short numberio;
 	void *buf;
 
 	/*
 	 * Initial seed for generating the buffer contents
 	 */
-	unsigned long rand_seed;
+	uint64_t rand_seed;
 
 	/*
 	 * IO engine state, may be different from above when we get
@@ -69,6 +70,27 @@ struct io_u {
 	 * their size to handle variable block sizes.
 	 */
 	unsigned long buf_filled_len;
+
+	struct io_piece *ipo;
+
+	unsigned int resid;
+	unsigned int error;
+
+	/*
+	 * io engine private data
+	 */
+	union {
+		unsigned int index;
+		unsigned int seen;
+		void *engine_data;
+	};
+
+	struct flist_head verify_list;
+
+	/*
+	 * Callback for io completion
+	 */
+	int (*end_io)(struct thread_data *, struct io_u *);
 
 	union {
 #ifdef CONFIG_LIBAIO
@@ -94,25 +116,6 @@ struct io_u {
 #endif
 		void *mmap_data;
 	};
-
-	unsigned int resid;
-	unsigned int error;
-
-	/*
-	 * io engine private data
-	 */
-	union {
-		unsigned int index;
-		unsigned int seen;
-		void *engine_data;
-	};
-
-	struct flist_head verify_list;
-
-	/*
-	 * Callback for io completion
-	 */
-	int (*end_io)(struct thread_data *, struct io_u *);
 };
 
 /*
@@ -140,6 +143,7 @@ struct ioengine_ops {
 	void (*cleanup)(struct thread_data *);
 	int (*open_file)(struct thread_data *, struct fio_file *);
 	int (*close_file)(struct thread_data *, struct fio_file *);
+	int (*invalidate)(struct thread_data *, struct fio_file *);
 	int (*get_file_size)(struct thread_data *, struct fio_file *);
 	void (*terminate)(struct thread_data *);
 	int (*io_u_init)(struct thread_data *, struct io_u *);
@@ -165,6 +169,11 @@ enum fio_ioengine_flags {
 };
 
 /*
+ * External engine defined symbol to fill in the engine ops structure
+ */
+typedef void (*get_ioengine_t)(struct ioengine_ops **);
+
+/*
  * io engine entry points
  */
 extern int __must_check td_io_init(struct thread_data *);
@@ -188,7 +197,6 @@ extern int fio_show_ioengine_help(const char *engine);
 /*
  * io unit handling
  */
-#define queue_full(td)	io_u_qempty(&(td)->io_u_freelist)
 extern struct io_u *__get_io_u(struct thread_data *);
 extern struct io_u *get_io_u(struct thread_data *);
 extern void put_io_u(struct thread_data *, struct io_u *);
@@ -204,6 +212,7 @@ extern void fill_io_buffer(struct thread_data *, void *, unsigned int, unsigned 
 extern void io_u_fill_buffer(struct thread_data *td, struct io_u *, unsigned int, unsigned int);
 void io_u_mark_complete(struct thread_data *, unsigned int);
 void io_u_mark_submit(struct thread_data *, unsigned int);
+int queue_full(struct thread_data *);
 
 int do_io_u_sync(struct thread_data *, struct io_u *);
 int do_io_u_trim(struct thread_data *, struct io_u *);

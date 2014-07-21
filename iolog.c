@@ -6,10 +6,19 @@
 #include <stdlib.h>
 #include <libgen.h>
 #include <assert.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#ifdef CONFIG_ZLIB
+#include <zlib.h>
+#endif
+
 #include "flist.h"
 #include "fio.h"
 #include "verify.h"
 #include "trim.h"
+#include "filelock.h"
+#include "lib/tp.h"
 
 static const char iolog_ver2[] = "fio version 2 iolog";
 
@@ -57,19 +66,21 @@ void log_file(struct thread_data *td, struct fio_file *f,
 static void iolog_delay(struct thread_data *td, unsigned long delay)
 {
 	unsigned long usec = utime_since_now(&td->last_issue);
+	unsigned long this_delay;
 
 	if (delay < usec)
 		return;
 
 	delay -= usec;
 
-	/*
-	 * less than 100 usec delay, just regard it as noise
-	 */
-	if (delay < 100)
-		return;
+	while (delay && !td->terminate) {
+		this_delay = delay;
+		if (this_delay > 500000)
+			this_delay = 500000;
 
-	usec_sleep(td, delay);
+		usec_sleep(td, this_delay);
+		delay -= this_delay;
+	}
 }
 
 static int ipo_special(struct thread_data *td, struct io_piece *ipo)
@@ -114,7 +125,7 @@ int read_iolog_get(struct thread_data *td, struct io_u *io_u)
 	while (!flist_empty(&td->io_log_list)) {
 		int ret;
 
-		ipo = flist_entry(td->io_log_list.next, struct io_piece, list);
+		ipo = flist_first_entry(&td->io_log_list, struct io_piece, list);
 		flist_del(&ipo->list);
 		remove_trim_entry(td, ipo);
 
@@ -167,7 +178,7 @@ void prune_io_piece_log(struct thread_data *td)
 	}
 
 	while (!flist_empty(&td->io_hist_list)) {
-		ipo = flist_entry(td->io_hist_list.next, struct io_piece, list);
+		ipo = flist_entry(&td->io_hist_list, struct io_piece, list);
 		flist_del(&ipo->list);
 		remove_trim_entry(td, ipo);
 		td->io_hist_len--;
@@ -188,6 +199,10 @@ void log_io_piece(struct thread_data *td, struct io_u *io_u)
 	ipo->file = io_u->file;
 	ipo->offset = io_u->offset;
 	ipo->len = io_u->buflen;
+	ipo->numberio = io_u->numberio;
+	ipo->flags = IP_F_IN_FLIGHT;
+
+	io_u->ipo = ipo;
 
 	if (io_u_should_trim(td, io_u)) {
 		flist_add_tail(&ipo->trim_list, &td->trim_list);
@@ -208,7 +223,7 @@ void log_io_piece(struct thread_data *td, struct io_u *io_u)
 	 * drop the old one, which we rely on the rb insert/lookup for
 	 * handling.
 	 */
-	if ((!td_random(td) || !td->o.overwrite) &&
+	if (((!td->o.verifysort) || !td_random(td) || !td->o.overwrite) &&
 	      (file_randommap(td, ipo->file) || td->o.verify == VERIFY_NONE)) {
 		INIT_FLIST_HEAD(&ipo->list);
 		flist_add_tail(&ipo->list, &td->io_hist_list);
@@ -253,6 +268,33 @@ restart:
 	rb_insert_color(&ipo->rb_node, &td->io_hist_tree);
 	ipo->flags |= IP_F_ONRB;
 	td->io_hist_len++;
+}
+
+void unlog_io_piece(struct thread_data *td, struct io_u *io_u)
+{
+	struct io_piece *ipo = io_u->ipo;
+
+	if (!ipo)
+		return;
+
+	if (ipo->flags & IP_F_ONRB)
+		rb_erase(&ipo->rb_node, &td->io_hist_tree);
+	else if (ipo->flags & IP_F_ONLIST)
+		flist_del(&ipo->list);
+
+	free(ipo);
+	io_u->ipo = NULL;
+	td->io_hist_len--;
+}
+
+void trim_io_piece(struct thread_data *td, struct io_u *io_u)
+{
+	struct io_piece *ipo = io_u->ipo;
+
+	if (!ipo)
+		return;
+
+	ipo->len = io_u->xfer_buflen - io_u->resid;
 }
 
 void write_iolog_close(struct thread_data *td)
@@ -319,8 +361,7 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 		} else if (r == 2) {
 			rw = DDIR_INVAL;
 			if (!strcmp(act, "add")) {
-				td->o.nr_files++;
-				fileno = add_file(td, fname);
+				fileno = add_file(td, fname, 0, 1);
 				file_action = FIO_LOG_ADD_FILE;
 				continue;
 			} else if (!strcmp(act, "open")) {
@@ -367,10 +408,11 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 		} else {
 			ipo->offset = offset;
 			ipo->len = bytes;
-			if (bytes > td->o.max_bs[rw])
+			if (rw != DDIR_INVAL && bytes > td->o.max_bs[rw])
 				td->o.max_bs[rw] = bytes;
 			ipo->fileno = fileno;
 			ipo->file_action = file_action;
+			td->o.size += bytes;
 		}
 
 		queue_io_piece(td, ipo);
@@ -480,73 +522,722 @@ int init_iolog(struct thread_data *td)
 	int ret = 0;
 
 	if (td->o.read_iolog_file) {
+		int need_swap;
+
 		/*
 		 * Check if it's a blktrace file and load that if possible.
 		 * Otherwise assume it's a normal log file and load that.
 		 */
-		if (is_blktrace(td->o.read_iolog_file))
-			ret = load_blktrace(td, td->o.read_iolog_file);
+		if (is_blktrace(td->o.read_iolog_file, &need_swap))
+			ret = load_blktrace(td, td->o.read_iolog_file, need_swap);
 		else
 			ret = init_iolog_read(td);
 	} else if (td->o.write_iolog_file)
 		ret = init_iolog_write(td);
 
+	if (ret)
+		td_verror(td, EINVAL, "failed initializing iolog");
+
 	return ret;
 }
 
-void setup_log(struct io_log **log, unsigned long avg_msec, int log_type)
+void setup_log(struct io_log **log, struct log_params *p,
+	       const char *filename)
 {
 	struct io_log *l = malloc(sizeof(*l));
 
 	memset(l, 0, sizeof(*l));
 	l->nr_samples = 0;
 	l->max_samples = 1024;
-	l->log_type = log_type;
-	l->log = malloc(l->max_samples * sizeof(struct io_sample));
-	l->avg_msec = avg_msec;
+	l->log_type = p->log_type;
+	l->log_offset = p->log_offset;
+	l->log_gz = p->log_gz;
+	l->log_gz_store = p->log_gz_store;
+	l->log = malloc(l->max_samples * log_entry_sz(l));
+	l->avg_msec = p->avg_msec;
+	l->filename = strdup(filename);
+	l->td = p->td;
+
+	if (l->log_offset)
+		l->log_ddir_mask = LOG_OFFSET_SAMPLE_BIT;
+
+	INIT_FLIST_HEAD(&l->chunk_list);
+
+	if (l->log_gz && !p->td)
+		l->log_gz = 0;
+	else if (l->log_gz) {
+		pthread_mutex_init(&l->chunk_lock, NULL);
+		p->td->flags |= TD_F_COMPRESS_LOG;
+	}
+
 	*log = l;
 }
 
-void __finish_log(struct io_log *log, const char *name)
+#ifdef CONFIG_SETVBUF
+static void *set_file_buffer(FILE *f)
 {
-	unsigned int i;
+	size_t size = 1048576;
+	void *buf;
+
+	buf = malloc(size);
+	setvbuf(f, buf, _IOFBF, size);
+	return buf;
+}
+
+static void clear_file_buffer(void *buf)
+{
+	free(buf);
+}
+#else
+static void *set_file_buffer(FILE *f)
+{
+	return NULL;
+}
+
+static void clear_file_buffer(void *buf)
+{
+}
+#endif
+
+void free_log(struct io_log *log)
+{
+	free(log->log);
+	free(log->filename);
+	free(log);
+}
+
+static void flush_samples(FILE *f, void *samples, uint64_t sample_size)
+{
+	struct io_sample *s;
+	int log_offset;
+	uint64_t i, nr_samples;
+
+	if (!sample_size)
+		return;
+
+	s = __get_sample(samples, 0, 0);
+	log_offset = (s->__ddir & LOG_OFFSET_SAMPLE_BIT) != 0;
+
+	nr_samples = sample_size / __log_entry_sz(log_offset);
+
+	for (i = 0; i < nr_samples; i++) {
+		s = __get_sample(samples, log_offset, i);
+
+		if (!log_offset) {
+			fprintf(f, "%lu, %lu, %u, %u\n",
+					(unsigned long) s->time,
+					(unsigned long) s->val,
+					io_sample_ddir(s), s->bs);
+		} else {
+			struct io_sample_offset *so = (void *) s;
+
+			fprintf(f, "%lu, %lu, %u, %u, %llu\n",
+					(unsigned long) s->time,
+					(unsigned long) s->val,
+					io_sample_ddir(s), s->bs,
+					(unsigned long long) so->offset);
+		}
+	}
+}
+
+#ifdef CONFIG_ZLIB
+
+struct iolog_flush_data {
+	struct tp_work work;
+	struct io_log *log;
+	void *samples;
+	uint64_t nr_samples;
+};
+
+struct iolog_compress {
+	struct flist_head list;
+	void *buf;
+	size_t len;
+	unsigned int seq;
+};
+
+#define GZ_CHUNK	131072
+
+static struct iolog_compress *get_new_chunk(unsigned int seq)
+{
+	struct iolog_compress *c;
+
+	c = malloc(sizeof(*c));
+	INIT_FLIST_HEAD(&c->list);
+	c->buf = malloc(GZ_CHUNK);
+	c->len = 0;
+	c->seq = seq;
+	return c;
+}
+
+static void free_chunk(struct iolog_compress *ic)
+{
+	free(ic->buf);
+	free(ic);
+}
+
+static int z_stream_init(z_stream *stream, int gz_hdr)
+{
+	int wbits = 15;
+
+	stream->zalloc = Z_NULL;
+	stream->zfree = Z_NULL;
+	stream->opaque = Z_NULL;
+	stream->next_in = Z_NULL;
+
+	/*
+	 * zlib magic - add 32 for auto-detection of gz header or not,
+	 * if we decide to store files in a gzip friendly format.
+	 */
+	if (gz_hdr)
+		wbits += 32;
+
+	if (inflateInit2(stream, wbits) != Z_OK)
+		return 1;
+
+	return 0;
+}
+
+struct inflate_chunk_iter {
+	unsigned int seq;
+	int err;
+	void *buf;
+	size_t buf_size;
+	size_t buf_used;
+	size_t chunk_sz;
+};
+
+static void finish_chunk(z_stream *stream, FILE *f,
+			 struct inflate_chunk_iter *iter)
+{
+	int ret;
+
+	ret = inflateEnd(stream);
+	if (ret != Z_OK)
+		log_err("fio: failed to end log inflation (%d)\n", ret);
+
+	flush_samples(f, iter->buf, iter->buf_used);
+	free(iter->buf);
+	iter->buf = NULL;
+	iter->buf_size = iter->buf_used = 0;
+}
+
+/*
+ * Iterative chunk inflation. Handles cases where we cross into a new
+ * sequence, doing flush finish of previous chunk if needed.
+ */
+static size_t inflate_chunk(struct iolog_compress *ic, int gz_hdr, FILE *f,
+			    z_stream *stream, struct inflate_chunk_iter *iter)
+{
+	size_t ret;
+
+	dprint(FD_COMPRESS, "inflate chunk size=%lu, seq=%u",
+				(unsigned long) ic->len, ic->seq);
+
+	if (ic->seq != iter->seq) {
+		if (iter->seq)
+			finish_chunk(stream, f, iter);
+
+		z_stream_init(stream, gz_hdr);
+		iter->seq = ic->seq;
+	}
+
+	stream->avail_in = ic->len;
+	stream->next_in = ic->buf;
+
+	if (!iter->buf_size) {
+		iter->buf_size = iter->chunk_sz;
+		iter->buf = malloc(iter->buf_size);
+	}
+
+	while (stream->avail_in) {
+		size_t this_out = iter->buf_size - iter->buf_used;
+		int err;
+
+		stream->avail_out = this_out;
+		stream->next_out = iter->buf + iter->buf_used;
+
+		err = inflate(stream, Z_NO_FLUSH);
+		if (err < 0) {
+			log_err("fio: failed inflating log: %d\n", err);
+			iter->err = err;
+			break;
+		}
+
+		iter->buf_used += this_out - stream->avail_out;
+
+		if (!stream->avail_out) {
+			iter->buf_size += iter->chunk_sz;
+			iter->buf = realloc(iter->buf, iter->buf_size);
+			continue;
+		}
+
+		if (err == Z_STREAM_END)
+			break;
+	}
+
+	ret = (void *) stream->next_in - ic->buf;
+
+	dprint(FD_COMPRESS, "inflated to size=%lu\n", (unsigned long) ret);
+
+	return ret;
+}
+
+/*
+ * Inflate stored compressed chunks, or write them directly to the log
+ * file if so instructed.
+ */
+static int inflate_gz_chunks(struct io_log *log, FILE *f)
+{
+	struct inflate_chunk_iter iter = { .chunk_sz = log->log_gz, };
+	z_stream stream;
+
+	while (!flist_empty(&log->chunk_list)) {
+		struct iolog_compress *ic;
+
+		ic = flist_first_entry(&log->chunk_list, struct iolog_compress, list);
+		flist_del(&ic->list);
+
+		if (log->log_gz_store) {
+			size_t ret;
+
+			dprint(FD_COMPRESS, "log write chunk size=%lu, "
+				"seq=%u\n", (unsigned long) ic->len, ic->seq);
+
+			ret = fwrite(ic->buf, ic->len, 1, f);
+			if (ret != 1 || ferror(f)) {
+				iter.err = errno;
+				log_err("fio: error writing compressed log\n");
+			}
+		} else
+			inflate_chunk(ic, log->log_gz_store, f, &stream, &iter);
+
+		free_chunk(ic);
+	}
+
+	if (iter.seq) {
+		finish_chunk(&stream, f, &iter);
+		free(iter.buf);
+	}
+
+	return iter.err;
+}
+
+/*
+ * Open compressed log file and decompress the stored chunks and
+ * write them to stdout. The chunks are stored sequentially in the
+ * file, so we iterate over them and do them one-by-one.
+ */
+int iolog_file_inflate(const char *file)
+{
+	struct inflate_chunk_iter iter = { .chunk_sz = 64 * 1024 * 1024, };
+	struct iolog_compress ic;
+	z_stream stream;
+	struct stat sb;
+	ssize_t ret;
+	size_t total;
+	void *buf;
 	FILE *f;
 
-	f = fopen(name, "a");
+	f = fopen(file, "r");
+	if (!f) {
+		perror("fopen");
+		return 1;
+	}
+
+	if (stat(file, &sb) < 0) {
+		fclose(f);
+		perror("stat");
+		return 1;
+	}
+
+	ic.buf = buf = malloc(sb.st_size);
+	ic.len = sb.st_size;
+	ic.seq = 1;
+
+	ret = fread(ic.buf, ic.len, 1, f);
+	if (ret < 0) {
+		perror("fread");
+		fclose(f);
+		return 1;
+	} else if (ret != 1) {
+		log_err("fio: short read on reading log\n");
+		fclose(f);
+		return 1;
+	}
+
+	fclose(f);
+
+	/*
+	 * Each chunk will return Z_STREAM_END. We don't know how many
+	 * chunks are in the file, so we just keep looping and incrementing
+	 * the sequence number until we have consumed the whole compressed
+	 * file.
+	 */
+	total = ic.len;
+	do {
+		size_t ret;
+
+		ret = inflate_chunk(&ic,  1, stdout, &stream, &iter);
+		total -= ret;
+		if (!total)
+			break;
+		if (iter.err)
+			break;
+
+		ic.seq++;
+		ic.len -= ret;
+		ic.buf += ret;
+	} while (1);
+
+	if (iter.seq) {
+		finish_chunk(&stream, stdout, &iter);
+		free(iter.buf);
+	}
+
+	free(buf);
+	return iter.err;
+}
+
+#else
+
+static int inflate_gz_chunks(struct io_log *log, FILE *f)
+{
+	return 0;
+}
+
+int iolog_file_inflate(const char *file)
+{
+	log_err("fio: log inflation not possible without zlib\n");
+	return 1;
+}
+
+#endif
+
+void flush_log(struct io_log *log)
+{
+	void *buf;
+	FILE *f;
+
+	f = fopen(log->filename, "w");
 	if (!f) {
 		perror("fopen log");
 		return;
 	}
 
-	for (i = 0; i < log->nr_samples; i++) {
-		fprintf(f, "%lu, %lu, %u, %u\n",
-				(unsigned long) log->log[i].time,
-				(unsigned long) log->log[i].val,
-				log->log[i].ddir, log->log[i].bs);
-	}
+	buf = set_file_buffer(f);
+
+	inflate_gz_chunks(log, f);
+
+	flush_samples(f, log->log, log->nr_samples * log_entry_sz(log));
 
 	fclose(f);
-	free(log->log);
-	free(log);
+	clear_file_buffer(buf);
 }
 
-void finish_log_named(struct thread_data *td, struct io_log *log,
-		       const char *prefix, const char *postfix)
+static int finish_log(struct thread_data *td, struct io_log *log, int trylock)
 {
-	char file_name[256], *p;
+	if (td->tp_data)
+		iolog_flush(log, 1);
 
-	snprintf(file_name, sizeof(file_name), "%s_%s.log", prefix, postfix);
-	p = basename(file_name);
-
-	if (td->client_type == FIO_CLIENT_TYPE_GUI) {
-		fio_send_iolog(td, log, p);
-		free(log->log);
-		free(log);
+	if (trylock) {
+		if (fio_trylock_file(log->filename))
+			return 1;
 	} else
-		__finish_log(log, p);
+		fio_lock_file(log->filename);
+
+	if (td->client_type == FIO_CLIENT_TYPE_GUI)
+		fio_send_iolog(td, log, log->filename);
+	else
+		flush_log(log);
+
+	fio_unlock_file(log->filename);
+	free_log(log);
+	return 0;
 }
 
-void finish_log(struct thread_data *td, struct io_log *log, const char *name)
+#ifdef CONFIG_ZLIB
+
+/*
+ * Invoked from our compress helper thread, when logging would have exceeded
+ * the specified memory limitation. Compresses the previously stored
+ * entries.
+ */
+static int gz_work(struct tp_work *work)
 {
-	finish_log_named(td, log, td->o.name, name);
+	struct iolog_flush_data *data;
+	struct iolog_compress *c;
+	struct flist_head list;
+	unsigned int seq;
+	z_stream stream;
+	size_t total = 0;
+	int ret;
+
+	INIT_FLIST_HEAD(&list);
+
+	data = container_of(work, struct iolog_flush_data, work);
+
+	stream.zalloc = Z_NULL;
+	stream.zfree = Z_NULL;
+	stream.opaque = Z_NULL;
+
+	ret = deflateInit(&stream, Z_DEFAULT_COMPRESSION);
+	if (ret != Z_OK) {
+		log_err("fio: failed to init gz stream\n");
+		return 0;
+	}
+
+	seq = ++data->log->chunk_seq;
+
+	stream.next_in = (void *) data->samples;
+	stream.avail_in = data->nr_samples * log_entry_sz(data->log);
+
+	dprint(FD_COMPRESS, "deflate input size=%lu, seq=%u\n",
+				(unsigned long) stream.avail_in, seq);
+	do {
+		c = get_new_chunk(seq);
+		stream.avail_out = GZ_CHUNK;
+		stream.next_out = c->buf;
+		ret = deflate(&stream, Z_NO_FLUSH);
+		if (ret < 0) {
+			log_err("fio: deflate log (%d)\n", ret);
+			free_chunk(c);
+			goto err;
+		}
+
+		c->len = GZ_CHUNK - stream.avail_out;
+		flist_add_tail(&c->list, &list);
+		total += c->len;
+	} while (stream.avail_in);
+
+	stream.next_out = c->buf + c->len;
+	stream.avail_out = GZ_CHUNK - c->len;
+
+	ret = deflate(&stream, Z_FINISH);
+	if (ret == Z_STREAM_END)
+		c->len = GZ_CHUNK - stream.avail_out;
+	else {
+		do {
+			c = get_new_chunk(seq);
+			stream.avail_out = GZ_CHUNK;
+			stream.next_out = c->buf;
+			ret = deflate(&stream, Z_FINISH);
+			c->len = GZ_CHUNK - stream.avail_out;
+			total += c->len;
+			flist_add_tail(&c->list, &list);
+		} while (ret != Z_STREAM_END);
+	}
+
+	dprint(FD_COMPRESS, "deflated to size=%lu\n", (unsigned long) total);
+
+	ret = deflateEnd(&stream);
+	if (ret != Z_OK)
+		log_err("fio: deflateEnd %d\n", ret);
+
+	free(data->samples);
+
+	if (!flist_empty(&list)) {
+		pthread_mutex_lock(&data->log->chunk_lock);
+		flist_splice_tail(&list, &data->log->chunk_list);
+		pthread_mutex_unlock(&data->log->chunk_lock);
+	}
+
+	ret = 0;
+done:
+	if (work->wait) {
+		work->done = 1;
+		pthread_cond_signal(&work->cv);
+	} else
+		free(data);
+
+	return ret;
+err:
+	while (!flist_empty(&list)) {
+		c = flist_first_entry(list.next, struct iolog_compress, list);
+		flist_del(&c->list);
+		free_chunk(c);
+	}
+	ret = 1;
+	goto done;
+}
+
+/*
+ * Queue work item to compress the existing log entries. We copy the
+ * samples, and reset the log sample count to 0 (so the logging will
+ * continue to use the memory associated with the log). If called with
+ * wait == 1, will not return until the log compression has completed.
+ */
+int iolog_flush(struct io_log *log, int wait)
+{
+	struct tp_data *tdat = log->td->tp_data;
+	struct iolog_flush_data *data;
+	size_t sample_size;
+
+	data = malloc(sizeof(*data));
+	if (!data)
+		return 1;
+
+	data->log = log;
+
+	sample_size = log->nr_samples * log_entry_sz(log);
+	data->samples = malloc(sample_size);
+	if (!data->samples) {
+		free(data);
+		return 1;
+	}
+
+	memcpy(data->samples, log->log, sample_size);
+	data->nr_samples = log->nr_samples;
+	data->work.fn = gz_work;
+	log->nr_samples = 0;
+
+	if (wait) {
+		pthread_mutex_init(&data->work.lock, NULL);
+		pthread_cond_init(&data->work.cv, NULL);
+		data->work.wait = 1;
+	} else
+		data->work.wait = 0;
+
+	data->work.prio = 1;
+	tp_queue_work(tdat, &data->work);
+
+	if (wait) {
+		pthread_mutex_lock(&data->work.lock);
+		while (!data->work.done)
+			pthread_cond_wait(&data->work.cv, &data->work.lock);
+		pthread_mutex_unlock(&data->work.lock);
+		free(data);
+	}
+
+	return 0;
+}
+
+#else
+
+int iolog_flush(struct io_log *log, int wait)
+{
+	return 1;
+}
+
+#endif
+
+static int write_iops_log(struct thread_data *td, int try)
+{
+	struct io_log *log = td->iops_log;
+
+	if (!log)
+		return 0;
+
+	return finish_log(td, log, try);
+}
+
+static int write_slat_log(struct thread_data *td, int try)
+{
+	struct io_log *log = td->slat_log;
+
+	if (!log)
+		return 0;
+
+	return finish_log(td, log, try);
+}
+
+static int write_clat_log(struct thread_data *td, int try)
+{
+	struct io_log *log = td->clat_log;
+
+	if (!log)
+		return 0;
+
+	return finish_log(td, log, try);
+}
+
+static int write_lat_log(struct thread_data *td, int try)
+{
+	struct io_log *log = td->lat_log;
+
+	if (!log)
+		return 0;
+
+	return finish_log(td, log, try);
+}
+
+static int write_bandw_log(struct thread_data *td, int try)
+{
+	struct io_log *log = td->bw_log;
+
+	if (!log)
+		return 0;
+
+	return finish_log(td, log, try);
+}
+
+enum {
+	BW_LOG_MASK	= 1,
+	LAT_LOG_MASK	= 2,
+	SLAT_LOG_MASK	= 4,
+	CLAT_LOG_MASK	= 8,
+	IOPS_LOG_MASK	= 16,
+
+	ALL_LOG_NR	= 5,
+};
+
+struct log_type {
+	unsigned int mask;
+	int (*fn)(struct thread_data *, int);
+};
+
+static struct log_type log_types[] = {
+	{
+		.mask	= BW_LOG_MASK,
+		.fn	= write_bandw_log,
+	},
+	{
+		.mask	= LAT_LOG_MASK,
+		.fn	= write_lat_log,
+	},
+	{
+		.mask	= SLAT_LOG_MASK,
+		.fn	= write_slat_log,
+	},
+	{
+		.mask	= CLAT_LOG_MASK,
+		.fn	= write_clat_log,
+	},
+	{
+		.mask	= IOPS_LOG_MASK,
+		.fn	= write_iops_log,
+	},
+};
+
+void fio_writeout_logs(struct thread_data *td)
+{
+	unsigned int log_mask = 0;
+	unsigned int log_left = ALL_LOG_NR;
+	int old_state, i;
+
+	old_state = td_bump_runstate(td, TD_FINISHING);
+
+	finalize_logs(td);
+
+	while (log_left) {
+		int prev_log_left = log_left;
+
+		for (i = 0; i < ALL_LOG_NR && log_left; i++) {
+			struct log_type *lt = &log_types[i];
+			int ret;
+
+			if (!(log_mask & lt->mask)) {
+				ret = lt->fn(td, log_left != 1);
+				if (!ret) {
+					log_left--;
+					log_mask |= lt->mask;
+				}
+			}
+		}
+
+		if (prev_log_left == log_left)
+			usleep(5000);
+	}
+
+	td_restore_runstate(td, old_state);
 }

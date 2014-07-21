@@ -73,8 +73,10 @@ static void *idle_prof_thread_fn(void *data)
 	pthread_mutex_lock(&ipt->init_lock);
 
 	/* exit if any other thread failed to start */
-	if (ipc.status == IDLE_PROF_STATUS_ABORT)
+	if (ipc.status == IDLE_PROF_STATUS_ABORT) {
+		pthread_mutex_unlock(&ipt->init_lock);
 		return NULL;
+	}
 
 	retval = set_cpu_affinity(ipt);
 	if (retval == -1) {
@@ -109,12 +111,16 @@ static void *idle_prof_thread_fn(void *data)
 	pthread_mutex_lock(&ipt->start_lock);
 
 	/* exit if other threads failed to initialize */
-	if (ipc.status == IDLE_PROF_STATUS_ABORT)
+	if (ipc.status == IDLE_PROF_STATUS_ABORT) {
+		pthread_mutex_unlock(&ipt->start_lock);
 		return NULL;
+	}
 
 	/* exit if we are doing calibration only */
-	if (ipc.status == IDLE_PROF_STATUS_CALI_STOP)
+	if (ipc.status == IDLE_PROF_STATUS_CALI_STOP) {
+		pthread_mutex_unlock(&ipt->start_lock);
 		return NULL;
+	}
 
 	fio_gettime(&ipt->tps, NULL);
 	ipt->state = TD_RUNNING;
@@ -336,7 +342,10 @@ void fio_idle_prof_stop(void)
 		/* calculate idleness */
 		if (ipc.cali_mean != 0.0) {
 			runt = utime_since(&ipt->tps, &ipt->tpe);
-			ipt->idleness = ipt->loops * ipc.cali_mean / runt;
+			if (runt)
+				ipt->idleness = ipt->loops * ipc.cali_mean / runt;
+			else
+				ipt->idleness = 0.0;
 		} else
 			ipt->idleness = 0.0;
 	}
@@ -379,7 +388,7 @@ static double fio_idle_prof_cpu_stat(int cpu)
 	return p * 100.0;
 }
 
-void fio_idle_prof_cleanup(void)
+static void fio_idle_prof_cleanup(void)
 {
 	if (ipc.ipts) {
 		free(ipc.ipts);

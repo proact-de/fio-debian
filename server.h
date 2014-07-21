@@ -38,9 +38,10 @@ struct fio_net_cmd_reply {
 };
 
 enum {
-	FIO_SERVER_VER			= 25,
+	FIO_SERVER_VER			= 35,
 
 	FIO_SERVER_MAX_FRAGMENT_PDU	= 1024,
+	FIO_SERVER_MAX_CMD_MB		= 2048,
 
 	FIO_NET_CMD_QUIT		= 1,
 	FIO_NET_CMD_EXIT		= 2,
@@ -142,10 +143,11 @@ struct cmd_text_pdu {
 };
 
 struct cmd_iolog_pdu {
+	uint64_t nr_samples;
 	uint32_t thread_number;
-	uint32_t nr_samples;
 	uint32_t log_type;
 	uint32_t compressed;
+	uint32_t log_offset;
 	uint8_t name[FIO_NET_NAME_MAX];
 	struct io_sample samples[0];
 };
@@ -156,7 +158,7 @@ extern int fio_net_send_cmd(int, uint16_t, const void *, off_t, uint64_t *, stru
 extern int fio_net_send_simple_cmd(int, uint16_t, uint64_t, struct flist_head *);
 extern void fio_server_set_arg(const char *);
 extern int fio_server_parse_string(const char *, char **, int *, int *, struct in_addr *, struct in6_addr *, int *);
-extern int fio_server_parse_host(const char *, int *, struct in_addr *, struct in6_addr *);
+extern int fio_server_parse_host(const char *, int, struct in_addr *, struct in6_addr *);
 extern const char *fio_server_op(unsigned int);
 extern void fio_server_got_signal(int);
 

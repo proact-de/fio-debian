@@ -77,10 +77,11 @@ static int fio_sgio_getevents(struct thread_data *td, unsigned int min,
 		/*
 		 * don't block for min events == 0
 		 */
-		if (!min) {
-			sd->fd_flags[i] = fcntl(f->fd, F_GETFL);
-			fcntl(f->fd, F_SETFL, sd->fd_flags[i] | O_NONBLOCK);
-		}
+		if (!min)
+			sd->fd_flags[i] = fio_set_fd_nonblocking(f->fd, "sg");
+		else
+			sd->fd_flags[i] = -1;
+
 		sd->pfds[i].fd = f->fd;
 		sd->pfds[i].events = POLLIN;
 	}
@@ -143,8 +144,13 @@ re_read:
 	}
 
 	if (!min) {
-		for_each_file(td, f, i)
-			fcntl(f->fd, F_SETFL, sd->fd_flags[i]);
+		for_each_file(td, f, i) {
+			if (sd->fd_flags[i] == -1)
+				continue;
+
+			if (fcntl(f->fd, F_SETFL, sd->fd_flags[i]) < 0)
+				log_err("fio: sg failed to restore fcntl flags: %s\n", strerror(errno));
+		}
 	}
 
 	return r;

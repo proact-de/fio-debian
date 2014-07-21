@@ -109,10 +109,11 @@ static int fio_binject_getevents(struct thread_data *td, unsigned int min,
 		/*
 		 * don't block for min events == 0
 		 */
-		if (!min) {
-			bd->fd_flags[i] = fcntl(bf->fd, F_GETFL);
-			fcntl(bf->fd, F_SETFL, bd->fd_flags[i] | O_NONBLOCK);
-		}
+		if (!min)
+			bd->fd_flags[i] = fio_set_fd_nonblocking(bf->fd, "binject");
+		else
+			bd->fd_flags[i] = -1;
+
 		bd->pfds[i].fd = bf->fd;
 		bd->pfds[i].events = POLLIN;
 	}
@@ -154,7 +155,12 @@ static int fio_binject_getevents(struct thread_data *td, unsigned int min,
 	if (!min) {
 		for_each_file(td, f, i) {
 			bf = (struct binject_file *) (uintptr_t) f->engine_data;
-			fcntl(bf->fd, F_SETFL, bd->fd_flags[i]);
+
+			if (bd->fd_flags[i] == -1)
+				continue;
+
+			if (fcntl(bf->fd, F_SETFL, bd->fd_flags[i]) < 0)
+				log_err("fio: binject failed to restore fcntl flags: %s\n", strerror(errno));
 		}
 	}
 
