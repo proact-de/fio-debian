@@ -1,3 +1,9 @@
+Description: Change makefile to remove config.log.
+  This is needed to make subsequent build via dpkg-buildpackage which
+  expects no changed files work.
+Author: Martin Steigerwald <ms@teamix.de>
+
+
 --- a/Makefile
 +++ b/Makefile
 @@ -283,7 +283,7 @@
