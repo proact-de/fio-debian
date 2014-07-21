@@ -1,3 +1,15 @@
+fio (2.1.11-1) UNRELEASED; urgency=medium
+
+  * dh_builddeb without -z9, so use xz, but do not set default level.
+  * Ignore contents of .pc/.
+  * Imported Upstream version 2.1.11.
+  * debian/patches:
+    - makefile-hardening: Adapted to new C++ build option.
+    - makefile-clean-delete-config-log-and-d-files: Deleted. Fixed upstream.
+    - makefile-rm-configlog: Added.
+
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 21 Jul 2014 15:53:36 +0200
+
 fio (2.1.3-1) unstable; urgency=low
 
   * Imported Upstream version 2.1.2.
