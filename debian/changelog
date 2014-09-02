@@ -1,8 +1,10 @@
 fio (2.1.11-2) unstable; urgency=medium
 
-  * debian/control: Added RBD support by adding librbd-dev to build
-    dependencies. Thanks to Benjamin Drung for report and patch.
-    Closes: #760266.
+  * debian/control:
+    * Added RBD support by adding librbd-dev to build dependencies. 
+      Thanks to Benjamin Drung for report and patch. Closes: #760266.
+    * Changed homepage to download page due to freshmeat.net shutdown.
+  * debian/patches: Removed obsolete patches.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 02 Sep 2014 15:37:28 +0200
 
