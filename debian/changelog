@@ -1,6 +1,8 @@
 fio (2.2.10-1) UNRELEASED; urgency=medium
 
   * Imported Upstream version 2.2.10
+  * debian/patches: Removed makefile patches as makefile is now generated
+    via autoconf.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
 
