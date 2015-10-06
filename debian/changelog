@@ -9,7 +9,10 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
     * Switched to dh_$@ wildcard version of rules file.
     * Added override for dh_auto_configure cause upstream configure file
       does not understand many options dh_auto_configure passed to it.
-  * debian/control: Updated to standards version 3.9.6. No changes needed.
+  * debian/control:
+    * Updated to standards version 3.9.6. No changes needed.
+    * Point to github page as new homepage as it appears to be closest to a
+      homepage of any of the URLs mentioned in the README.
   * debian/copyright: Fixed lintian messages about changed/wrong paths to
     referenced files.
   * Switched to debhelper 9 cause it makes sense and in order to have
