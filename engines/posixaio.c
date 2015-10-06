@@ -91,7 +91,7 @@ static int fio_posixaio_prep(struct thread_data fio_unused *td,
 #define SUSPEND_ENTRIES	8
 
 static int fio_posixaio_getevents(struct thread_data *td, unsigned int min,
-				  unsigned int max, struct timespec *t)
+				  unsigned int max, const struct timespec *t)
 {
 	struct posixaio_data *pd = td->io_ops->data;
 	os_aiocb_t *suspend_list[SUSPEND_ENTRIES];
@@ -198,7 +198,7 @@ static int fio_posixaio_queue(struct thread_data *td,
 	}
 
 	if (ret) {
-		int aio_err = aio_error(aiocb);
+		int aio_err = errno;
 
 		/*
 		 * At least OSX has a very low limit on the number of pending

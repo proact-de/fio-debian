@@ -8,6 +8,7 @@
 #include "lib/zipf.h"
 #include "lib/axmap.h"
 #include "lib/lfsr.h"
+#include "lib/gauss.h"
 
 /*
  * The type of object we are working on
@@ -27,6 +28,8 @@ enum fio_file_flags {
 	FIO_FILE_size_known	= 1 << 4,	/* size has been set */
 	FIO_FILE_hashed		= 1 << 5,	/* file is on hash */
 	FIO_FILE_partial_mmap	= 1 << 6,	/* can't do full mmap */
+	FIO_FILE_axmap		= 1 << 7,	/* uses axmap */
+	FIO_FILE_lfsr		= 1 << 8,	/* lfsr is used */
 };
 
 enum file_lock_mode {
@@ -73,13 +76,10 @@ struct fio_file {
 	/*
 	 * filename and possible memory mapping
 	 */
-	char *file_name;
 	unsigned int major, minor;
 	int fileno;
-
-	void *mmap_ptr;
-	size_t mmap_sz;
-	off_t mmap_off;
+	int bs;
+	char *file_name;
 
 	/*
 	 * size of the file, offset into file, and io size from that offset
@@ -88,8 +88,11 @@ struct fio_file {
 	uint64_t file_offset;
 	uint64_t io_size;
 
-	uint64_t last_pos;
-	uint64_t last_start;
+	/*
+	 * Track last end and last start of IO for a given data direction
+	 */
+	uint64_t last_pos[DDIR_RWDIR_CNT];
+	uint64_t last_start[DDIR_RWDIR_CNT];
 
 	uint64_t first_write;
 	uint64_t last_write;
@@ -108,22 +111,30 @@ struct fio_file {
 	};
 
 	/*
-	 * block map for random io
+	 * block map or LFSR for random io
 	 */
-	struct axmap *io_axmap;
-
-	struct fio_lfsr lfsr;
+	union {
+		struct axmap *io_axmap;
+		struct fio_lfsr lfsr;
+	};
 
 	/*
 	 * Used for zipf random distribution
 	 */
-	struct zipf_state zipf;
+	union {
+		struct zipf_state zipf;
+		struct gauss_state gauss;
+	};
 
 	int references;
 	enum fio_file_flags flags;
 
 	struct disk_util *du;
 };
+
+#define FILE_ENG_DATA(f)	((void *) (uintptr_t) (f)->engine_data)
+#define FILE_SET_ENG_DATA(f, data)	\
+	((f)->engine_data = (uintptr_t) (data))
 
 struct file_name {
 	struct flist_head list;
@@ -151,6 +162,8 @@ FILE_FLAG_FNS(done);
 FILE_FLAG_FNS(size_known);
 FILE_FLAG_FNS(hashed);
 FILE_FLAG_FNS(partial_mmap);
+FILE_FLAG_FNS(axmap);
+FILE_FLAG_FNS(lfsr);
 #undef FILE_FLAG_FNS
 
 /*

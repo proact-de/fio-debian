@@ -112,6 +112,28 @@ struct group_run_stats {
 #define FIO_IO_U_LIST_MAX_LEN 20 /* The size of the default and user-specified
 					list of percentiles */
 
+/*
+ * Trim cycle count measurements
+ */
+#define MAX_NR_BLOCK_INFOS	8192
+#define BLOCK_INFO_STATE_SHIFT	29
+#define BLOCK_INFO_TRIMS(block_info)	\
+	((block_info) & ((1 << BLOCK_INFO_STATE_SHIFT) - 1))
+#define BLOCK_INFO_STATE(block_info)		\
+	((block_info) >> BLOCK_INFO_STATE_SHIFT)
+#define BLOCK_INFO(state, trim_cycles)	\
+	((trim_cycles) | ((state) << BLOCK_INFO_STATE_SHIFT))
+#define BLOCK_INFO_SET_STATE(block_info, state)	\
+	BLOCK_INFO(state, BLOCK_INFO_TRIMS(block_info))
+enum block_info_state {
+	BLOCK_STATE_UNINIT,
+	BLOCK_STATE_TRIMMED,
+	BLOCK_STATE_WRITTEN,
+	BLOCK_STATE_TRIM_FAILURE,
+	BLOCK_STATE_WRITE_FAILURE,
+	BLOCK_STATE_COUNT,
+};
+
 #define MAX_PATTERN_SIZE	512
 #define FIO_JOBNAME_SIZE	128
 #define FIO_JOBDESC_SIZE	256
@@ -158,8 +180,11 @@ struct thread_stat {
 	uint32_t io_u_lat_u[FIO_IO_U_LAT_U_NR];
 	uint32_t io_u_lat_m[FIO_IO_U_LAT_M_NR];
 	uint32_t io_u_plat[DDIR_RWDIR_CNT][FIO_IO_U_PLAT_NR];
+	uint32_t pad;
+
 	uint64_t total_io_u[3];
 	uint64_t short_io_u[3];
+	uint64_t drop_io_u[3];
 	uint64_t total_submit;
 	uint64_t total_complete;
 
@@ -170,9 +195,15 @@ struct thread_stat {
 	/*
 	 * IO Error related stats
 	 */
-	uint16_t continue_on_error;
+	union {
+		uint16_t continue_on_error;
+		uint64_t pad2;
+	};
 	uint64_t total_err_count;
 	uint32_t first_error;
+
+	uint64_t nr_block_infos;
+	uint32_t block_infos[MAX_NR_BLOCK_INFOS];
 
 	uint32_t kb_base;
 	uint32_t unit_base;
@@ -208,6 +239,8 @@ struct jobs_eta {
 	uint8_t run_str[];
 } __attribute__((packed));
 
+extern struct fio_mutex *stat_mutex;
+
 extern struct jobs_eta *get_jobs_eta(int force, size_t *size);
 
 extern void stat_init(void);
@@ -218,6 +251,8 @@ extern void show_group_stats(struct group_run_stats *rs);
 extern int calc_thread_status(struct jobs_eta *je, int force);
 extern void display_thread_status(struct jobs_eta *je);
 extern void show_run_stats(void);
+extern void __show_run_stats(void);
+extern void __show_running_run_stats(void);
 extern void show_running_run_stats(void);
 extern void check_for_running_stats(void);
 extern void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src, int nr);
@@ -250,5 +285,7 @@ static inline int usec_to_msec(unsigned long *min, unsigned long *max,
  */
 #define __THREAD_RUNSTR_SZ(nr)	((nr) * 5)
 #define THREAD_RUNSTR_SZ	__THREAD_RUNSTR_SZ(thread_number)
+
+uint32_t *io_u_block_info(struct thread_data *td, struct io_u *io_u);
 
 #endif

@@ -40,6 +40,7 @@
 #include "stat.h"
 #include "flow.h"
 #include "io_u_queue.h"
+#include "workqueue.h"
 
 #ifdef CONFIG_SOLARISAIO
 #include <sys/asynch.h>
@@ -64,16 +65,20 @@ enum {
 };
 
 enum {
-	TD_F_VER_BACKLOG	= 1,
-	TD_F_TRIM_BACKLOG	= 2,
-	TD_F_READ_IOLOG		= 4,
-	TD_F_REFILL_BUFFERS	= 8,
-	TD_F_SCRAMBLE_BUFFERS	= 16,
-	TD_F_VER_NONE		= 32,
-	TD_F_PROFILE_OPS	= 64,
-	TD_F_COMPRESS		= 128,
-	TD_F_NOIO		= 256,
-	TD_F_COMPRESS_LOG	= 512,
+	TD_F_VER_BACKLOG	= 1U << 0,
+	TD_F_TRIM_BACKLOG	= 1U << 1,
+	TD_F_READ_IOLOG		= 1U << 2,
+	TD_F_REFILL_BUFFERS	= 1U << 3,
+	TD_F_SCRAMBLE_BUFFERS	= 1U << 4,
+	TD_F_VER_NONE		= 1U << 5,
+	TD_F_PROFILE_OPS	= 1U << 6,
+	TD_F_COMPRESS		= 1U << 7,
+	TD_F_NOIO		= 1U << 8,
+	TD_F_COMPRESS_LOG	= 1U << 9,
+	TD_F_VSTATE_SAVED	= 1U << 10,
+	TD_F_NEED_LOCK		= 1U << 11,
+	TD_F_CHILD		= 1U << 12,
+	TD_F_NO_PROGRESS        = 1U << 13,
 };
 
 enum {
@@ -89,7 +94,13 @@ enum {
 	FIO_RAND_SEQ_RAND_WRITE_OFF,
 	FIO_RAND_SEQ_RAND_TRIM_OFF,
 	FIO_RAND_START_DELAY,
+	FIO_DEDUPE_OFF,
 	FIO_RAND_NR_OFFS,
+};
+
+enum {
+	IO_MODE_INLINE = 0,
+	IO_MODE_OFFLOAD,
 };
 
 /*
@@ -102,6 +113,7 @@ struct thread_data {
 	char verror[FIO_VERROR_SIZE];
 	pthread_t thread;
 	unsigned int thread_number;
+	unsigned int subjob_number;
 	unsigned int groupid;
 	struct thread_stat ts;
 
@@ -115,11 +127,20 @@ struct thread_data {
 
 	struct tp_data *tp_data;
 
+	struct thread_data *parent;
+
 	uint64_t stat_io_bytes[DDIR_RWDIR_CNT];
 	struct timeval bw_sample_time;
 
 	uint64_t stat_io_blocks[DDIR_RWDIR_CNT];
 	struct timeval iops_sample_time;
+
+	/*
+	 * Tracks the last iodepth number of completed writes, if data
+	 * verification is enabled
+	 */
+	uint64_t *last_write_comp;
+	unsigned int last_write_idx;
 
 	volatile int update_rusage;
 	struct fio_mutex *rusage_sem;
@@ -135,12 +156,12 @@ struct thread_data {
 	unsigned int nr_normal_files;
 	union {
 		unsigned int next_file;
-		os_random_state_t next_file_state;
-		struct frand_state __next_file_state;
+		struct frand_state next_file_state;
 	};
 	int error;
 	int sig;
 	int done;
+	int stop_io;
 	pid_t pid;
 	char *orig_buffer;
 	size_t orig_buffer_size;
@@ -158,27 +179,19 @@ struct thread_data {
 
 	unsigned long rand_seeds[FIO_RAND_NR_OFFS];
 
-	union {
-		os_random_state_t bsrange_state;
-		struct frand_state __bsrange_state;
-	};
-	union {
-		os_random_state_t verify_state;
-		struct frand_state __verify_state;
-	};
-	union {
-		os_random_state_t trim_state;
-		struct frand_state __trim_state;
-	};
-	union {
-		os_random_state_t delay_state;
-		struct frand_state __delay_state;
-	};
+	struct frand_state bsrange_state;
+	struct frand_state verify_state;
+	struct frand_state trim_state;
+	struct frand_state delay_state;
 
 	struct frand_state buf_state;
+	struct frand_state buf_state_prev;
+	struct frand_state dedupe_state;
 
 	unsigned int verify_batch;
 	unsigned int trim_batch;
+
+	struct thread_io_list *vstate;
 
 	int shm_id;
 
@@ -225,34 +238,48 @@ struct thread_data {
 	 * Rate state
 	 */
 	uint64_t rate_bps[DDIR_RWDIR_CNT];
-	long rate_pending_usleep[DDIR_RWDIR_CNT];
+	unsigned long rate_next_io_time[DDIR_RWDIR_CNT];
 	unsigned long rate_bytes[DDIR_RWDIR_CNT];
 	unsigned long rate_blocks[DDIR_RWDIR_CNT];
+	unsigned long rate_io_issue_bytes[DDIR_RWDIR_CNT];
 	struct timeval lastrate[DDIR_RWDIR_CNT];
+
+	/*
+	 * Enforced rate submission/completion workqueue
+	 */
+	struct workqueue io_wq;
 
 	uint64_t total_io_size;
 	uint64_t fill_device_size;
 
-	unsigned long io_issues[DDIR_RWDIR_CNT];
+	/*
+	 * Issue side
+	 */
+	uint64_t io_issues[DDIR_RWDIR_CNT];
+	uint64_t io_issue_bytes[DDIR_RWDIR_CNT];
+	uint64_t loops;
+
+	/*
+	 * Completions
+	 */
 	uint64_t io_blocks[DDIR_RWDIR_CNT];
 	uint64_t this_io_blocks[DDIR_RWDIR_CNT];
 	uint64_t io_bytes[DDIR_RWDIR_CNT];
-	uint64_t io_skip_bytes;
 	uint64_t this_io_bytes[DDIR_RWDIR_CNT];
+	uint64_t io_skip_bytes;
 	uint64_t zone_bytes;
 	struct fio_mutex *mutex;
+	uint64_t bytes_done[DDIR_RWDIR_CNT];
 
 	/*
 	 * State for random io, a bitmap of blocks done vs not done
 	 */
-	union {
-		os_random_state_t random_state;
-		struct frand_state __random_state;
-	};
+	struct frand_state random_state;
 
 	struct timeval start;	/* start of this loop */
 	struct timeval epoch;	/* time job was started */
 	struct timeval last_issue;
+	long time_offset;
 	struct timeval tv_cache;
 	struct timeval terminate_time;
 	unsigned int tv_cache_nr;
@@ -273,10 +300,7 @@ struct thread_data {
 	/*
 	 * read/write mixed workload state
 	 */
-	union {
-		os_random_state_t rwmix_state;
-		struct frand_state __rwmix_state;
-	};
+	struct frand_state rwmix_state;
 	unsigned long rwmix_issues;
 	enum fio_ddir rwmix_ddir;
 	unsigned int ddir_seq_nr;
@@ -284,10 +308,7 @@ struct thread_data {
 	/*
 	 * rand/seq mixed workload state
 	 */
-	union {
-		os_random_state_t seq_rand_state[DDIR_RWDIR_CNT];
-		struct frand_state __seq_rand_state[DDIR_RWDIR_CNT];
-	};
+	struct frand_state seq_rand_state[DDIR_RWDIR_CNT];
 
 	/*
 	 * IO history logs for verification. We use a tree for sorting,
@@ -322,10 +343,7 @@ struct thread_data {
 	/*
 	 * For generating file sizes
 	 */
-	union {
-		os_random_state_t file_size_state;
-		struct frand_state __file_size_state;
-	};
+	struct frand_state file_size_state;
 
 	/*
 	 * Error counts
@@ -364,12 +382,23 @@ enum {
 	} while (0)
 
 
-#define td_clear_error(td)		\
-	(td)->error = 0;
-#define td_verror(td, err, func)	\
-	__td_verror((td), (err), strerror((err)), (func))
-#define td_vmsg(td, err, msg, func)	\
-	__td_verror((td), (err), (msg), (func))
+#define td_clear_error(td)		do {		\
+	(td)->error = 0;				\
+	if ((td)->parent)				\
+		(td)->parent->error = 0;		\
+} while (0)
+
+#define td_verror(td, err, func)	do {			\
+	__td_verror((td), (err), strerror((err)), (func));	\
+	if ((td)->parent)					\
+		__td_verror((td)->parent, (err), strerror((err)), (func)); \
+} while (0)
+
+#define td_vmsg(td, err, msg, func)	do {			\
+	__td_verror((td), (err), (msg), (func));		\
+	if ((td)->parent)					\
+		__td_verror((td)->parent, (err), (msg), (func));	\
+} while (0)
 
 #define __fio_stringify_1(x)	#x
 #define __fio_stringify(x)	__fio_stringify_1(x)
@@ -399,10 +428,17 @@ extern int nr_clients;
 extern int log_syslog;
 extern int status_interval;
 extern const char fio_version_string[];
+extern int helper_do_stat;
+extern pthread_cond_t helper_cond;
+extern char *trigger_file;
+extern char *trigger_cmd;
+extern char *trigger_remote_cmd;
+extern long long trigger_timeout;
+extern char *aux_path;
 
 extern struct thread_data *threads;
 
-static inline void fio_ro_check(struct thread_data *td, struct io_u *io_u)
+static inline void fio_ro_check(const struct thread_data *td, struct io_u *io_u)
 {
 	assert(!(io_u->ddir == DDIR_WRITE && !td_write(td)));
 }
@@ -431,6 +467,7 @@ extern void reset_fio_state(void);
 extern void clear_io_state(struct thread_data *);
 extern int fio_options_parse(struct thread_data *, char **, int, int);
 extern void fio_keywords_init(void);
+extern void fio_keywords_exit(void);
 extern int fio_cmd_option_parse(struct thread_data *, const char *, char *);
 extern int fio_cmd_ioengine_option_parse(struct thread_data *, const char *, char *);
 extern void fio_fill_default_options(struct thread_data *);
@@ -441,7 +478,7 @@ extern void fio_options_mem_dupe(struct thread_data *);
 extern void options_mem_dupe(void *data, struct fio_option *options);
 extern void td_fill_rand_seeds(struct thread_data *);
 extern void add_job_opts(const char **, int);
-extern char *num2str(unsigned long, int, int, int, int);
+extern char *num2str(uint64_t, int, int, int, int);
 extern int ioengine_load(struct thread_data *);
 extern int parse_dryrun(void);
 extern int fio_running_or_pending_io_threads(void);
@@ -450,6 +487,7 @@ extern int fio_set_fd_nonblocking(int, const char *);
 extern uintptr_t page_mask;
 extern uintptr_t page_size;
 extern int initialize_fio(char *envp[]);
+extern void deinitialize_fio(void);
 
 #define FIO_GETOPT_JOB		0x89000000
 #define FIO_GETOPT_IOENGINE	0x98000000
@@ -481,6 +519,7 @@ enum {
 	TD_FINISHING,
 	TD_EXITED,
 	TD_REAPED,
+	TD_LAST,
 };
 
 extern void td_set_runstate(struct thread_data *, int);
@@ -568,16 +607,15 @@ static inline int __should_check_rate(struct thread_data *td,
 	return 0;
 }
 
-static inline int should_check_rate(struct thread_data *td,
-				    uint64_t *bytes_done)
+static inline int should_check_rate(struct thread_data *td)
 {
 	int ret = 0;
 
-	if (bytes_done[DDIR_READ])
+	if (td->bytes_done[DDIR_READ])
 		ret |= __should_check_rate(td, DDIR_READ);
-	if (bytes_done[DDIR_WRITE])
+	if (td->bytes_done[DDIR_WRITE])
 		ret |= __should_check_rate(td, DDIR_WRITE);
-	if (bytes_done[DDIR_TRIM])
+	if (td->bytes_done[DDIR_TRIM])
 		ret |= __should_check_rate(td, DDIR_TRIM);
 
 	return ret;
@@ -599,9 +637,9 @@ static inline unsigned int td_min_bs(struct thread_data *td)
 	return min(td->o.min_bs[DDIR_TRIM], min_bs);
 }
 
-static inline int is_power_of_2(unsigned long val)
+static inline int td_async_processing(struct thread_data *td)
 {
-	return (val != 0 && ((val & (val - 1)) == 0));
+	return (td->flags & TD_F_NEED_LOCK) != 0;
 }
 
 /*
@@ -610,19 +648,19 @@ static inline int is_power_of_2(unsigned long val)
  */
 static inline void td_io_u_lock(struct thread_data *td)
 {
-	if (td->o.verify_async)
+	if (td_async_processing(td))
 		pthread_mutex_lock(&td->io_u_lock);
 }
 
 static inline void td_io_u_unlock(struct thread_data *td)
 {
-	if (td->o.verify_async)
+	if (td_async_processing(td))
 		pthread_mutex_unlock(&td->io_u_lock);
 }
 
 static inline void td_io_u_free_notify(struct thread_data *td)
 {
-	if (td->o.verify_async)
+	if (td_async_processing(td))
 		pthread_cond_signal(&td->free_cond);
 }
 
@@ -630,7 +668,8 @@ extern const char *fio_get_arch_string(int);
 extern const char *fio_get_os_string(int);
 
 #ifdef FIO_INTERNAL
-#define ARRAY_SIZE(x) (sizeof((x)) / (sizeof((x)[0])))
+#define ARRAY_SIZE(x)    (sizeof((x)) / (sizeof((x)[0])))
+#define FIELD_SIZE(s, f) (sizeof(((typeof(s))0)->f))
 #endif
 
 enum {
@@ -643,16 +682,24 @@ enum {
 	FIO_RAND_DIST_RANDOM	= 0,
 	FIO_RAND_DIST_ZIPF,
 	FIO_RAND_DIST_PARETO,
+	FIO_RAND_DIST_GAUSS,
 };
+
+#define FIO_DEF_ZIPF		1.1
+#define FIO_DEF_PARETO		0.2
 
 enum {
 	FIO_RAND_GEN_TAUSWORTHE = 0,
 	FIO_RAND_GEN_LFSR,
+	FIO_RAND_GEN_TAUSWORTHE64,
 };
 
 enum {
 	FIO_CPUS_SHARED		= 0,
 	FIO_CPUS_SPLIT,
 };
+
+extern void exec_trigger(const char *);
+extern void check_trigger_file(void);
 
 #endif

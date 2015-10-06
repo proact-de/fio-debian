@@ -15,6 +15,7 @@
 #include <linux/unistd.h>
 #include <linux/raw.h>
 #include <linux/major.h>
+#include <byteswap.h>
 
 #include "binject.h"
 #include "../file.h"
@@ -208,9 +209,21 @@ static inline int fio_lookup_raw(dev_t dev, int *majdev, int *mindev)
 #define FIO_MADV_FREE	MADV_REMOVE
 #endif
 
+#if defined(__builtin_bswap16)
+#define fio_swap16(x)	__builtin_bswap16(x)
+#else
 #define fio_swap16(x)	__bswap_16(x)
+#endif
+#if defined(__builtin_bswap32)
+#define fio_swap32(x)	__builtin_bswap32(x)
+#else
 #define fio_swap32(x)	__bswap_32(x)
+#endif
+#if defined(__builtin_bswap64)
+#define fio_swap64(x)	__builtin_bswap64(x)
+#else
 #define fio_swap64(x)	__bswap_64(x)
+#endif
 
 #define CACHE_LINE_FILE	\
 	"/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size"
@@ -234,7 +247,7 @@ static inline int arch_cache_line_size(void)
 		return atoi(size);
 }
 
-static inline unsigned long long get_fs_size(const char *path)
+static inline unsigned long long get_fs_free_size(const char *path)
 {
 	unsigned long long ret;
 	struct statfs s;
@@ -268,5 +281,11 @@ static inline int fio_set_sched_idle(void)
 	return sched_setscheduler(gettid(), SCHED_IDLE, &p);
 }
 #endif
+
+#ifndef POSIX_FADV_STREAMID
+#define POSIX_FADV_STREAMID	8
+#endif
+
+#define FIO_HAVE_STREAMID
 
 #endif

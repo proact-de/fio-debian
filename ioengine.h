@@ -15,12 +15,12 @@
 #include <guasi.h>
 #endif
 
-#define FIO_IOOPS_VERSION	19
+#define FIO_IOOPS_VERSION	21
 
 enum {
 	IO_U_F_FREE		= 1 << 0,
 	IO_U_F_FLIGHT		= 1 << 1,
-	IO_U_F_FREE_DEF		= 1 << 2,
+	IO_U_F_NO_FILE_PUT	= 1 << 2,
 	IO_U_F_IN_CUR_DEPTH	= 1 << 3,
 	IO_U_F_BUSY_OK		= 1 << 4,
 	IO_U_F_TRIMMED		= 1 << 5,
@@ -46,11 +46,15 @@ struct io_u {
 	enum fio_ddir acct_ddir;
 
 	/*
+	 * Write generation
+	 */
+	unsigned short numberio;
+
+	/*
 	 * Allocated/set buffer and length
 	 */
 	unsigned long buflen;
 	unsigned long long offset;
-	unsigned short numberio;
 	void *buf;
 
 	/*
@@ -90,7 +94,7 @@ struct io_u {
 	/*
 	 * Callback for io completion
 	 */
-	int (*end_io)(struct thread_data *, struct io_u *);
+	int (*end_io)(struct thread_data *, struct io_u **);
 
 	union {
 #ifdef CONFIG_LIBAIO
@@ -115,6 +119,7 @@ struct io_u {
 		struct ibv_mr *mr;
 #endif
 		void *mmap_data;
+		uint64_t null;
 	};
 };
 
@@ -137,13 +142,14 @@ struct ioengine_ops {
 	int (*prep)(struct thread_data *, struct io_u *);
 	int (*queue)(struct thread_data *, struct io_u *);
 	int (*commit)(struct thread_data *);
-	int (*getevents)(struct thread_data *, unsigned int, unsigned int, struct timespec *);
+	int (*getevents)(struct thread_data *, unsigned int, unsigned int, const struct timespec *);
 	struct io_u *(*event)(struct thread_data *, int);
 	int (*cancel)(struct thread_data *, struct io_u *);
 	void (*cleanup)(struct thread_data *);
 	int (*open_file)(struct thread_data *, struct fio_file *);
 	int (*close_file)(struct thread_data *, struct fio_file *);
 	int (*invalidate)(struct thread_data *, struct fio_file *);
+	int (*unlink_file)(struct thread_data *, struct fio_file *);
 	int (*get_file_size)(struct thread_data *, struct fio_file *);
 	void (*terminate)(struct thread_data *);
 	int (*io_u_init)(struct thread_data *, struct io_u *);
@@ -166,6 +172,7 @@ enum fio_ioengine_flags {
 	FIO_BARRIER	= 1 << 8,	/* engine supports barriers */
 	FIO_MEMALIGN	= 1 << 9,	/* engine wants aligned memory */
 	FIO_BIT_BASED	= 1 << 10,	/* engine uses a bit base (e.g. uses Kbit as opposed to KB) */
+	FIO_FAKEIO	= 1 << 11,	/* engine pretends to do IO */
 };
 
 /*
@@ -180,10 +187,11 @@ extern int __must_check td_io_init(struct thread_data *);
 extern int __must_check td_io_prep(struct thread_data *, struct io_u *);
 extern int __must_check td_io_queue(struct thread_data *, struct io_u *);
 extern int __must_check td_io_sync(struct thread_data *, struct fio_file *);
-extern int __must_check td_io_getevents(struct thread_data *, unsigned int, unsigned int, struct timespec *);
+extern int __must_check td_io_getevents(struct thread_data *, unsigned int, unsigned int, const struct timespec *);
 extern int __must_check td_io_commit(struct thread_data *);
 extern int __must_check td_io_open_file(struct thread_data *, struct fio_file *);
 extern int td_io_close_file(struct thread_data *, struct fio_file *);
+extern int td_io_unlink_file(struct thread_data *, struct fio_file *);
 extern int __must_check td_io_get_file_size(struct thread_data *, struct fio_file *);
 
 extern struct ioengine_ops *load_ioengine(struct thread_data *, const char *);
@@ -202,8 +210,8 @@ extern struct io_u *get_io_u(struct thread_data *);
 extern void put_io_u(struct thread_data *, struct io_u *);
 extern void clear_io_u(struct thread_data *, struct io_u *);
 extern void requeue_io_u(struct thread_data *, struct io_u **);
-extern int __must_check io_u_sync_complete(struct thread_data *, struct io_u *, uint64_t *);
-extern int __must_check io_u_queued_complete(struct thread_data *, int, uint64_t *);
+extern int __must_check io_u_sync_complete(struct thread_data *, struct io_u *);
+extern int __must_check io_u_queued_complete(struct thread_data *, int);
 extern void io_u_queued(struct thread_data *, struct io_u *);
 extern void io_u_quiesce(struct thread_data *);
 extern void io_u_log_error(struct thread_data *, struct io_u *);
@@ -212,10 +220,10 @@ extern void fill_io_buffer(struct thread_data *, void *, unsigned int, unsigned 
 extern void io_u_fill_buffer(struct thread_data *td, struct io_u *, unsigned int, unsigned int);
 void io_u_mark_complete(struct thread_data *, unsigned int);
 void io_u_mark_submit(struct thread_data *, unsigned int);
-int queue_full(struct thread_data *);
+int queue_full(const struct thread_data *);
 
-int do_io_u_sync(struct thread_data *, struct io_u *);
-int do_io_u_trim(struct thread_data *, struct io_u *);
+int do_io_u_sync(const struct thread_data *, struct io_u *);
+int do_io_u_trim(const struct thread_data *, struct io_u *);
 
 #ifdef FIO_INC_DEBUG
 static inline void dprint_io_u(struct io_u *io_u, const char *p)
@@ -242,6 +250,16 @@ static inline enum fio_ddir acct_ddir(struct io_u *io_u)
 		return io_u->acct_ddir;
 
 	return io_u->ddir;
+}
+
+static inline void io_u_clear(struct io_u *io_u, unsigned int flags)
+{
+	__sync_fetch_and_and(&io_u->flags, ~flags);
+}
+
+static inline void io_u_set(struct io_u *io_u, unsigned int flags)
+{
+	__sync_fetch_and_or(&io_u->flags, flags);
 }
 
 #endif
