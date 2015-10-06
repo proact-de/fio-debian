@@ -22,7 +22,7 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
   * Switched to debhelper 9 cause it makes sense and in order to have
     dpkg-buildflags and thus hardening by default.
 
- -- Martin Steigerwald <ms@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
+ -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
 
 fio (2.1.11-2) unstable; urgency=medium
 
