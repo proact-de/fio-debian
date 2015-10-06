@@ -12,6 +12,8 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
   * debian/control: Updated to standards version 3.9.6. No changes needed.
   * debian/copyright: Fixed lintian messages about changed/wrong paths to
     referenced files.
+  * Switched to debhelper 9 cause it makes sense and in order to have
+    dpkg-buildflags and thus hardening by default.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
 
