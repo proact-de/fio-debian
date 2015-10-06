@@ -5,6 +5,10 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
     * Removed makefile patches as makefile is now generated via autoconf.
     * configure-no-configlog: Remove config.log at end of configure process
       to avoid error about uncommitted change from dpkg-source.
+  * debian/rules:
+    * Switched to dh_$@ wildcard version of rules file.
+    * Added override for dh_auto_configure cause upstream configure file
+      does not understand many options dh_auto_configure passed to it.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
 
