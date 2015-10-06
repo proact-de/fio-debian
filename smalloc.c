@@ -17,6 +17,7 @@
 #include "arch/arch.h"
 #include "os/os.h"
 #include "smalloc.h"
+#include "log.h"
 
 #define SMALLOC_REDZONE		/* define to detect memory corruption */
 
@@ -24,14 +25,16 @@
 #define SMALLOC_BPI	(sizeof(unsigned int) * 8)
 #define SMALLOC_BPL	(SMALLOC_BPB * SMALLOC_BPI)
 
-#define INITIAL_SIZE	8192*1024	/* new pool size */
-#define MAX_POOLS	128		/* maximum number of pools to setup */
+#define INITIAL_SIZE	16*1024*1024	/* new pool size */
+#define MAX_POOLS	8		/* maximum number of pools to setup */
 
 #define SMALLOC_PRE_RED		0xdeadbeefU
 #define SMALLOC_POST_RED	0x5aa55aa5U
 
 unsigned int smalloc_pool_size = INITIAL_SIZE;
+#ifdef SMALLOC_REDZONE
 static const int int_mask = sizeof(int) - 1;
+#endif
 
 struct pool {
 	struct fio_mutex *lock;			/* protects this pool */
@@ -221,7 +224,7 @@ static int add_pool(struct pool *pool, unsigned int alloc_size)
 	nr_pools++;
 	return 0;
 out_fail:
-	fprintf(stderr, "smalloc: failed adding pool\n");
+	log_err("smalloc: failed adding pool\n");
 	if (pool->map)
 		munmap(pool->map, pool->mmap_size);
 	return 1;
@@ -229,11 +232,21 @@ out_fail:
 
 void sinit(void)
 {
-	int ret;
+	int i, ret;
 
 	lock = fio_rwlock_init();
-	ret = add_pool(&mp[0], INITIAL_SIZE);
-	assert(!ret);
+
+	for (i = 0; i < MAX_POOLS; i++) {
+		ret = add_pool(&mp[i], INITIAL_SIZE);
+		if (ret)
+			break;
+	}
+
+	/*
+	 * If we added at least one pool, we should be OK for most
+	 * cases.
+	 */
+	assert(i);
 }
 
 static void cleanup_pool(struct pool *pool)
@@ -283,14 +296,14 @@ static void sfree_check_redzone(struct block_hdr *hdr)
 	unsigned int *postred = postred_ptr(hdr);
 
 	if (hdr->prered != SMALLOC_PRE_RED) {
-		fprintf(stderr, "smalloc pre redzone destroyed!\n");
-		fprintf(stderr, "  ptr=%p, prered=%x, expected %x\n",
+		log_err("smalloc pre redzone destroyed!\n"
+			" ptr=%p, prered=%x, expected %x\n",
 				hdr, hdr->prered, SMALLOC_PRE_RED);
 		assert(0);
 	}
 	if (*postred != SMALLOC_POST_RED) {
-		fprintf(stderr, "smalloc post redzone destroyed!\n");
-		fprintf(stderr, "  ptr=%p, postred=%x, expected %x\n",
+		log_err("smalloc post redzone destroyed!\n"
+			"  ptr=%p, postred=%x, expected %x\n",
 				hdr, *postred, SMALLOC_POST_RED);
 		assert(0);
 	}
@@ -352,8 +365,12 @@ void sfree(void *ptr)
 
 	global_read_unlock();
 
-	assert(pool);
-	sfree_pool(pool, ptr);
+	if (pool) {
+		sfree_pool(pool, ptr);
+		return;
+	}
+
+	log_err("smalloc: ptr %p not from smalloc pool\n", ptr);
 }
 
 static void *__smalloc_pool(struct pool *pool, size_t size)
@@ -441,16 +458,17 @@ static void *smalloc_pool(struct pool *pool, size_t size)
 
 void *smalloc(size_t size)
 {
-	unsigned int i;
+	unsigned int i, end_pool;
 
 	if (size != (unsigned int) size)
 		return NULL;
 
 	global_write_lock();
 	i = last_pool;
+	end_pool = nr_pools;
 
 	do {
-		for (; i < nr_pools; i++) {
+		for (; i < end_pool; i++) {
 			void *ptr = smalloc_pool(&mp[i], size);
 
 			if (ptr) {
@@ -460,29 +478,29 @@ void *smalloc(size_t size)
 			}
 		}
 		if (last_pool) {
-			last_pool = 0;
+			end_pool = last_pool;
+			last_pool = i = 0;
 			continue;
 		}
 
-		if (nr_pools + 1 > MAX_POOLS)
-			break;
-		else {
-			i = nr_pools;
-			if (add_pool(&mp[nr_pools], size))
-				goto out;
-		}
+		break;
 	} while (1);
 
-out:
 	global_write_unlock();
 	return NULL;
 }
 
+void *scalloc(size_t nmemb, size_t size)
+{
+	return smalloc(nmemb * size);
+}
+
 char *smalloc_strdup(const char *str)
 {
-	char *ptr;
+	char *ptr = NULL;
 
 	ptr = smalloc(strlen(str) + 1);
-	strcpy(ptr, str);
+	if (ptr)
+		strcpy(ptr, str);
 	return ptr;
 }

@@ -6,19 +6,20 @@
 #include <string.h>
 
 #include "fio.h"
+#include "lib/pow2.h"
 
 static char __run_str[REAL_MAX_JOBS + 1];
 static char run_str[__THREAD_RUNSTR_SZ(REAL_MAX_JOBS)];
 
-static void update_condensed_str(char *run_str, char *run_str_condensed)
+static void update_condensed_str(char *rstr, char *run_str_condensed)
 {
-	if (*run_str) {
-		while (*run_str) {
+	if (*rstr) {
+		while (*rstr) {
 			int nr = 1;
 
-			*run_str_condensed++ = *run_str++;
-			while (*(run_str - 1) == *run_str) {
-				run_str++;
+			*run_str_condensed++ = *rstr++;
+			while (*(rstr - 1) == *rstr) {
+				rstr++;
 				nr++;
 			}
 			run_str_condensed += sprintf(run_str_condensed, "(%u),", nr);
@@ -122,6 +123,11 @@ void eta_to_str(char *str, unsigned long eta_sec)
 	unsigned int d, h, m, s;
 	int disp_hour = 0;
 
+	if (eta_sec == -1) {
+		sprintf(str, "--");
+		return;
+	}
+
 	s = eta_sec % 60;
 	eta_sec /= 60;
 	m = eta_sec % 60;
@@ -145,7 +151,7 @@ void eta_to_str(char *str, unsigned long eta_sec)
 /*
  * Best effort calculation of the estimated pending runtime of a job.
  */
-static int thread_eta(struct thread_data *td)
+static unsigned long thread_eta(struct thread_data *td)
 {
 	unsigned long long bytes_total, bytes_done;
 	unsigned long eta_sec = 0;
@@ -156,6 +162,9 @@ static int thread_eta(struct thread_data *td)
 	timeout = td->o.timeout / 1000000UL;
 
 	bytes_total = td->total_io_size;
+
+	if (td->flags & TD_F_NO_PROGRESS)
+		return -1;
 
 	if (td->o.fill_device && td->o.size  == -1ULL) {
 		if (!td->fill_device_size || td->fill_device_size == -1ULL)
@@ -234,11 +243,11 @@ static int thread_eta(struct thread_data *td)
 		 * if given, otherwise assume it'll run at the specified rate.
 		 */
 		if (td->o.timeout) {
-			uint64_t timeout = td->o.timeout;
+			uint64_t __timeout = td->o.timeout;
 			uint64_t start_delay = td->o.start_delay;
 			uint64_t ramp_time = td->o.ramp_time;
 
-			t_eta = timeout + start_delay + ramp_time;
+			t_eta = __timeout + start_delay + ramp_time;
 			t_eta /= 1000000ULL;
 
 			if (in_ramp_time(td)) {
@@ -281,14 +290,19 @@ static void calc_rate(int unified_rw_rep, unsigned long mtime,
 	int i;
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
-		unsigned long long diff;
+		unsigned long long diff, this_rate;
 
 		diff = io_bytes[i] - prev_io_bytes[i];
+		if (mtime)
+			this_rate = ((1000 * diff) / mtime) / 1024;
+		else
+			this_rate = 0;
+
 		if (unified_rw_rep) {
 			rate[i] = 0;
-			rate[0] += ((1000 * diff) / mtime) / 1024;
+			rate[0] += this_rate;
 		} else
-			rate[i] = ((1000 * diff) / mtime) / 1024;
+			rate[i] = this_rate;
 
 		prev_io_bytes[i] = io_bytes[i];
 	}
@@ -301,14 +315,19 @@ static void calc_iops(int unified_rw_rep, unsigned long mtime,
 	int i;
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
-		unsigned long long diff;
+		unsigned long long diff, this_iops;
 
 		diff = io_iops[i] - prev_io_iops[i];
+		if (mtime)
+			this_iops = (diff * 1000) / mtime;
+		else
+			this_iops = 0;
+
 		if (unified_rw_rep) {
 			iops[i] = 0;
-			iops[0] += (diff * 1000) / mtime;
+			iops[0] += this_iops;
 		} else
-			iops[i] = (diff * 1000) / mtime;
+			iops[i] = this_iops;
 
 		prev_io_iops[i] = io_iops[i];
 	}
@@ -392,10 +411,9 @@ int calc_thread_status(struct jobs_eta *je, int force)
 		} else if (td->runstate == TD_RAMP) {
 			je->nr_running++;
 			je->nr_ramp++;
-		} else if (td->runstate == TD_SETTING_UP) {
-			je->nr_running++;
+		} else if (td->runstate == TD_SETTING_UP)
 			je->nr_setting_up++;
-		} else if (td->runstate < TD_RUNNING)
+		else if (td->runstate < TD_RUNNING)
 			je->nr_pending++;
 
 		if (je->elapsed_sec >= 3)
@@ -513,7 +531,8 @@ void display_thread_status(struct jobs_eta *je)
 		int l;
 		int ddir;
 
-		if ((!je->eta_sec && !eta_good) || je->nr_ramp == je->nr_running)
+		if ((!je->eta_sec && !eta_good) || je->nr_ramp == je->nr_running ||
+		    je->eta_sec == -1)
 			strcpy(perc_str, "-.-% done");
 		else {
 			double mult = 100.0;
@@ -556,8 +575,7 @@ void display_thread_status(struct jobs_eta *je)
 	if (!eta_new_line_init) {
 		fio_gettime(&disp_eta_new_line, NULL);
 		eta_new_line_init = 1;
-	} else if (eta_new_line &&
-		   mtime_since_now(&disp_eta_new_line) > eta_new_line * 1000) {
+	} else if (eta_new_line && mtime_since_now(&disp_eta_new_line) > eta_new_line) {
 		fio_gettime(&disp_eta_new_line, NULL);
 		eta_new_line_pending = 1;
 	}
@@ -572,11 +590,13 @@ struct jobs_eta *get_jobs_eta(int force, size_t *size)
 	if (!thread_number)
 		return NULL;
 
-	*size = sizeof(*je) + THREAD_RUNSTR_SZ;
+	*size = sizeof(*je) + THREAD_RUNSTR_SZ + 1;
 	je = malloc(*size);
+	if (!je)
+		return NULL;
 	memset(je, 0, *size);
 
-	if (!calc_thread_status(je, 0)) {
+	if (!calc_thread_status(je, force)) {
 		free(je);
 		return NULL;
 	}

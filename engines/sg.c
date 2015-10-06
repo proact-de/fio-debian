@@ -62,7 +62,8 @@ static int pollin_events(struct pollfd *pfds, int fds)
 }
 
 static int fio_sgio_getevents(struct thread_data *td, unsigned int min,
-			      unsigned int max, struct timespec fio_unused *t)
+			      unsigned int max,
+			      const struct timespec fio_unused *t)
 {
 	struct sgio_data *sd = td->io_ops->data;
 	int left = max, ret, r = 0;
@@ -367,6 +368,7 @@ static int fio_sgio_type_check(struct thread_data *td, struct fio_file *f)
 		if (ret)
 			return 1;
 	} else {
+		td_verror(td, EINVAL, "wrong file type");
 		log_err("ioengine sg only works on block devices\n");
 		return 1;
 	}

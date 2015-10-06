@@ -174,12 +174,12 @@ enum file_log_act {
 
 struct io_u;
 extern int __must_check read_iolog_get(struct thread_data *, struct io_u *);
-extern void log_io_u(struct thread_data *, struct io_u *);
+extern void log_io_u(const struct thread_data *, const struct io_u *);
 extern void log_file(struct thread_data *, struct fio_file *, enum file_log_act);
 extern int __must_check init_iolog(struct thread_data *td);
 extern void log_io_piece(struct thread_data *, struct io_u *);
 extern void unlog_io_piece(struct thread_data *, struct io_u *);
-extern void trim_io_piece(struct thread_data *, struct io_u *);
+extern void trim_io_piece(struct thread_data *, const struct io_u *);
 extern void queue_io_piece(struct thread_data *, struct io_piece *);
 extern void prune_io_piece_log(struct thread_data *);
 extern void write_iolog_close(struct thread_data *);
@@ -215,7 +215,7 @@ extern void add_iops_sample(struct thread_data *, enum fio_ddir, unsigned int,
 extern void init_disk_util(struct thread_data *);
 extern void update_rusage_stat(struct thread_data *);
 extern void setup_log(struct io_log **, struct log_params *, const char *);
-extern void flush_log(struct io_log *);
+extern void flush_log(struct io_log *, int);
 extern void free_log(struct io_log *);
 extern struct io_log *agg_io_log[DDIR_RWDIR_CNT];
 extern int write_bw_log;

@@ -133,12 +133,16 @@ cpu=""
 # default options
 show_help="no"
 exit_val=0
-gfio="no"
+gfio_check="no"
+libhdfs="no"
+prefix=/usr/local
 
 # parse options
 for opt do
   optarg=`expr "x$opt" : 'x[^=]*=\(.*\)'`
   case "$opt" in
+  --prefix=*) prefix="$optarg"
+  ;;
   --cpu=*) cpu="$optarg"
   ;;
   #  esx is cross compiled and cannot be detect through simple uname calls
@@ -151,14 +155,22 @@ for opt do
   ;;
   --build-32bit-win) build_32bit_win="yes"
   ;;
+  --build-static) build_static="yes"
+  ;;
   --enable-gfio)
-  gfio="yes"
+  gfio_check="yes"
   ;;
   --disable-numa) disable_numa="yes"
   ;;
   --disable-rbd) disable_rbd="yes"
   ;;
   --disable-gfapi) disable_gfapi="yes"
+  ;;
+  --enable-libhdfs) libhdfs="yes"
+  ;;
+  --disable-shm) no_shm="yes"
+  ;;
+  --disable-optimizations) disable_opt="yes"
   ;;
   --help)
     show_help="yes"
@@ -171,13 +183,19 @@ for opt do
 done
 
 if test "$show_help" = "yes" ; then
+  echo "--prefix=              Use this directory as installation prefix"
   echo "--cpu=                 Specify target CPU if auto-detect fails"
   echo "--cc=                  Specify compiler to use"
   echo "--extra-cflags=        Specify extra CFLAGS to pass to compiler"
   echo "--build-32bit-win      Enable 32-bit build on Windows"
+  echo "--build-static         Build a static fio"
   echo "--esx                  Configure build options for esx"
   echo "--enable-gfio          Enable building of gtk gfio"
   echo "--disable-numa         Disable libnuma even if found"
+  echo "--disable-gfapi        Disable gfapi"
+  echo "--enable-libhdfs       Enable hdfs support"
+  echo "--disable-shm          Disable SHM support"
+  echo "--disable-optimizations Don't enable compiler optimizations"
   exit $exit_val
 fi
 
@@ -204,6 +222,14 @@ printf "# Configured with:" >> $config_host_mak
 printf " '%s'" "$0" "$@" >> $config_host_mak
 echo >> $config_host_mak
 echo "CONFIG_TARGET_OS=$targetos" >> $config_host_mak
+
+if test "$no_shm" = "yes" ; then
+  output_sym "CONFIG_NO_SHM"
+fi
+
+if test "$disable_opt" = "yes" ; then
+  output_sym "CONFIG_FIO_NO_OPT"
+fi
 
 # Some host OSes need non-standard checks for which CPU to use.
 # Note that these checks are broken for cross-compilation: if you're
@@ -396,6 +422,16 @@ echo "Cross compile                 $cross_compile"
 echo
 
 ##########################################
+# See if we need to build a static build
+if test "$build_static" = "yes" ; then
+  CFLAGS="$CFLAGS -ffunction-sections -fdata-sections"
+  LDFLAGS="$LDFLAGS -static -Wl,--gc-sections"
+else
+  build_static="no"
+fi
+echo "Static build                  $build_static"
+
+##########################################
 # check for wordsize
 wordsize="0"
 cat > $TMPC <<EOF
@@ -522,17 +558,18 @@ fi
 echo "Solaris AIO support           $solaris_aio"
 
 ##########################################
-# __sync_fetch_and_and test
+# __sync_fetch_and_add test
 sfaa="no"
 cat > $TMPC << EOF
-static int sfaa(int *ptr)
+#include <inttypes.h>
+static int sfaa(uint64_t *ptr)
 {
   return __sync_fetch_and_add(ptr, 0);
 }
 
 int main(int argc, char **argv)
 {
-  int val = 42;
+  uint64_t val = 42;
   sfaa(&val);
   return val;
 }
@@ -698,6 +735,24 @@ fi
 echo "CLOCK_MONOTONIC               $clock_monotonic"
 
 ##########################################
+# CLOCK_MONOTONIC_RAW probe
+clock_monotonic_raw="no"
+if test "$clock_gettime" = "yes" ; then
+  cat > $TMPC << EOF
+#include <stdio.h>
+#include <time.h>
+int main(int argc, char **argv)
+{
+  return clock_gettime(CLOCK_MONOTONIC_RAW, NULL);
+}
+EOF
+  if compile_prog "" "$LIBS" "clock monotonic"; then
+      clock_monotonic_raw="yes"
+  fi
+fi
+echo "CLOCK_MONOTONIC_RAW           $clock_monotonic_raw"
+
+##########################################
 # CLOCK_MONOTONIC_PRECISE probe
 clock_monotonic_precise="no"
 if test "$clock_gettime" = "yes" ; then
@@ -837,8 +892,8 @@ int main(int argc, char **argv)
   return nvm_atomic_write(handle, 0, 0, 0);
 }
 EOF
-if compile_prog "" "-L/usr/lib/fio -L/usr/lib/nvm -lnvm-primitives -lvsl -ldl" "fusion-aw"; then
-  LIBS="-L/usr/lib/fio -L/usr/lib/nvm -lnvm-primitives -lvsl -ldl $LIBS"
+if compile_prog "" "-L/usr/lib/fio -L/usr/lib/nvm -lnvm-primitives -ldl -lpthread" "fusion-aw"; then
+  LIBS="-L/usr/lib/fio -L/usr/lib/nvm -lnvm-primitives -ldl -lpthread $LIBS"
   fusion_aw="yes"
 fi
 echo "Fusion-io atomic engine       $fusion_aw"
@@ -868,7 +923,7 @@ cat > $TMPC << EOF
 int main(int argc, char **argv)
 {
   struct bitmask *mask = numa_parse_nodestring(NULL);
-  return 0;
+  return mask->size == 0;
 }
 EOF
 if compile_prog "" "" "libnuma api"; then
@@ -884,7 +939,8 @@ cat > $TMPC << EOF
 #include <string.h>
 int main(int argc, char **argv)
 {
-  strsep(NULL, NULL);
+  static char *string = "This is a string";
+  strsep(&string, "needle");
   return 0;
 }
 EOF
@@ -978,7 +1034,8 @@ echo "__thread                      $tls_thread"
 
 ##########################################
 # Check if we have required gtk/glib support for gfio
-if test "$gfio" = "yes" ; then
+gfio="no"
+if test "$gfio_check" = "yes" ; then
   cat > $TMPC << EOF
 #include <glib.h>
 #include <cairo.h>
@@ -992,6 +1049,8 @@ int main(void)
 }
 EOF
 GTK_CFLAGS=$(pkg-config --cflags gtk+-2.0 gthread-2.0)
+ORG_LDFLAGS=$LDFLAGS
+LDFLAGS=$(echo $LDFLAGS | sed s/"-static"//g)
 if test "$?" != "0" ; then
   echo "configure: gtk and gthread not found"
   exit 1
@@ -1005,7 +1064,7 @@ if compile_prog "$GTK_CFLAGS" "$GTK_LIBS" "gfio" ; then
   r=$($TMPE)
   if test "$r" != "0" ; then
     gfio="yes"
-    LIBS="$LIBS $GTK_LIBS"
+    GFIO_LIBS="$LIBS $GTK_LIBS"
     CFLAGS="$CFLAGS $GTK_CFLAGS"
   else
     echo "GTK found, but need version 2.18 or higher"
@@ -1015,9 +1074,12 @@ else
   echo "Please install gtk and gdk libraries"
   gfio="no"
 fi
+LDFLAGS=$ORG_LDFLAGS
 fi
 
-echo "gtk 2.18 or higher            $gfio"
+if test "$gfio_check" = "yes" ; then
+  echo "gtk 2.18 or higher            $gfio"
+fi
 
 # Check whether we have getrusage(RUSAGE_THREAD)
 rusage_thread="no"
@@ -1069,6 +1131,45 @@ if compile_prog "" "" "TCP_NODELAY"; then
   tcp_nodelay="yes"
 fi
 echo "TCP_NODELAY                   $tcp_nodelay"
+
+##########################################
+# Check whether we have SO_SNDBUF
+window_size="no"
+cat > $TMPC << EOF
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/tcp.h>
+int main(int argc, char **argv)
+{
+  setsockopt(0, SOL_SOCKET, SO_SNDBUF, NULL, 0);
+  setsockopt(0, SOL_SOCKET, SO_RCVBUF, NULL, 0);
+}
+EOF
+if compile_prog "" "" "SO_SNDBUF"; then
+  window_size="yes"
+fi
+echo "Net engine window_size        $window_size"
+
+##########################################
+# Check whether we have TCP_MAXSEG
+mss="no"
+cat > $TMPC << EOF
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+int main(int argc, char **argv)
+{
+  return setsockopt(0, IPPROTO_TCP, TCP_MAXSEG, NULL, 0);
+}
+EOF
+if compile_prog "" "" "TCP_MAXSEG"; then
+  mss="yes"
+fi
+echo "TCP_MAXSEG                    $mss"
 
 ##########################################
 # Check whether we have RLIMIT_MEMLOCK
@@ -1157,6 +1258,26 @@ fi
 echo "Rados Block Device engine     $rbd"
 
 ##########################################
+# check for rbd_invaidate_cache()
+rbd_inval="no"
+if test "$rbd" = "yes"; then
+cat > $TMPC << EOF
+#include <rbd/librbd.h>
+
+int main(int argc, char **argv)
+{
+  rbd_image_t image;
+
+  return rbd_invalidate_cache(image);
+}
+EOF
+if compile_prog "" "-lrbd -lrados" "rbd"; then
+  rbd_inval="yes"
+fi
+echo "rbd_invalidate_cache          $rbd_inval"
+fi
+
+##########################################
 # Check whether we have setvbuf
 setvbuf="no"
 cat > $TMPC << EOF
@@ -1195,6 +1316,7 @@ fi
 
 ##########################################
 # check for gfapi fadvise support
+if test "$gfapi" = "yes" ; then
 gf_fadvise="no"
 cat > $TMPC << EOF
 #include <glusterfs/api/glfs.h>
@@ -1207,11 +1329,29 @@ int main(int argc, char **argv)
   return 0;
 }
 EOF
-
 if compile_prog "" "-lgfapi -lglusterfs" "gfapi"; then
   gf_fadvise="yes"
 fi
 echo "Gluster API use fadvise       $gf_fadvise"
+fi
+
+##########################################
+# check for gfapi trim support
+gf_trim="no"
+if test "$gfapi" = "yes" ; then
+cat > $TMPC << EOF
+#include <glusterfs/api/glfs.h>
+
+int main(int argc, char **argv)
+{
+  return glfs_discard_async(NULL, 0, 0);
+}
+EOF
+if compile_prog "" "-lgfapi -lglusterfs" "gf trim"; then
+  gf_trim="yes"
+fi
+echo "Gluster API trim support      $gf_trim"
+fi
 
 ##########################################
 # Check if we support stckf on s390
@@ -1243,6 +1383,162 @@ if compile_prog "" "" "s390_z196_facilities"; then
   fi
 fi
 echo "s390_z196_facilities          $s390_z196_facilities"
+
+##########################################
+# Check if we have required environment variables configured for libhdfs
+if test "$libhdfs" = "yes" ; then
+  hdfs_conf_error=0
+  if test "$JAVA_HOME" = "" ; then
+    echo "configure: JAVA_HOME should be defined to jdk/jvm path"
+    hdfs_conf_error=1
+  fi
+  if test "$FIO_LIBHDFS_INCLUDE" = "" ; then
+    echo "configure: FIO_LIBHDFS_INCLUDE should be defined to libhdfs inlude path"
+    hdfs_conf_error=1
+  fi
+  if test "$FIO_LIBHDFS_LIB" = "" ; then
+    echo "configure: FIO_LIBHDFS_LIB should be defined to libhdfs library path"
+    hdfs_conf_error=1
+  fi
+  if test "$hdfs_conf_error" = "1" ; then
+    exit 1
+  fi
+fi
+echo "HDFS engine                   $libhdfs"
+
+##########################################
+# Check whether we have MTD
+mtd="no"
+cat > $TMPC << EOF
+#include <string.h>
+#include <mtd/mtd-user.h>
+#include <sys/ioctl.h>
+int main(int argc, char **argv)
+{
+  struct mtd_write_req ops;
+  struct mtd_info_user info;
+  memset(&ops, 0, sizeof(ops));
+  info.type = MTD_MLCNANDFLASH;
+  return ioctl(0, MEMGETINFO, &info);
+}
+EOF
+if compile_prog "" "" "mtd"; then
+  mtd="yes"
+fi
+echo "MTD                           $mtd"
+
+# Check if we have lex/yacc available
+yacc="no"
+yacc_is_bison="no"
+lex="no"
+arith="no"
+if test "$targetos" != "SunOS" ; then
+LEX=$(which lex 2> /dev/null)
+if test -x "$LEX" ; then
+  lex="yes"
+fi
+YACC=$(which bison 2> /dev/null)
+if test -x "$YACC" ; then
+  yacc="yes"
+  yacc_is_bison="yes"
+else
+  YACC=$(which yacc 2> /dev/null)
+  if test -x "$YACC" ; then
+    yacc="yes"
+  fi
+fi
+if test "$yacc" = "yes" && test "$lex" = "yes" ; then
+  arith="yes"
+fi
+
+if test "$arith" = "yes" ; then
+cat > $TMPC << EOF
+extern int yywrap(void);
+
+int main(int argc, char **argv)
+{
+  yywrap();
+  return 0;
+}
+EOF
+if compile_prog "" "-ll" "lex"; then
+  LIBS="-ll $LIBS"
+else
+  arith="no"
+fi
+fi
+fi
+
+echo "lex/yacc for arithmetic       $arith"
+
+##########################################
+# Check whether we have setmntent/getmntent
+getmntent="no"
+cat > $TMPC << EOF
+#include <stdio.h>
+#include <mntent.h>
+int main(int argc, char **argv)
+{
+  FILE *mtab = setmntent(NULL, "r");
+  struct mntent *mnt = getmntent(mtab);
+  endmntent(mtab);
+  return 0;
+}
+EOF
+if compile_prog "" "" "getmntent"; then
+  getmntent="yes"
+fi
+echo "getmntent                     $getmntent"
+
+##########################################
+# Check whether we have getmntinfo
+getmntinfo="no"
+cat > $TMPC << EOF
+#include <stdio.h>
+#include <sys/param.h>
+#include <sys/mount.h>
+int main(int argc, char **argv)
+{
+  struct statfs st;
+  return getmntinfo(&st, MNT_NOWAIT);
+}
+EOF
+if compile_prog "" "" "getmntinfo"; then
+  getmntinfo="yes"
+fi
+echo "getmntinfo                    $getmntinfo"
+
+##########################################
+# Check whether we have _Static_assert
+static_assert="no"
+cat > $TMPC << EOF
+#include <assert.h>
+#include <stdlib.h>
+#undef offsetof
+#ifdef __compiler_offsetof
+#define offsetof(TYPE,MEMBER) __compiler_offsetof(TYPE,MEMBER)
+#else
+#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
+#endif
+
+#define container_of(ptr, type, member) ({			\
+	const typeof( ((type *)0)->member ) *__mptr = (ptr);	\
+	(type *)( (char *)__mptr - offsetof(type,member) );})
+
+struct foo {
+  int a, b;
+};
+
+int main(int argc, char **argv)
+{
+  _Static_assert(offsetof(struct foo, a) == 0 , "Check");
+  return 0 ;
+}
+EOF
+if compile_prog "" "" "static_assert"; then
+    static_assert="yes"
+fi
+echo "Static Assert                 $static_assert"
 #############################################################################
 
 if test "$wordsize" = "64" ; then
@@ -1292,6 +1588,9 @@ if test "$clock_gettime" = "yes" ; then
 fi
 if test "$clock_monotonic" = "yes" ; then
   output_sym "CONFIG_CLOCK_MONOTONIC"
+fi
+if test "$clock_monotonic_raw" = "yes" ; then
+  output_sym "CONFIG_CLOCK_MONOTONIC_RAW"
 fi
 if test "$clock_monotonic_precise" = "yes" ; then
   output_sym "CONFIG_CLOCK_MONOTONIC_PRECISE"
@@ -1359,6 +1658,12 @@ fi
 if test "$tcp_nodelay" = "yes" ; then
   output_sym "CONFIG_TCP_NODELAY"
 fi
+if test "$window_size" = "yes" ; then
+  output_sym "CONFIG_NET_WINDOWSIZE"
+fi
+if test "$mss" = "yes" ; then
+  output_sym "CONFIG_NET_MSS"
+fi
 if test "$rlimit_memlock" = "yes" ; then
   output_sym "CONFIG_RLIMIT_MEMLOCK"
 fi
@@ -1370,6 +1675,9 @@ if test "$ipv6" = "yes" ; then
 fi
 if test "$rbd" = "yes" ; then
   output_sym "CONFIG_RBD"
+fi
+if test "$rbd_inval" = "yes" ; then
+  output_sym "CONFIG_RBD_INVAL"
 fi
 if test "$setvbuf" = "yes" ; then
   output_sym "CONFIG_SETVBUF"
@@ -1384,12 +1692,51 @@ fi
 if test "$gf_fadvise" = "yes" ; then
   output_sym "CONFIG_GF_FADVISE"
 fi
+if test "$gf_trim" = "yes" ; then
+  output_sym "CONFIG_GF_TRIM"
+fi
+if test "$libhdfs" = "yes" ; then
+  output_sym "CONFIG_LIBHDFS"
+  echo "JAVA_HOME=$JAVA_HOME" >> $config_host_mak
+  echo "FIO_LIBHDFS_INCLUDE=$FIO_LIBHDFS_INCLUDE" >> $config_host_mak
+  echo "FIO_LIBHDFS_LIB=$FIO_LIBHDFS_LIB" >> $config_host_mak
+ fi
+if test "$mtd" = "yes" ; then
+  output_sym "CONFIG_MTD"
+fi
+if test "$arith" = "yes" ; then
+  output_sym "CONFIG_ARITHMETIC"
+  if test "$yacc_is_bison" = "yes" ; then
+    echo "YACC=$YACC -y" >> $config_host_mak
+  else
+    echo "YACC=$YACC" >> $config_host_mak
+  fi
+fi
+if test "$getmntent" = "yes" ; then
+  output_sym "CONFIG_GETMNTENT"
+fi
+if test "$getmntinfo" = "yes" ; then
+  output_sym "CONFIG_GETMNTINFO"
+fi
+if test "$static_assert" = "yes" ; then
+  output_sym "CONFIG_STATIC_ASSERT"
+fi
 
 if test "$zlib" = "no" ; then
   echo "Consider installing zlib-dev (zlib-devel), some fio features depend on it."
 fi
 
 echo "LIBS+=$LIBS" >> $config_host_mak
+echo "GFIO_LIBS+=$GFIO_LIBS" >> $config_host_mak
 echo "CFLAGS+=$CFLAGS" >> $config_host_mak
+echo "LDFLAGS+=$LDFLAGS" >> $config_host_mak
 echo "CC=$cc" >> $config_host_mak
 echo "BUILD_CFLAGS=$BUILD_CFLAGS $CFLAGS" >> $config_host_mak
+echo "INSTALL_PREFIX=$prefix" >> $config_host_mak
+
+if [ `dirname $0` != "." -a ! -e Makefile ]; then
+    cat > Makefile <<EOF
+SRCDIR:=`dirname $0`
+include \$(SRCDIR)/Makefile
+EOF
+fi

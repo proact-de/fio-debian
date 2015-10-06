@@ -70,18 +70,15 @@ int get_next_trim(struct thread_data *td, struct io_u *io_u)
 int io_u_should_trim(struct thread_data *td, struct io_u *io_u)
 {
 	unsigned long long val;
+	uint64_t frand_max;
 	unsigned long r;
 
 	if (!td->o.trim_percentage)
 		return 0;
 
-	if (td->o.use_os_rand) {
-		r = os_random_long(&td->trim_state);
-		val = (OS_RAND_MAX / 100ULL);
-	} else {
-		r = __rand(&td->__trim_state);
-		val = (FRAND_MAX / 100ULL);
-	}
+	frand_max = rand_max(&td->trim_state);
+	r = __rand(&td->trim_state);
+	val = (frand_max / 100ULL);
 
 	val *= (unsigned long long) td->o.trim_percentage;
 	return r <= val;

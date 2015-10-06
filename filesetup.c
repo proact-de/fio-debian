@@ -59,13 +59,15 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 
 	if (unlink_file || new_layout) {
 		dprint(FD_FILE, "layout unlink %s\n", f->file_name);
-		if ((unlink(f->file_name) < 0) && (errno != ENOENT)) {
+		if ((td_io_unlink_file(td, f) < 0) && (errno != ENOENT)) {
 			td_verror(td, errno, "unlink");
 			return 1;
 		}
 	}
 
-	flags = O_WRONLY | O_CREAT;
+	flags = O_WRONLY;
+	if (td->o.allow_create)
+		flags |= O_CREAT;
 	if (new_layout)
 		flags |= O_TRUNC;
 
@@ -76,7 +78,13 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 	dprint(FD_FILE, "open file %s, flags %x\n", f->file_name, flags);
 	f->fd = open(f->file_name, flags, 0644);
 	if (f->fd < 0) {
-		td_verror(td, errno, "open");
+		int err = errno;
+
+		if (err == ENOENT && !td->o.allow_create)
+			log_err("fio: file creation disallowed by "
+					"allow_file_create=0\n");
+		else
+			td_verror(td, err, "open");
 		return 1;
 	}
 
@@ -172,7 +180,7 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 
 	if (td->terminate) {
 		dprint(FD_FILE, "terminate unlink %s\n", f->file_name);
-		unlink(f->file_name);
+		td_io_unlink_file(td, f);
 	} else if (td->o.create_fsync) {
 		if (fsync(f->fd) < 0) {
 			td_verror(td, errno, "fsync");
@@ -259,18 +267,13 @@ error:
 static unsigned long long get_rand_file_size(struct thread_data *td)
 {
 	unsigned long long ret, sized;
+	uint64_t frand_max;
 	unsigned long r;
 
-	if (td->o.use_os_rand) {
-		r = os_random_long(&td->file_size_state);
-		sized = td->o.file_size_high - td->o.file_size_low;
-		ret = (unsigned long long) ((double) sized * (r / (OS_RAND_MAX + 1.0)));
-	} else {
-		r = __rand(&td->__file_size_state);
-		sized = td->o.file_size_high - td->o.file_size_low;
-		ret = (unsigned long long) ((double) sized * (r / (FRAND_MAX + 1.0)));
-	}
-
+	frand_max = rand_max(&td->file_size_state);
+	r = __rand(&td->file_size_state);
+	sized = td->o.file_size_high - td->o.file_size_low;
+	ret = (unsigned long long) ((double) sized * (r / (frand_max + 1.0)));
 	ret += td->o.file_size_low;
 	ret -= (ret % td->o.rw_min_bs);
 	return ret;
@@ -407,16 +410,22 @@ static int __file_invalidate_cache(struct thread_data *td, struct fio_file *f,
 
 	if (td->io_ops->invalidate)
 		ret = td->io_ops->invalidate(td, f);
-	else if (f->mmap_ptr) {
-		ret = posix_madvise(f->mmap_ptr, f->mmap_sz, POSIX_MADV_DONTNEED);
-#ifdef FIO_MADV_FREE
-		if (f->filetype == FIO_TYPE_BD)
-			(void) posix_madvise(f->mmap_ptr, f->mmap_sz, FIO_MADV_FREE);
-#endif
-	} else if (f->filetype == FIO_TYPE_FILE) {
+	else if (f->filetype == FIO_TYPE_FILE)
 		ret = posix_fadvise(f->fd, off, len, POSIX_FADV_DONTNEED);
-	} else if (f->filetype == FIO_TYPE_BD) {
+	else if (f->filetype == FIO_TYPE_BD) {
+		int retry_count = 0;
+
 		ret = blockdev_invalidate_cache(f);
+		while (ret < 0 && errno == EAGAIN && retry_count++ < 25) {
+			/*
+			 * Linux multipath devices reject ioctl while
+			 * the maps are being updated. That window can
+			 * last tens of milliseconds; we'll try up to
+			 * a quarter of a second.
+			 */
+			usleep(10000);
+			ret = blockdev_invalidate_cache(f);
+		}
 		if (ret < 0 && errno == EACCES && geteuid()) {
 			if (!root_warn) {
 				log_err("fio: only root may flush block "
@@ -525,11 +534,6 @@ int generic_open_file(struct thread_data *td, struct fio_file *f)
 
 	dprint(FD_FILE, "fd open %s\n", f->file_name);
 
-	if (td_trim(td) && f->filetype != FIO_TYPE_BD) {
-		log_err("fio: trim only applies to block device\n");
-		return 1;
-	}
-
 	if (!strcmp(f->file_name, "-")) {
 		if (td_rw(td)) {
 			log_err("fio: can't read/write to stdin/out\n");
@@ -557,7 +561,7 @@ int generic_open_file(struct thread_data *td, struct fio_file *f)
 	}
 	if (td->o.sync_io)
 		flags |= O_SYNC;
-	if (td->o.create_on_open)
+	if (td->o.create_on_open && td->o.allow_create)
 		flags |= O_CREAT;
 skip_flags:
 	if (f->filetype != FIO_TYPE_FILE)
@@ -568,7 +572,7 @@ open_again:
 		if (!read_only)
 			flags |= O_RDWR;
 
-		if (f->filetype == FIO_TYPE_FILE)
+		if (f->filetype == FIO_TYPE_FILE && td->o.allow_create)
 			flags |= O_CREAT;
 
 		if (is_std)
@@ -740,7 +744,7 @@ static unsigned long long get_fs_free_counts(struct thread_data *td)
 		fm = flist_entry(n, struct fio_mount, list);
 		flist_del(&fm->list);
 
-		sz = get_fs_size(fm->base);
+		sz = get_fs_free_size(fm->base);
 		if (sz && sz != -1ULL)
 			ret += sz;
 
@@ -758,7 +762,7 @@ uint64_t get_start_offset(struct thread_data *td, struct fio_file *f)
 		return f->real_file_size;
 
 	return td->o.start_offset +
-		(td->thread_number - 1) * td->o.offset_increment;
+		td->subjob_number * td->o.offset_increment;
 }
 
 /*
@@ -898,7 +902,28 @@ int setup_files(struct thread_data *td)
 		}
 	}
 
-	if (!o->size || o->size > total_size)
+	if (td->o.block_error_hist) {
+		int len;
+
+		assert(td->o.nr_files == 1);	/* checked in fixup_options */
+		f = td->files[0];
+		len = f->io_size / td->o.bs[DDIR_TRIM];
+		if (len > MAX_NR_BLOCK_INFOS || len <= 0) {
+			log_err("fio: cannot calculate block histogram with "
+				"%d trim blocks, maximum %d\n",
+				len, MAX_NR_BLOCK_INFOS);
+			td_verror(td, EINVAL, "block_error_hist");
+			goto err_out;
+		}
+
+		td->ts.nr_block_infos = len;
+		for (int i = 0; i < len; i++)
+			td->ts.block_infos[i] =
+				BLOCK_INFO(0, BLOCK_STATE_UNINIT);
+	} else
+		td->ts.nr_block_infos = 0;
+
+	if (!o->size || (total_size && o->size > total_size))
 		o->size = total_size;
 
 	if (o->size < td_min_bs(td)) {
@@ -998,12 +1023,12 @@ static int __init_rand_distribution(struct thread_data *td, struct fio_file *f)
 {
 	unsigned int range_size, seed;
 	unsigned long nranges;
-	uint64_t file_size;
+	uint64_t fsize;
 
 	range_size = min(td->o.min_bs[DDIR_READ], td->o.min_bs[DDIR_WRITE]);
-	file_size = min(f->real_file_size, f->io_size);
+	fsize = min(f->real_file_size, f->io_size);
 
-	nranges = (file_size + range_size - 1) / range_size;
+	nranges = (fsize + range_size - 1) / range_size;
 
 	seed = jhash(f->file_name, strlen(f->file_name), 0) * td->thread_number;
 	if (!td->o.rand_repeatable)
@@ -1011,8 +1036,10 @@ static int __init_rand_distribution(struct thread_data *td, struct fio_file *f)
 
 	if (td->o.random_distribution == FIO_RAND_DIST_ZIPF)
 		zipf_init(&f->zipf, nranges, td->o.zipf_theta.u.f, seed);
-	else
+	else if (td->o.random_distribution == FIO_RAND_DIST_PARETO)
 		pareto_init(&f->zipf, nranges, td->o.pareto_h.u.f, seed);
+	else if (td->o.random_distribution == FIO_RAND_DIST_GAUSS)
+		gauss_init(&f->gauss, nranges, td->o.gauss_dev.u.f, seed);
 
 	return 1;
 }
@@ -1036,6 +1063,43 @@ static int init_rand_distribution(struct thread_data *td)
 	return 1;
 }
 
+/*
+ * Check if the number of blocks exceeds the randomness capability of
+ * the selected generator. Tausworthe is 32-bit, the others are fullly
+ * 64-bit capable.
+ */
+static int check_rand_gen_limits(struct thread_data *td, struct fio_file *f,
+				 uint64_t blocks)
+{
+	if (blocks <= FRAND32_MAX)
+		return 0;
+	if (td->o.random_generator != FIO_RAND_GEN_TAUSWORTHE)
+		return 0;
+
+	/*
+	 * If the user hasn't specified a random generator, switch
+	 * to tausworthe64 with informational warning. If the user did
+	 * specify one, just warn.
+	 */
+	log_info("fio: file %s exceeds 32-bit tausworthe random generator.\n",
+			f->file_name);
+
+	if (!fio_option_is_set(&td->o, random_generator)) {
+		log_info("fio: Switching to tausworthe64. Use the "
+			 "random_generator= option to get rid of this "
+			 " warning.\n");
+		td->o.random_generator = FIO_RAND_GEN_TAUSWORTHE64;
+		return 0;
+	}
+
+	/*
+	 * Just make this information to avoid breaking scripts.
+	 */
+	log_info("fio: Use the random_generator= option to switch to lfsr or "
+			 "tausworthe64.\n");
+	return 0;
+}
+
 int init_random_map(struct thread_data *td)
 {
 	unsigned long long blocks;
@@ -1048,21 +1112,28 @@ int init_random_map(struct thread_data *td)
 		return 0;
 
 	for_each_file(td, f, i) {
-		uint64_t file_size = min(f->real_file_size, f->io_size);
+		uint64_t fsize = min(f->real_file_size, f->io_size);
 
-		blocks = file_size / (unsigned long long) td->o.rw_min_bs;
+		blocks = fsize / (unsigned long long) td->o.rw_min_bs;
+
+		if (check_rand_gen_limits(td, f, blocks))
+			return 1;
 
 		if (td->o.random_generator == FIO_RAND_GEN_LFSR) {
 			unsigned long seed;
 
 			seed = td->rand_seeds[FIO_RAND_BLOCK_OFF];
 
-			if (!lfsr_init(&f->lfsr, blocks, seed, 0))
+			if (!lfsr_init(&f->lfsr, blocks, seed, 0)) {
+				fio_file_set_lfsr(f);
 				continue;
+			}
 		} else if (!td->o.norandommap) {
 			f->io_axmap = axmap_new(blocks);
-			if (f->io_axmap)
+			if (f->io_axmap) {
+				fio_file_set_axmap(f);
 				continue;
+			}
 		} else if (td->o.norandommap)
 			continue;
 
@@ -1100,6 +1171,11 @@ void close_and_free_files(struct thread_data *td)
 	dprint(FD_FILE, "close files\n");
 
 	for_each_file(td, f, i) {
+		if (td->o.unlink && f->filetype == FIO_TYPE_FILE) {
+			dprint(FD_FILE, "free unlink %s\n", f->file_name);
+			td_io_unlink_file(td, f);
+		}
+
 		if (fio_file_open(f))
 			td_io_close_file(td, f);
 
@@ -1107,13 +1183,15 @@ void close_and_free_files(struct thread_data *td)
 
 		if (td->o.unlink && f->filetype == FIO_TYPE_FILE) {
 			dprint(FD_FILE, "free unlink %s\n", f->file_name);
-			unlink(f->file_name);
+			td_io_unlink_file(td, f);
 		}
 
 		sfree(f->file_name);
 		f->file_name = NULL;
-		axmap_free(f->io_axmap);
-		f->io_axmap = NULL;
+		if (fio_file_axmap(f)) {
+			axmap_free(f->io_axmap);
+			f->io_axmap = NULL;
+		}
 		sfree(f);
 	}
 
@@ -1246,7 +1324,7 @@ int add_file(struct thread_data *td, const char *fname, int numjob, int inc)
 	dprint(FD_FILE, "add file %s\n", fname);
 
 	if (td->o.directory)
-		len = set_name_idx(file_name, td->o.directory, numjob);
+		len = set_name_idx(file_name, PATH_MAX, td->o.directory, numjob);
 
 	sprintf(file_name + len, "%s", fname);
 
@@ -1538,11 +1616,16 @@ void free_release_files(struct thread_data *td)
 
 void fio_file_reset(struct thread_data *td, struct fio_file *f)
 {
-	f->last_pos = f->file_offset;
-	f->last_start = -1ULL;
-	if (f->io_axmap)
+	int i;
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		f->last_pos[i] = f->file_offset;
+		f->last_start[i] = -1ULL;
+	}
+
+	if (fio_file_axmap(f))
 		axmap_reset(f->io_axmap);
-	if (td->o.random_generator == FIO_RAND_GEN_LFSR)
+	else if (fio_file_lfsr(f))
 		lfsr_reset(&f->lfsr, td->rand_seeds[FIO_RAND_BLOCK_OFF]);
 }
 

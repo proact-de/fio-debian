@@ -7,4 +7,6 @@
 /config.log
 /cscope.out
 /fio
+y.tab.*
+lex.yy.c
 /.pc

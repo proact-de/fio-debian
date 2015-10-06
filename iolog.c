@@ -28,19 +28,14 @@ void queue_io_piece(struct thread_data *td, struct io_piece *ipo)
 	td->total_io_size += ipo->len;
 }
 
-void log_io_u(struct thread_data *td, struct io_u *io_u)
+void log_io_u(const struct thread_data *td, const struct io_u *io_u)
 {
-	const char *act[] = { "read", "write", "sync", "datasync",
-				"sync_file_range", "wait", "trim" };
-
-	assert(io_u->ddir <= 6);
-
 	if (!td->o.write_iolog_file)
 		return;
 
 	fprintf(td->iolog_f, "%s %s %llu %lu\n", io_u->file->file_name,
-						act[io_u->ddir], io_u->offset,
-						io_u->buflen);
+						io_ddir_name(io_u->ddir),
+						io_u->offset, io_u->buflen);
 }
 
 void log_file(struct thread_data *td, struct fio_file *f,
@@ -65,14 +60,22 @@ void log_file(struct thread_data *td, struct fio_file *f,
 
 static void iolog_delay(struct thread_data *td, unsigned long delay)
 {
-	unsigned long usec = utime_since_now(&td->last_issue);
-	unsigned long this_delay;
+	uint64_t usec = utime_since_now(&td->last_issue);
+	uint64_t this_delay;
+	struct timeval tv;
 
+	if (delay < td->time_offset) {
+		td->time_offset = 0;
+		return;
+	}
+
+	delay -= td->time_offset;
 	if (delay < usec)
 		return;
 
 	delay -= usec;
 
+	fio_gettime(&tv, NULL);
 	while (delay && !td->terminate) {
 		this_delay = delay;
 		if (this_delay > 500000)
@@ -81,6 +84,12 @@ static void iolog_delay(struct thread_data *td, unsigned long delay)
 		usec_sleep(td, this_delay);
 		delay -= this_delay;
 	}
+
+	usec = utime_since_now(&tv);
+	if (usec > delay)
+		td->time_offset = usec - delay;
+	else
+		td->time_offset = 0;
 }
 
 static int ipo_special(struct thread_data *td, struct io_piece *ipo)
@@ -107,7 +116,7 @@ static int ipo_special(struct thread_data *td, struct io_piece *ipo)
 		td_io_close_file(td, f);
 		break;
 	case FIO_LOG_UNLINK_FILE:
-		unlink(f->file_name);
+		td_io_unlink_file(td, f);
 		break;
 	default:
 		log_err("fio: bad file action %d\n", ipo->file_action);
@@ -178,7 +187,7 @@ void prune_io_piece_log(struct thread_data *td)
 	}
 
 	while (!flist_empty(&td->io_hist_list)) {
-		ipo = flist_entry(&td->io_hist_list, struct io_piece, list);
+		ipo = flist_first_entry(&td->io_hist_list, struct io_piece, list);
 		flist_del(&ipo->list);
 		remove_trim_entry(td, ipo);
 		td->io_hist_len--;
@@ -241,6 +250,7 @@ restart:
 	p = &td->io_hist_tree.rb_node;
 	parent = NULL;
 	while (*p) {
+		int overlap = 0;
 		parent = *p;
 
 		__ipo = rb_entry(parent, struct io_piece, rb_node);
@@ -248,11 +258,18 @@ restart:
 			p = &(*p)->rb_left;
 		else if (ipo->file > __ipo->file)
 			p = &(*p)->rb_right;
-		else if (ipo->offset < __ipo->offset)
+		else if (ipo->offset < __ipo->offset) {
 			p = &(*p)->rb_left;
-		else if (ipo->offset > __ipo->offset)
+			overlap = ipo->offset + ipo->len > __ipo->offset;
+		}
+		else if (ipo->offset > __ipo->offset) {
 			p = &(*p)->rb_right;
-		else {
+			overlap = __ipo->offset + __ipo->len > ipo->offset;
+		}
+		else
+			overlap = 1;
+
+		if (overlap) {
 			dprint(FD_IO, "iolog: overlap %llu/%lu, %llu/%lu",
 				__ipo->offset, __ipo->len,
 				ipo->offset, ipo->len);
@@ -274,6 +291,18 @@ void unlog_io_piece(struct thread_data *td, struct io_u *io_u)
 {
 	struct io_piece *ipo = io_u->ipo;
 
+	if (td->ts.nr_block_infos) {
+		uint32_t *info = io_u_block_info(td, io_u);
+		if (BLOCK_INFO_STATE(*info) < BLOCK_STATE_TRIM_FAILURE) {
+			if (io_u->ddir == DDIR_TRIM)
+				*info = BLOCK_INFO_SET_STATE(*info,
+						BLOCK_STATE_TRIM_FAILURE);
+			else if (io_u->ddir == DDIR_WRITE)
+				*info = BLOCK_INFO_SET_STATE(*info,
+						BLOCK_STATE_WRITE_FAILURE);
+		}
+	}
+
 	if (!ipo)
 		return;
 
@@ -287,7 +316,7 @@ void unlog_io_piece(struct thread_data *td, struct io_u *io_u)
 	td->io_hist_len--;
 }
 
-void trim_io_piece(struct thread_data *td, struct io_u *io_u)
+void trim_io_piece(struct thread_data *td, const struct io_u *io_u)
 {
 	struct io_piece *ipo = io_u->ipo;
 
@@ -544,9 +573,9 @@ int init_iolog(struct thread_data *td)
 void setup_log(struct io_log **log, struct log_params *p,
 	       const char *filename)
 {
-	struct io_log *l = malloc(sizeof(*l));
+	struct io_log *l;
 
-	memset(l, 0, sizeof(*l));
+	l = calloc(1, sizeof(*l));
 	l->nr_samples = 0;
 	l->max_samples = 1024;
 	l->log_type = p->log_type;
@@ -859,10 +888,12 @@ int iolog_file_inflate(const char *file)
 	if (ret < 0) {
 		perror("fread");
 		fclose(f);
+		free(buf);
 		return 1;
 	} else if (ret != 1) {
 		log_err("fio: short read on reading log\n");
 		fclose(f);
+		free(buf);
 		return 1;
 	}
 
@@ -876,18 +907,18 @@ int iolog_file_inflate(const char *file)
 	 */
 	total = ic.len;
 	do {
-		size_t ret;
+		size_t iret;
 
-		ret = inflate_chunk(&ic,  1, stdout, &stream, &iter);
-		total -= ret;
+		iret = inflate_chunk(&ic,  1, stdout, &stream, &iter);
+		total -= iret;
 		if (!total)
 			break;
 		if (iter.err)
 			break;
 
 		ic.seq++;
-		ic.len -= ret;
-		ic.buf += ret;
+		ic.len -= iret;
+		ic.buf += iret;
 	} while (1);
 
 	if (iter.seq) {
@@ -914,12 +945,15 @@ int iolog_file_inflate(const char *file)
 
 #endif
 
-void flush_log(struct io_log *log)
+void flush_log(struct io_log *log, int do_append)
 {
 	void *buf;
 	FILE *f;
 
-	f = fopen(log->filename, "w");
+	if (!do_append)
+		f = fopen(log->filename, "w");
+	else
+		f = fopen(log->filename, "a");
 	if (!f) {
 		perror("fopen log");
 		return;
@@ -949,7 +983,7 @@ static int finish_log(struct thread_data *td, struct io_log *log, int trylock)
 	if (td->client_type == FIO_CLIENT_TYPE_GUI)
 		fio_send_iolog(td, log, log->filename);
 	else
-		flush_log(log);
+		flush_log(log, !td->o.per_job_logs);
 
 	fio_unlock_file(log->filename);
 	free_log(log);

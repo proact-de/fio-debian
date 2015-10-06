@@ -26,15 +26,16 @@ Snapshots can download from:
 
 	http://brick.kernel.dk/snaps/
 
-There are also two official mirrors. Both of these are synced within
-an hour of commits landing at git.kernel.dk. So if the main repo is
-down for some reason, either one of those is safe to use:
+There are also two official mirrors. Both of these are automatically synced
+with the main repository, when changes are pushed. If the main repo is down
+for some reason, either one of these is safe to use as a backup:
 
 	git://git.kernel.org/pub/scm/linux/kernel/git/axboe/fio.git
 	https://git.kernel.org/pub/scm/linux/kernel/git/axboe/fio.git
 
 or
 
+	git://github.com/axboe/fio.git
 	https://github.com/axboe/fio.git
 
 
@@ -172,11 +173,17 @@ $ fio
 	--warnings-fatal	Fio parser warnings are fatal
 	--max-jobs		Maximum number of threads/processes to support
 	--server=args		Start backend server. See Client/Server section.
-	--client=host		Connect to specified backend.
+	--client=host		Connect to specified backend(s).
+	--remote-config=file	Tell fio server to load this local file
 	--idle-prof=option	Report cpu idleness on a system or percpu basis
 				(option=system,percpu) or run unit work
 				calibration only (option=calibrate).
 	--inflate-log=log	Inflate and output compressed log
+	--trigger-file=file	Execute trigger cmd when file exists
+	--trigger-timeout=t	Execute trigger af this time
+	--trigger=cmd		Set this command as local trigger
+	--trigger-remote=cmd	Set this command as remote trigger
+	--aux-path=path		Use this path for fio state generated files
 
 
 Any parameters following the options will be assumed to be job files,
@@ -305,14 +312,48 @@ Fio can connect to multiple servers this way:
 
 fio --client=<server1> <job file(s)> --client=<server2> <job file(s)>
 
+If the job file is located on the fio server, then you can tell the server
+to load a local file as well. This is done by using --remote-config:
+
+fio --client=server --remote-config /path/to/file.fio
+
+Then fio will open this local (to the server) job file instead
+of being passed one from the client.
+
+If you have many servers (example: 100 VMs/containers), 
+you can input a pathname of a file containing host IPs/names as the parameter 
+value for the --client option.  For example, here is an example "host.list" 
+file containing 2 hostnames:
+
+host1.your.dns.domain
+host2.your.dns.domain
+
+The fio command would then be:
+
+fio --client=host.list <job file(s)>
+
+In this mode, you cannot input server-specific parameters or job files -- all
+servers receive the same job file.  
+
+In order to let fio --client runs use a shared filesystem 
+from multiple hosts, fio  --client now prepends the IP address of the 
+server to the filename.  For example, if fio is using directory /mnt/nfs/fio 
+and is writing filename fileio.tmp, with a --client hostfile containing 
+two hostnames h1 and h2 with IP addresses 192.168.10.120 and  192.168.10.121,
+then fio will create two files:
+
+	/mnt/nfs/fio/192.168.10.120.fileio.tmp
+	/mnt/nfs/fio/192.168.10.121.fileio.tmp
+
 
 Platforms
 ---------
 
 Fio works on (at least) Linux, Solaris, AIX, HP-UX, OSX, NetBSD, OpenBSD,
-Windows and FreeBSD.  Some features and/or options may only be available on
-some of the platforms, typically because those features only apply to that
-platform (like the solarisaio engine, or the splice engine on Linux).
+Windows, FreeBSD, and DragonFly. Some features and/or options may only be
+available on some of the platforms, typically because those features only
+apply to that platform (like the solarisaio engine, or the splice engine on
+Linux).
 
 Some features are not available on FreeBSD/Solaris even if they could be
 implemented, I'd be happy to take patches for that. An example of that is
