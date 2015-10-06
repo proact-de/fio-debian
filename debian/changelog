@@ -10,6 +10,8 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
     * Added override for dh_auto_configure cause upstream configure file
       does not understand many options dh_auto_configure passed to it.
   * debian/control: Updated to standards version 3.9.6. No changes needed.
+  * debian/copyright: Fixed lintian messages about changed/wrong paths to
+    referenced files.
 
  -- Martin Steigerwald <ms@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
 

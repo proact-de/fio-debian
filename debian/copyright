@@ -24,22 +24,9 @@ Copyright: Written by Aaron Carroll <aaronc@cse.unsw.edu.au>
  based on documentation by Jens Axboe
 License: GPL-2
 
-Files: fio_generate_plots.1
-Copyright: Written by Martin Steigerwald <ms@teamix.de>
-License: GPL-2
-
 Files: hash.h
 Copyright: 2002 William Lee Irwin III, IBM
 License: GPL-2
-
-Files: rbtree.c
-Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
-           2002  David Woodhouse <dwmw2@infradead.org>
-License: GPL-2+
-
-Files: rbtree.h
-Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
-License: GPL-2+
 
 Files: crc/crc16.h
 Copyright: 2005 Ben Gardner <bgardner@wabtec.com>
@@ -49,7 +36,7 @@ Files: crc/crc32.c crc/crc32.h crc/crc32c.h
 Copyright: 1992, 1995-1999 Free Software Foundation, Inc.
 License: GPL-2+
 
-Files: crc/crc32c.c:
+Files: crc/crc32c.c
 Copyright: 2004 Cisco Systems, Inc.
 License: GPL-2+
 
@@ -57,7 +44,7 @@ Files: crc/crc32c-intel.c
 Copyright: Based on a posting to lkml by Austin Zhang <austin.zhang@intel.com>
 License: GPL-2
 
-Files: crc/md5.c:
+Files: crc/md5.c
 Copyright: Shamelessly lifted from the 2.6 kernel (crypto/md5.c)
 License: GPL-2
 
@@ -87,6 +74,19 @@ License: GPL-2
 
 Files: lib/rand.c
 Copyright: Based on code from GNU Scientific Library 1.5 (30 Jun 2004)
+License: GPL-2
+
+Files: lib/rbtree.c
+Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
+           2002  David Woodhouse <dwmw2@infradead.org>
+License: GPL-2+
+
+Files: lib/rbtree.h
+Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
+License: GPL-2+
+
+Files: tools/fio_generate_plots.1
+Copyright: Written by Martin Steigerwald <ms@teamix.de>
 License: GPL-2
 
 License: GPL-2
