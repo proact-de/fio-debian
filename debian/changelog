@@ -1,8 +1,10 @@
 fio (2.2.10-1) UNRELEASED; urgency=medium
 
   * Imported Upstream version 2.2.10
-    * Fixes fio: calc_clat_percentiles() create unaligned access on armhf
-      (Closes: #779336).
+    * Fixes fio: calc_clat_percentiles() create unaligned access on armhf.
+      (Closes: #779336). Thanks to Andreas Bießmann.
+    * Fixes ssd-test 1g file size too small (Closes: #776701). Thanks to
+      Daniel Pocock.
   * debian/patches:
     * Removed makefile patches as makefile is now generated via autoconf.
     * configure-no-configlog: Remove config.log at end of configure process
