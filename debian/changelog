@@ -1,6 +1,6 @@
 fio (2.2.10-1) UNRELEASED; urgency=medium
 
-  * Imported Upstream version 2.2.10
+  * Imported Upstream version 2.2.10 (Closes: #803991).
     * Fixes fio: calc_clat_percentiles() create unaligned access on armhf.
       (Closes: #779336). Thanks to Andreas Bießmann.
     * Fixes ssd-test 1g file size too small (Closes: #776701). Thanks to
