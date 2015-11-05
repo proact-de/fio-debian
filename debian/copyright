@@ -122,7 +122,7 @@ Files: lib/libmtd_common.h
 Copyright: 2007,2008 Artem Bityutskiy
 License: GPL-2+
 
-Files: lib/libmtd_legacy.h
+Files: lib/libmtd_legacy.c
 Copyright: 2009 Nokia Corporation
 License: GPL-2+
 
