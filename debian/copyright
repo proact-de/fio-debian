@@ -65,6 +65,7 @@ License: GPL-2+
 
 Files: crc/md5.c
 Copyright: Shamelessly lifted from the 2.6 kernel (crypto/md5.c)
+License: GPL-2
 
 Files: crc/sha1.c crc/sha1.h
 Copyright: Based on the Mozilla SHA1 (see mozilla-sha1/sha1.c)
@@ -142,6 +143,7 @@ License: GPL-2
 
 Files: lib/rand.c
 Copyright: Based on code from GNU Scientific Library 1.5 (30 Jun 2004)
+License: GPL-2
 
 Files: lib/rbtree.c
 Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
