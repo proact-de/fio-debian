@@ -92,10 +92,6 @@ Copyright: 2013 Fusion-io, Inc.
            Santhosh Kumar Koundinya <skoundinya@fusionio.com>
 License: GPL-2
 
-Files: engines/windowsaio.c
-Copyright: 2011-2012 Bruce Cran <bruce@cran.org.uk>
-License: GPL-2
-
 Files: lib/getopt_long.c
 Copyright: This file was imported from the klibc library from hpa
 License: GPL-2
