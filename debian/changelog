@@ -14,6 +14,8 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
     * Added override for dh_auto_configure cause upstream configure file
       does not understand many options dh_auto_configure passed to it.
     * Enabled build of graphical fio frontend gfio.
+    * Made sure that is only links in needed libraries for gfio to avoid
+      unnecessary dependencies.
   * control:
     * Updated to standards version 3.9.6. No changes needed.
     * Point to github page as new homepage as it appears to be closest to a
