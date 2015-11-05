@@ -19,8 +19,10 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
     * Point to github page as new homepage as it appears to be closest to a
       homepage of any of the URLs mentioned in the README.
     * Added new binary package gfio for graphical frontend of fio.
-  * copyright: Fixed lintian messages about changed/wrong paths to
-    referenced files.
+  * copyright:
+    * Fixed lintian messages about changed/wrong paths to
+      referenced files.
+    * Reviewed and updated by rechecking against all source files.
   * Switched to debhelper 9 in order to have dpkg-buildflags and thus
     hardening by default.
 
