@@ -102,6 +102,7 @@ License: GPL-2
 Files: lib/ieee754.c
 Copyright: Shamelessly lifted from Beej's Guide to Network Programming, found here:
            http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#serialization
+           Brian "Beej Jorgensen" Hall <beej@beej.us>
 License: public-domain
 
 Files: lib/lfsr.c
@@ -216,4 +217,9 @@ License: GPL-2+
  .
  On Debian systems, the complete text of the GNU General
  Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+
+License: public-domain
+ The C source code presented in this document is hereby granted to the public domain, and is completely free of any license restriction.
+Comment:
+ http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#copyright
 
