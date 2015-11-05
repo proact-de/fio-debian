@@ -19,8 +19,8 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
       homepage of any of the URLs mentioned in the README.
   * debian/copyright: Fixed lintian messages about changed/wrong paths to
     referenced files.
-  * Switched to debhelper 9 cause it makes sense and in order to have
-    dpkg-buildflags and thus hardening by default.
+  * Switched to debhelper 9 in order to have dpkg-buildflags and thus
+    hardening by default.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
 
