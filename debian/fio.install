@@ -1,0 +1,8 @@
+fio				usr/bin
+t/fio-genzipf			usr/bin
+t/fio-btrace2fio		usr/bin
+t/fio-dedupe			usr/bin
+tools/fio_generate_plots	usr/bin
+tools/plot/fio2gnuplot		usr/bin
+tools/genfio			usr/bin
+tools/plot/*.gpm		usr/share/fio
