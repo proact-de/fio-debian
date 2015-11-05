@@ -5,19 +5,19 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
       (Closes: #779336). Thanks to Andreas Bießmann.
     * Fixes ssd-test 1g file size too small (Closes: #776701). Thanks to
       Daniel Pocock.
-  * debian/patches:
+  * patches:
     * Removed makefile patches as makefile is now generated via autoconf.
     * configure-no-configlog: Remove config.log at end of configure process
       to avoid error about uncommitted change from dpkg-source.
-  * debian/rules:
+  * rules:
     * Switched to dh_$@ wildcard version of rules file.
     * Added override for dh_auto_configure cause upstream configure file
       does not understand many options dh_auto_configure passed to it.
-  * debian/control:
+  * control:
     * Updated to standards version 3.9.6. No changes needed.
     * Point to github page as new homepage as it appears to be closest to a
       homepage of any of the URLs mentioned in the README.
-  * debian/copyright: Fixed lintian messages about changed/wrong paths to
+  * copyright: Fixed lintian messages about changed/wrong paths to
     referenced files.
   * Switched to debhelper 9 in order to have dpkg-buildflags and thus
     hardening by default.
