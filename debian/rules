@@ -15,3 +15,6 @@
 override_dh_auto_configure:
 	./configure --prefix=/usr
 
+override_dh_make:
+	make gfio
+
