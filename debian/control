@@ -35,5 +35,5 @@ Description: flexible I/O tester - gui frontend
  The typical use of fio is to write a job file matching the I/O load
  one wants to simulate.
  .
- This package contains the GTK based gui frontend for fio.
+ This package contains the GTK+ based gui frontend for fio.
 
