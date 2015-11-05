@@ -13,5 +13,5 @@
 	dh $@ 
 
 override_dh_auto_configure:
-	./configure --prefix=/usr
+	./configure --prefix=/usr --enable-gfio
 
