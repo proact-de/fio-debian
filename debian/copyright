@@ -22,6 +22,7 @@ License: GPL-2+
 Files: fio.1
 Copyright: Written by Aaron Carroll <aaronc@cse.unsw.edu.au>
  based on documentation by Jens Axboe
+License: GPL-2+
 
 Files: gfio.c
 Copyright: 2012 Stephen M. Cameron <stephenmcameron@gmail.com>
@@ -34,11 +35,13 @@ License: GPL-2
 
 Files: hash.h
 Copyright: 2002 William Lee Irwin III, IBM
+License: GPL-2+
 
 Files: tickmarks.c
 Copyright: adapted from Paul Heckbert's algorithm on p 657-659 o
            Andrew S. Glassner's book, "Graphics Gems"
            ISBN 0-12-286166-3
+License: GPL-2+
 
 Files: workqueue.c
 Copyright: 2015 Jens Axboe <axboe@kernel.dk>
@@ -58,6 +61,7 @@ License: GPL-2+
 
 Files: crc/crc32c-intel.c
 Copyright: Based on a posting to lkml by Austin Zhang <austin.zhang@intel.com>
+License: GPL-2+
 
 Files: crc/md5.c
 Copyright: Shamelessly lifted from the 2.6 kernel (crypto/md5.c)
@@ -103,6 +107,7 @@ License: public-domain
 Files: lib/lfsr.c
 Copyright: LFSR taps retrieved from:
            http://home1.gte.net/res0658s/electronics/LFSRtaps.html
+License: GPL-2+
 
 Files: lib/libmtd.c lib/libmtd_int.h
 Copyright: 2006 International Business Machines Corp.
