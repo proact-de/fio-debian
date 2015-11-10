@@ -21,6 +21,8 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
     * Point to github page as new homepage as it appears to be closest to a
       homepage of any of the URLs mentioned in the README.
     * Added new binary package gfio for graphical frontend of fio.
+    * Mentioned relationship between fio and gfio in package descriptions
+      and added suggests for each other.
   * copyright:
     * Fixed lintian messages about changed/wrong paths to
       referenced files.
@@ -28,7 +30,7 @@ fio (2.2.10-1) UNRELEASED; urgency=medium
   * Switched to debhelper 9 in order to have dpkg-buildflags and thus
     hardening by default.
 
- -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 06 Oct 2015 12:09:57 +0200
+ -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 10 Nov 2015 10:00:35 +0100
 
 fio (2.1.11-2) unstable; urgency=medium
 

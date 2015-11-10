@@ -12,7 +12,7 @@ Vcs-Browser: http://anonscm.debian.org/gitweb/?p=collab-maint/fio.git
 Package: fio
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, python
-Suggests: gnuplot
+Suggests: gnuplot, gfio
 Description: flexible I/O tester
  fio is a tool that will spawn a number of threads or processes doing a
  particular type of I/O action as specified by the user. fio takes a
@@ -22,11 +22,13 @@ Description: flexible I/O tester
  one wants to simulate.
  .
  This package contains the command line version of fio and all additional
- command line tools.
+ command line tools. The package gfio contains the GTK+ based gui frontend
+ for fio.
 
 Package: gfio
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Suggests: fio
 Description: flexible I/O tester - gui frontend
  fio is a tool that will spawn a number of threads or processes doing a
  particular type of I/O action as specified by the user. fio takes a
@@ -35,5 +37,8 @@ Description: flexible I/O tester - gui frontend
  The typical use of fio is to write a job file matching the I/O load
  one wants to simulate.
  .
- This package contains the GTK+ based gui frontend for fio.
+ This package contains the GTK+ based gui frontend for fio. The package
+ fio contains the command line version of fio which acts as a backend
+ to the GUI frontend. The frontend can talk to a locally or remotely
+ running fio server.
 
