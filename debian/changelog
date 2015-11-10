@@ -1,4 +1,4 @@
-fio (2.2.10-1) UNRELEASED; urgency=medium
+fio (2.2.10-1) unstable; urgency=medium
 
   * Imported Upstream version 2.2.10 (Closes: #803991).
     * Fixes fio: calc_clat_percentiles() create unaligned access on armhf.
