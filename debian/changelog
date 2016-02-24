@@ -1,3 +1,9 @@
+fio (2.6-1) UNRELEASED; urgency=medium
+
+  * Imported Upstream version 2.6
+
+ -- Martin Steigerwald <martin.steigerwald@teamix.de>  Wed, 24 Feb 2016 10:47:40 +0100
+
 fio (2.2.10-1) unstable; urgency=medium
 
   * Imported Upstream version 2.2.10 (Closes: #803991).
