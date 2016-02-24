@@ -11,6 +11,7 @@ fio (2.6-1) UNRELEASED; urgency=medium
     - fio.1: Fixed license to GPL-2. Don´t know how I came to the
       conclusion that it would be GPL-2+, if the rest without any
       license specified is GPL-2.
+    - rate_submit.c: Added copyright.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Wed, 24 Feb 2016 10:47:40 +0100
 
