@@ -6,6 +6,7 @@ fio (2.6-1) UNRELEASED; urgency=medium
   * control:
     - Updated to standards version 3.9.7. No changes needed.
     - Made Vcs-Browser and Vcs-Git URLs secure 
+  - copyright: Adapted path for library files that are now in oslib.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Wed, 24 Feb 2016 10:47:40 +0100
 

@@ -96,10 +96,6 @@ Files: exp/expression-parser.l exp/expression-parser.y exp/test-expression-parse
 Copyright: 2014, Stephen M. Cameron
 License: GPL-2
 
-Files: lib/getopt_long.c
-Copyright: This file was imported from the klibc library from hpa
-License: GPL-2
-
 Files: lib/ieee754.c
 Copyright: Shamelessly lifted from Beej's Guide to Network Programming, found here:
            http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#serialization
@@ -109,32 +105,6 @@ License: public-domain
 Files: lib/lfsr.c
 Copyright: LFSR taps retrieved from:
            http://home1.gte.net/res0658s/electronics/LFSRtaps.html
-License: GPL-2+
-
-Files: lib/libmtd.c lib/libmtd_int.h
-Copyright: 2006 International Business Machines Corp.
-           2009 Nokia Corporation
-License: GPL-2+
-
-Files: lib/libmtd.h
-Copyright: 2008, 2009 Nokia Corporation
-License: GPL-2+
-
-Files: lib/libmtd_common.h
-Copyright: 2007,2008 Artem Bityutskiy
-License: GPL-2+
-
-Files: lib/libmtd_legacy.c
-Copyright: 2009 Nokia Corporation
-License: GPL-2+
-
-Files: lib/libmtd_xalloc.h
-Copyright: 2001, 2002 Red Hat, Inc.
-           2001 David A. Schleef <ds@lineo.com>
-           2002 Axis Communications AB
-           2001, 2002 Erik Andersen <andersen@codepoet.org>
-           2004 University of Szeged, Hungary
-           2006 KaiGai Kohei <kaigai@ak.jp.nec.com>
 License: GPL-2+
 
 Files: lib/prio_tree.c
@@ -152,6 +122,36 @@ License: GPL-2+
 
 Files: lib/rbtree.h
 Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
+License: GPL-2+
+
+Files: oslib/getopt_long.c
+Copyright: This file was imported from the klibc library from hpa
+License: GPL-2
+
+Files: oslib/libmtd.c oslib/libmtd_int.h
+Copyright: 2006 International Business Machines Corp.
+           2009 Nokia Corporation
+License: GPL-2+
+
+Files: oslib/libmtd.h
+Copyright: 2008, 2009 Nokia Corporation
+License: GPL-2+
+
+Files: oslib/libmtd_common.h
+Copyright: 2007,2008 Artem Bityutskiy
+License: GPL-2+
+
+Files: oslib/libmtd_legacy.c
+Copyright: 2009 Nokia Corporation
+License: GPL-2+
+
+Files: oslib/libmtd_xalloc.h
+Copyright: 2001, 2002 Red Hat, Inc.
+           2001 David A. Schleef <ds@lineo.com>
+           2002 Axis Communications AB
+           2001, 2002 Erik Andersen <andersen@codepoet.org>
+           2004 University of Szeged, Hungary
+           2006 KaiGai Kohei <kaigai@ak.jp.nec.com>
 License: GPL-2+
 
 Files: tools/fio_generate_plots.1
