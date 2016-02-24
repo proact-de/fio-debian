@@ -3,6 +3,7 @@ fio (2.6-1) UNRELEASED; urgency=medium
   * Imported Upstream version 2.6.
   * patches/fix-ftbfs-with-libmtd.h: Fix FTBFS: libmtd.h:288:8: error:
     unknown type name 'uint8_t'. Thanks Chris. (Closes: #815735)
+  * control: Updated to standards version 3.9.7. No changes needed.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Wed, 24 Feb 2016 10:47:40 +0100
 
