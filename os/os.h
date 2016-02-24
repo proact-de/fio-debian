@@ -9,6 +9,7 @@
 #include <stdlib.h>
 
 #include "../arch/arch.h"
+#include "../lib/types.h"
 
 enum {
 	os_linux = 1,
@@ -65,7 +66,11 @@ typedef struct aiocb os_aiocb_t;
 #endif
 
 #ifndef CONFIG_STRSEP
-#include "../lib/strsep.h"
+#include "../oslib/strsep.h"
+#endif
+
+#ifndef CONFIG_STRLCAT
+#include "../oslib/strlcat.h"
 #endif
 
 #ifdef MSG_DONTWAIT
@@ -335,6 +340,14 @@ static inline int init_random_state(struct thread_data *td, unsigned long *rand_
 static inline unsigned long long get_fs_free_size(const char *path)
 {
 	return 0;
+}
+#endif
+
+#ifdef __powerpc64__
+#define FIO_HAVE_CPU_ONLINE_SYSCONF
+static inline unsigned int cpus_online(void)
+{
+        return sysconf(_SC_NPROCESSORS_CONF);
 }
 #endif
 

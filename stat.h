@@ -2,6 +2,7 @@
 #define FIO_STAT_H
 
 #include "iolog.h"
+#include "lib/output_buffer.h"
 
 struct group_run_stats {
 	uint64_t max_run[DDIR_RWDIR_CNT], min_run[DDIR_RWDIR_CNT];
@@ -182,9 +183,9 @@ struct thread_stat {
 	uint32_t io_u_plat[DDIR_RWDIR_CNT][FIO_IO_U_PLAT_NR];
 	uint32_t pad;
 
-	uint64_t total_io_u[3];
-	uint64_t short_io_u[3];
-	uint64_t drop_io_u[3];
+	uint64_t total_io_u[DDIR_RWDIR_CNT];
+	uint64_t short_io_u[DDIR_RWDIR_CNT];
+	uint64_t drop_io_u[DDIR_RWDIR_CNT];
 	uint64_t total_submit;
 	uint64_t total_complete;
 
@@ -241,13 +242,13 @@ struct jobs_eta {
 
 extern struct fio_mutex *stat_mutex;
 
-extern struct jobs_eta *get_jobs_eta(int force, size_t *size);
+extern struct jobs_eta *get_jobs_eta(bool force, size_t *size);
 
 extern void stat_init(void);
 extern void stat_exit(void);
 
-extern struct json_object * show_thread_status(struct thread_stat *ts, struct group_run_stats *rs);
-extern void show_group_stats(struct group_run_stats *rs);
+extern struct json_object * show_thread_status(struct thread_stat *ts, struct group_run_stats *rs, struct flist_head *, struct buf_output *);
+extern void show_group_stats(struct group_run_stats *rs, struct buf_output *);
 extern int calc_thread_status(struct jobs_eta *je, int force);
 extern void display_thread_status(struct jobs_eta *je);
 extern void show_run_stats(void);
@@ -255,7 +256,7 @@ extern void __show_run_stats(void);
 extern void __show_running_run_stats(void);
 extern void show_running_run_stats(void);
 extern void check_for_running_stats(void);
-extern void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src, int nr);
+extern void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src, bool first);
 extern void sum_group_stats(struct group_run_stats *dst, struct group_run_stats *src);
 extern void init_thread_stat(struct thread_stat *ts);
 extern void init_group_run_stat(struct group_run_stats *gs);
@@ -266,6 +267,23 @@ extern void stat_calc_lat_m(struct thread_stat *ts, double *io_u_lat);
 extern void stat_calc_lat_u(struct thread_stat *ts, double *io_u_lat);
 extern void stat_calc_dist(unsigned int *map, unsigned long total, double *io_u_dist);
 extern void reset_io_stats(struct thread_data *);
+extern void update_rusage_stat(struct thread_data *);
+extern void clear_rusage_stat(struct thread_data *);
+
+extern void add_lat_sample(struct thread_data *, enum fio_ddir, unsigned long,
+				unsigned int, uint64_t);
+extern void add_clat_sample(struct thread_data *, enum fio_ddir, unsigned long,
+				unsigned int, uint64_t);
+extern void add_slat_sample(struct thread_data *, enum fio_ddir, unsigned long,
+				unsigned int, uint64_t);
+extern void add_bw_sample(struct thread_data *, enum fio_ddir, unsigned int,
+				struct timeval *);
+extern void add_iops_sample(struct thread_data *, enum fio_ddir, unsigned int,
+				struct timeval *);
+extern void add_agg_sample(unsigned long, enum fio_ddir, unsigned int);
+
+extern struct io_log *agg_io_log[DDIR_RWDIR_CNT];
+extern int write_bw_log;
 
 static inline int usec_to_msec(unsigned long *min, unsigned long *max,
 			       double *mean, double *dev)

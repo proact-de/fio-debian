@@ -18,7 +18,6 @@
 #include "verify.h"
 #include "trim.h"
 #include "filelock.h"
-#include "lib/tp.h"
 
 static const char iolog_ver2[] = "fio version 2 iolog";
 
@@ -594,7 +593,7 @@ void setup_log(struct io_log **log, struct log_params *p,
 
 	if (l->log_gz && !p->td)
 		l->log_gz = 0;
-	else if (l->log_gz) {
+	else if (l->log_gz || l->log_gz_store) {
 		pthread_mutex_init(&l->chunk_lock, NULL);
 		p->td->flags |= TD_F_COMPRESS_LOG;
 	}
@@ -635,7 +634,7 @@ void free_log(struct io_log *log)
 	free(log);
 }
 
-static void flush_samples(FILE *f, void *samples, uint64_t sample_size)
+void flush_samples(FILE *f, void *samples, uint64_t sample_size)
 {
 	struct io_sample *s;
 	int log_offset;
@@ -672,17 +671,15 @@ static void flush_samples(FILE *f, void *samples, uint64_t sample_size)
 #ifdef CONFIG_ZLIB
 
 struct iolog_flush_data {
-	struct tp_work work;
+	struct workqueue_work work;
+	pthread_mutex_t lock;
+	pthread_cond_t cv;
+	int wait;
+	volatile int done;
+	volatile int refs;
 	struct io_log *log;
 	void *samples;
 	uint64_t nr_samples;
-};
-
-struct iolog_compress {
-	struct flist_head list;
-	void *buf;
-	size_t len;
-	unsigned int seq;
 };
 
 #define GZ_CHUNK	131072
@@ -971,7 +968,7 @@ void flush_log(struct io_log *log, int do_append)
 
 static int finish_log(struct thread_data *td, struct io_log *log, int trylock)
 {
-	if (td->tp_data)
+	if (td->flags & TD_F_COMPRESS_LOG)
 		iolog_flush(log, 1);
 
 	if (trylock) {
@@ -980,7 +977,7 @@ static int finish_log(struct thread_data *td, struct io_log *log, int trylock)
 	} else
 		fio_lock_file(log->filename);
 
-	if (td->client_type == FIO_CLIENT_TYPE_GUI)
+	if (td->client_type == FIO_CLIENT_TYPE_GUI || is_backend)
 		fio_send_iolog(td, log, log->filename);
 	else
 		flush_log(log, !td->o.per_job_logs);
@@ -990,14 +987,48 @@ static int finish_log(struct thread_data *td, struct io_log *log, int trylock)
 	return 0;
 }
 
+size_t log_chunk_sizes(struct io_log *log)
+{
+	struct flist_head *entry;
+	size_t ret;
+
+	if (flist_empty(&log->chunk_list))
+		return 0;
+
+	ret = 0;
+	pthread_mutex_lock(&log->chunk_lock);
+	flist_for_each(entry, &log->chunk_list) {
+		struct iolog_compress *c;
+
+		c = flist_entry(entry, struct iolog_compress, list);
+		ret += c->len;
+	}
+	pthread_mutex_unlock(&log->chunk_lock);
+	return ret;
+}
+
 #ifdef CONFIG_ZLIB
+
+static void drop_data_unlock(struct iolog_flush_data *data)
+{
+	int refs;
+
+	refs = --data->refs;
+	pthread_mutex_unlock(&data->lock);
+
+	if (!refs) {
+		free(data);
+		pthread_mutex_destroy(&data->lock);
+		pthread_cond_destroy(&data->cv);
+	}
+}
 
 /*
  * Invoked from our compress helper thread, when logging would have exceeded
  * the specified memory limitation. Compresses the previously stored
  * entries.
  */
-static int gz_work(struct tp_work *work)
+static int gz_work(struct submit_worker *sw, struct workqueue_work *work)
 {
 	struct iolog_flush_data *data;
 	struct iolog_compress *c;
@@ -1078,12 +1109,14 @@ static int gz_work(struct tp_work *work)
 
 	ret = 0;
 done:
-	if (work->wait) {
-		work->done = 1;
-		pthread_cond_signal(&work->cv);
+	if (data->wait) {
+		pthread_mutex_lock(&data->lock);
+		data->done = 1;
+		pthread_cond_signal(&data->cv);
+
+		drop_data_unlock(data);
 	} else
 		free(data);
-
 	return ret;
 err:
 	while (!flist_empty(&list)) {
@@ -1095,17 +1128,56 @@ err:
 	goto done;
 }
 
+static int gz_init_worker(struct submit_worker *sw)
+{
+	struct thread_data *td = sw->wq->td;
+
+	if (!fio_option_is_set(&td->o, log_gz_cpumask))
+		return 0;
+
+	if (fio_setaffinity(gettid(), td->o.log_gz_cpumask) == -1) {
+		log_err("gz: failed to set CPU affinity\n");
+		return 1;
+	}
+
+	return 0;
+}
+
+static struct workqueue_ops log_compress_wq_ops = {
+	.fn		= gz_work,
+	.init_worker_fn	= gz_init_worker,
+	.nice		= 1,
+};
+
+int iolog_compress_init(struct thread_data *td, struct sk_out *sk_out)
+{
+	if (!(td->flags & TD_F_COMPRESS_LOG))
+		return 0;
+
+	workqueue_init(td, &td->log_compress_wq, &log_compress_wq_ops, 1, sk_out);
+	return 0;
+}
+
+void iolog_compress_exit(struct thread_data *td)
+{
+	if (!(td->flags & TD_F_COMPRESS_LOG))
+		return;
+
+	workqueue_exit(&td->log_compress_wq);
+}
+
 /*
- * Queue work item to compress the existing log entries. We copy the
- * samples, and reset the log sample count to 0 (so the logging will
- * continue to use the memory associated with the log). If called with
- * wait == 1, will not return until the log compression has completed.
+ * Queue work item to compress the existing log entries. We reset the
+ * current log to a small size, and reference the existing log in the
+ * data that we queue for compression. Once compression has been done,
+ * this old log is freed. If called with wait == 1, will not return until
+ * the log compression has completed.
  */
 int iolog_flush(struct io_log *log, int wait)
 {
-	struct tp_data *tdat = log->td->tp_data;
 	struct iolog_flush_data *data;
-	size_t sample_size;
+
+	io_u_quiesce(log->td);
 
 	data = malloc(sizeof(*data));
 	if (!data)
@@ -1113,34 +1185,29 @@ int iolog_flush(struct io_log *log, int wait)
 
 	data->log = log;
 
-	sample_size = log->nr_samples * log_entry_sz(log);
-	data->samples = malloc(sample_size);
-	if (!data->samples) {
-		free(data);
-		return 1;
+	data->samples = log->log;
+	data->nr_samples = log->nr_samples;
+
+	log->nr_samples = 0;
+	log->max_samples = 128;
+	log->log = malloc(log->max_samples * log_entry_sz(log));
+
+	data->wait = wait;
+	if (data->wait) {
+		pthread_mutex_init(&data->lock, NULL);
+		pthread_cond_init(&data->cv, NULL);
+		data->done = 0;
+		data->refs = 2;
 	}
 
-	memcpy(data->samples, log->log, sample_size);
-	data->nr_samples = log->nr_samples;
-	data->work.fn = gz_work;
-	log->nr_samples = 0;
+	workqueue_enqueue(&log->td->log_compress_wq, &data->work);
 
 	if (wait) {
-		pthread_mutex_init(&data->work.lock, NULL);
-		pthread_cond_init(&data->work.cv, NULL);
-		data->work.wait = 1;
-	} else
-		data->work.wait = 0;
+		pthread_mutex_lock(&data->lock);
+		while (!data->done)
+			pthread_cond_wait(&data->cv, &data->lock);
 
-	data->work.prio = 1;
-	tp_queue_work(tdat, &data->work);
-
-	if (wait) {
-		pthread_mutex_lock(&data->work.lock);
-		while (!data->work.done)
-			pthread_cond_wait(&data->work.cv, &data->work.lock);
-		pthread_mutex_unlock(&data->work.lock);
-		free(data);
+		drop_data_unlock(data);
 	}
 
 	return 0;
@@ -1153,56 +1220,48 @@ int iolog_flush(struct io_log *log, int wait)
 	return 1;
 }
 
+int iolog_compress_init(struct thread_data *td, struct sk_out *sk_out)
+{
+	return 0;
+}
+
+void iolog_compress_exit(struct thread_data *td)
+{
+}
+
 #endif
+
+static int __write_log(struct thread_data *td, struct io_log *log, int try)
+{
+	if (log)
+		return finish_log(td, log, try);
+
+	return 0;
+}
 
 static int write_iops_log(struct thread_data *td, int try)
 {
-	struct io_log *log = td->iops_log;
-
-	if (!log)
-		return 0;
-
-	return finish_log(td, log, try);
+	return __write_log(td, td->iops_log, try);
 }
 
 static int write_slat_log(struct thread_data *td, int try)
 {
-	struct io_log *log = td->slat_log;
-
-	if (!log)
-		return 0;
-
-	return finish_log(td, log, try);
+	return __write_log(td, td->slat_log, try);
 }
 
 static int write_clat_log(struct thread_data *td, int try)
 {
-	struct io_log *log = td->clat_log;
-
-	if (!log)
-		return 0;
-
-	return finish_log(td, log, try);
+	return __write_log(td, td->clat_log, try);
 }
 
 static int write_lat_log(struct thread_data *td, int try)
 {
-	struct io_log *log = td->lat_log;
-
-	if (!log)
-		return 0;
-
-	return finish_log(td, log, try);
+	return __write_log(td, td->lat_log, try);
 }
 
 static int write_bandw_log(struct thread_data *td, int try)
 {
-	struct io_log *log = td->bw_log;
-
-	if (!log)
-		return 0;
-
-	return finish_log(td, log, try);
+	return __write_log(td, td->bw_log, try);
 }
 
 enum {

@@ -264,7 +264,7 @@ error:
 	return ret;
 }
 
-static unsigned long long get_rand_file_size(struct thread_data *td)
+unsigned long long get_rand_file_size(struct thread_data *td)
 {
 	unsigned long long ret, sized;
 	uint64_t frand_max;
@@ -391,7 +391,7 @@ static int __file_invalidate_cache(struct thread_data *td, struct fio_file *f,
 				   unsigned long long off,
 				   unsigned long long len)
 {
-	int ret = 0;
+	int errval = 0, ret = 0;
 
 #ifdef CONFIG_ESX
 	return 0;
@@ -408,11 +408,15 @@ static int __file_invalidate_cache(struct thread_data *td, struct fio_file *f,
 	dprint(FD_IO, "invalidate cache %s: %llu/%llu\n", f->file_name, off,
 								len);
 
-	if (td->io_ops->invalidate)
+	if (td->io_ops->invalidate) {
 		ret = td->io_ops->invalidate(td, f);
-	else if (f->filetype == FIO_TYPE_FILE)
+		if (ret < 0)
+			errval = ret;
+	} else if (f->filetype == FIO_TYPE_FILE) {
 		ret = posix_fadvise(f->fd, off, len, POSIX_FADV_DONTNEED);
-	else if (f->filetype == FIO_TYPE_BD) {
+		if (ret)
+			errval = ret;
+	} else if (f->filetype == FIO_TYPE_BD) {
 		int retry_count = 0;
 
 		ret = blockdev_invalidate_cache(f);
@@ -434,6 +438,8 @@ static int __file_invalidate_cache(struct thread_data *td, struct fio_file *f,
 			}
 			ret = 0;
 		}
+		if (ret < 0)
+			errval = errno;
 	} else if (f->filetype == FIO_TYPE_CHAR || f->filetype == FIO_TYPE_PIPE)
 		ret = 0;
 
@@ -443,10 +449,8 @@ static int __file_invalidate_cache(struct thread_data *td, struct fio_file *f,
 	 * function to flush eg block device caches. So just warn and
 	 * continue on our way.
 	 */
-	if (ret) {
-		log_info("fio: cache invalidation of %s failed: %s\n", f->file_name, strerror(errno));
-		ret = 0;
-	}
+	if (errval)
+		log_info("fio: cache invalidation of %s failed: %s\n", f->file_name, strerror(errval));
 
 	return 0;
 
@@ -917,7 +921,7 @@ int setup_files(struct thread_data *td)
 		}
 
 		td->ts.nr_block_infos = len;
-		for (int i = 0; i < len; i++)
+		for (i = 0; i < len; i++)
 			td->ts.block_infos[i] =
 				BLOCK_INFO(0, BLOCK_STATE_UNINIT);
 	} else
@@ -936,7 +940,7 @@ int setup_files(struct thread_data *td)
 	 */
 	if (need_extend) {
 		temp_stall_ts = 1;
-		if (output_format == FIO_OUTPUT_NORMAL)
+		if (output_format & FIO_OUTPUT_NORMAL)
 			log_info("%s: Laying out IO file(s) (%u file(s) /"
 				 " %lluMB)\n", o->name, need_extend,
 					extend_size >> 20);

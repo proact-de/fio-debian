@@ -16,18 +16,9 @@
 #include "lib/fls.h"
 #include "lib/pattern.h"
 #include "options.h"
-
-#include "crc/crc32c.h"
+#include "optgroup.h"
 
 char client_sockaddr_str[INET6_ADDRSTRLEN] = { 0 };
-
-struct pattern_fmt_desc fmt_desc[] = {
-	{
-		.fmt   = "%o",
-		.len   = FIELD_SIZE(struct io_u *, offset),
-		.paste = paste_blockoff
-	}
-};
 
 /*
  * Check if mmap/mmaphuge has a :/foo/bar/file at the end. If so, return that.
@@ -50,7 +41,7 @@ static int bs_cmp(const void *p1, const void *p2)
 	const struct bssplit *bsp1 = p1;
 	const struct bssplit *bsp2 = p2;
 
-	return bsp1->perc < bsp2->perc;
+	return (int) bsp1->perc - (int) bsp2->perc;
 }
 
 static int bssplit_ddir(struct thread_options *o, int ddir, char *str)
@@ -204,7 +195,8 @@ static int str_bssplit_cb(void *data, const char *input)
 			ret = bssplit_ddir(&td->o, DDIR_TRIM, op);
 			free(op);
 		}
-		ret = bssplit_ddir(&td->o, DDIR_READ, str);
+		if (!ret)
+			ret = bssplit_ddir(&td->o, DDIR_READ, str);
 	}
 
 	free(p);
@@ -351,7 +343,8 @@ static int str_mem_cb(void *data, const char *mem)
 {
 	struct thread_data *td = data;
 
-	if (td->o.mem_type == MEM_MMAPHUGE || td->o.mem_type == MEM_MMAP)
+	if (td->o.mem_type == MEM_MMAPHUGE || td->o.mem_type == MEM_MMAP ||
+	    td->o.mem_type == MEM_MMAPSHARED)
 		td->o.mmapfile = get_opt_postfix(mem);
 
 	return 0;
@@ -528,9 +521,25 @@ static int str_verify_cpus_allowed_cb(void *data, const char *input)
 {
 	struct thread_data *td = data;
 
+	if (parse_dryrun())
+		return 0;
+
 	return set_cpus_allowed(td, &td->o.verify_cpumask, input);
 }
-#endif
+
+#ifdef CONFIG_ZLIB
+static int str_log_cpus_allowed_cb(void *data, const char *input)
+{
+	struct thread_data *td = data;
+
+	if (parse_dryrun())
+		return 0;
+
+	return set_cpus_allowed(td, &td->o.log_gz_cpumask, input);
+}
+#endif /* CONFIG_ZLIB */
+
+#endif /* FIO_HAVE_CPU_AFFINITY */
 
 #ifdef CONFIG_LIBNUMA
 static int str_numa_cpunodes_cb(void *data, char *input)
@@ -945,13 +954,20 @@ static int str_dedupe_cb(void *data, unsigned long long *il)
 
 static int str_verify_pattern_cb(void *data, const char *input)
 {
+	struct pattern_fmt_desc fmt_desc[] = {
+		{
+			.fmt   = "%o",
+			.len   = FIELD_SIZE(struct io_u *, offset),
+			.paste = paste_blockoff
+		}
+	};
 	struct thread_data *td = data;
 	int ret;
 
 	td->o.verify_fmt_sz = ARRAY_SIZE(td->o.verify_fmt);
 	ret = parse_and_fill_pattern(input, strlen(input), td->o.verify_pattern,
-				     MAX_PATTERN_SIZE, fmt_desc, sizeof(fmt_desc),
-				     td->o.verify_fmt, &td->o.verify_fmt_sz);
+			MAX_PATTERN_SIZE, fmt_desc, sizeof(fmt_desc),
+			td->o.verify_fmt, &td->o.verify_fmt_sz);
 	if (ret < 0)
 		return 1;
 
@@ -1025,169 +1041,6 @@ static int gtod_cpu_verify(struct fio_option *o, void *data)
 }
 
 /*
- * Option grouping
- */
-static struct opt_group fio_opt_groups[] = {
-	{
-		.name	= "General",
-		.mask	= FIO_OPT_C_GENERAL,
-	},
-	{
-		.name	= "I/O",
-		.mask	= FIO_OPT_C_IO,
-	},
-	{
-		.name	= "File",
-		.mask	= FIO_OPT_C_FILE,
-	},
-	{
-		.name	= "Statistics",
-		.mask	= FIO_OPT_C_STAT,
-	},
-	{
-		.name	= "Logging",
-		.mask	= FIO_OPT_C_LOG,
-	},
-	{
-		.name	= "Profiles",
-		.mask	= FIO_OPT_C_PROFILE,
-	},
-	{
-		.name	= NULL,
-	},
-};
-
-static struct opt_group *__opt_group_from_mask(struct opt_group *ogs, unsigned int *mask,
-					       unsigned int inv_mask)
-{
-	struct opt_group *og;
-	int i;
-
-	if (*mask == inv_mask || !*mask)
-		return NULL;
-
-	for (i = 0; ogs[i].name; i++) {
-		og = &ogs[i];
-
-		if (*mask & og->mask) {
-			*mask &= ~(og->mask);
-			return og;
-		}
-	}
-
-	return NULL;
-}
-
-struct opt_group *opt_group_from_mask(unsigned int *mask)
-{
-	return __opt_group_from_mask(fio_opt_groups, mask, FIO_OPT_C_INVALID);
-}
-
-static struct opt_group fio_opt_cat_groups[] = {
-	{
-		.name	= "Latency profiling",
-		.mask	= FIO_OPT_G_LATPROF,
-	},
-	{
-		.name	= "Rate",
-		.mask	= FIO_OPT_G_RATE,
-	},
-	{
-		.name	= "Zone",
-		.mask	= FIO_OPT_G_ZONE,
-	},
-	{
-		.name	= "Read/write mix",
-		.mask	= FIO_OPT_G_RWMIX,
-	},
-	{
-		.name	= "Verify",
-		.mask	= FIO_OPT_G_VERIFY,
-	},
-	{
-		.name	= "Trim",
-		.mask	= FIO_OPT_G_TRIM,
-	},
-	{
-		.name	= "I/O Logging",
-		.mask	= FIO_OPT_G_IOLOG,
-	},
-	{
-		.name	= "I/O Depth",
-		.mask	= FIO_OPT_G_IO_DEPTH,
-	},
-	{
-		.name	= "I/O Flow",
-		.mask	= FIO_OPT_G_IO_FLOW,
-	},
-	{
-		.name	= "Description",
-		.mask	= FIO_OPT_G_DESC,
-	},
-	{
-		.name	= "Filename",
-		.mask	= FIO_OPT_G_FILENAME,
-	},
-	{
-		.name	= "General I/O",
-		.mask	= FIO_OPT_G_IO_BASIC,
-	},
-	{
-		.name	= "Cgroups",
-		.mask	= FIO_OPT_G_CGROUP,
-	},
-	{
-		.name	= "Runtime",
-		.mask	= FIO_OPT_G_RUNTIME,
-	},
-	{
-		.name	= "Process",
-		.mask	= FIO_OPT_G_PROCESS,
-	},
-	{
-		.name	= "Job credentials / priority",
-		.mask	= FIO_OPT_G_CRED,
-	},
-	{
-		.name	= "Clock settings",
-		.mask	= FIO_OPT_G_CLOCK,
-	},
-	{
-		.name	= "I/O Type",
-		.mask	= FIO_OPT_G_IO_TYPE,
-	},
-	{
-		.name	= "I/O Thinktime",
-		.mask	= FIO_OPT_G_THINKTIME,
-	},
-	{
-		.name	= "Randomizations",
-		.mask	= FIO_OPT_G_RANDOM,
-	},
-	{
-		.name	= "I/O buffers",
-		.mask	= FIO_OPT_G_IO_BUF,
-	},
-	{
-		.name	= "Tiobench profile",
-		.mask	= FIO_OPT_G_TIOBENCH,
-	},
-	{
-		.name	= "MTD",
-		.mask	= FIO_OPT_G_MTD,
-	},
-
-	{
-		.name	= NULL,
-	}
-};
-
-struct opt_group *opt_group_cat_from_mask(unsigned int *mask)
-{
-	return __opt_group_from_mask(fio_opt_cat_groups, mask, FIO_OPT_G_INVALID);
-}
-
-/*
  * Map of job/command line options
  */
 struct fio_option fio_options[FIO_MAX_OPTS] = {
@@ -1206,6 +1059,15 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_STR_STORE,
 		.off1	= td_var_offset(name),
 		.help	= "Name of this job",
+		.category = FIO_OPT_C_GENERAL,
+		.group	= FIO_OPT_G_DESC,
+	},
+	{
+		.name	= "wait_for",
+		.lname	= "Waitee name",
+		.type	= FIO_OPT_STR_STORE,
+		.off1	= td_var_offset(wait_for),
+		.help	= "Name of the job this one wants to wait for before starting",
 		.category = FIO_OPT_C_GENERAL,
 		.group	= FIO_OPT_G_DESC,
 	},
@@ -1504,16 +1366,30 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_IO_BASIC,
 	},
 	{
-		.name	= "iodepth_batch_complete",
-		.lname	= "IO Depth batch complete",
+		.name	= "iodepth_batch_complete_min",
+		.lname	= "Min IO depth batch complete",
+		.alias	= "iodepth_batch_complete",
 		.type	= FIO_OPT_INT,
-		.off1	= td_var_offset(iodepth_batch_complete),
-		.help	= "Number of IO buffers to retrieve in one go",
+		.off1	= td_var_offset(iodepth_batch_complete_min),
+		.help	= "Min number of IO buffers to retrieve in one go",
 		.parent	= "iodepth",
 		.hide	= 1,
 		.minval	= 0,
 		.interval = 1,
 		.def	= "1",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_IO_BASIC,
+	},
+	{
+		.name	= "iodepth_batch_complete_max",
+		.lname	= "Max IO depth batch complete",
+		.type	= FIO_OPT_INT,
+		.off1	= td_var_offset(iodepth_batch_complete_max),
+		.help	= "Max number of IO buffers to retrieve in one go",
+		.parent	= "iodepth",
+		.hide	= 1,
+		.minval	= 0,
+		.interval = 1,
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IO_BASIC,
 	},
@@ -2214,6 +2090,10 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .oval = MEM_MMAP,
 			    .help = "Use mmap(2) (file or anon) for IO buffers",
 			  },
+			  { .ival = "mmapshared",
+			    .oval = MEM_MMAPSHARED,
+			    .help = "Like mmap, but use the shared flag",
+			  },
 #ifdef FIO_HAVE_HUGETLB
 			  { .ival = "mmaphuge",
 			    .oval = MEM_MMAPHUGE,
@@ -2799,7 +2679,8 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_RATE,
 	},
 	{
-		.name	= "ratemin",
+		.name	= "rate_min",
+		.alias	= "ratemin",
 		.lname	= "I/O min rate",
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(ratemin[DDIR_READ]),
@@ -2837,7 +2718,30 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_RATE,
 	},
 	{
-		.name	= "ratecycle",
+		.name	= "rate_process",
+		.lname	= "Rate Process",
+		.type	= FIO_OPT_STR,
+		.off1	= td_var_offset(rate_process),
+		.help	= "What process controls how rated IO is managed",
+		.def	= "linear",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_RATE,
+		.posval = {
+			  { .ival = "linear",
+			    .oval = RATE_PROCESS_LINEAR,
+			    .help = "Linear rate of IO",
+			  },
+			  {
+			    .ival = "poisson",
+			    .oval = RATE_PROCESS_POISSON,
+			    .help = "Rate follows Poisson process",
+			  },
+		},
+		.parent = "rate",
+	},
+	{
+		.name	= "rate_cycle",
+		.alias	= "ratecycle",
 		.lname	= "I/O rate cycle",
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(ratecycle),
@@ -3083,6 +2987,15 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_PROCESS,
 	},
 	{
+		.name	= "exitall_on_error",
+		.lname	= "Exit-all on terminate in error",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(unlink),
+		.help	= "Terminate all jobs when one exits in error",
+		.category = FIO_OPT_C_GENERAL,
+		.group	= FIO_OPT_G_PROCESS,
+	},
+	{
 		.name	= "stonewall",
 		.lname	= "Wait for previous",
 		.alias	= "wait_for_previous",
@@ -3177,11 +3090,24 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(log_gz),
 		.help	= "Log in compressed chunks of this size",
-		.minval	= 32 * 1024 * 1024ULL,
+		.minval	= 1024ULL,
 		.maxval	= 512 * 1024 * 1024ULL,
 		.category = FIO_OPT_C_LOG,
 		.group	= FIO_OPT_G_INVALID,
 	},
+#ifdef FIO_HAVE_CPU_AFFINITY
+	{
+		.name	= "log_compression_cpus",
+		.lname	= "Log Compression CPUs",
+		.type	= FIO_OPT_STR,
+		.cb	= str_log_cpus_allowed_cb,
+		.off1	= td_var_offset(log_gz_cpumask),
+		.parent = "log_compression",
+		.help	= "Limit log compression to these CPUs",
+		.category = FIO_OPT_C_LOG,
+		.group	= FIO_OPT_G_INVALID,
+	},
+#endif
 	{
 		.name	= "log_store_compressed",
 		.lname	= "Log store compressed",
@@ -3999,8 +3925,7 @@ static void show_closest_option(const char *opt)
 	free(name);
 }
 
-int fio_options_parse(struct thread_data *td, char **opts, int num_opts,
-			int dump_cmdline)
+int fio_options_parse(struct thread_data *td, char **opts, int num_opts)
 {
 	int i, ret, unknown;
 	char **opts_copy;
@@ -4011,7 +3936,7 @@ int fio_options_parse(struct thread_data *td, char **opts, int num_opts,
 	for (ret = 0, i = 0, unknown = 0; i < num_opts; i++) {
 		struct fio_option *o;
 		int newret = parse_option(opts_copy[i], opts[i], fio_options,
-						&o, td, dump_cmdline);
+						&o, td, &td->opt_list);
 
 		if (!newret && o)
 			fio_option_mark_set(&td->o, o);
@@ -4044,7 +3969,7 @@ int fio_options_parse(struct thread_data *td, char **opts, int num_opts,
 			if (td->eo)
 				newret = parse_option(opts_copy[i], opts[i],
 						      td->io_ops->options, &o,
-						      td->eo, dump_cmdline);
+						      td->eo, &td->opt_list);
 
 			ret |= newret;
 			if (!o) {
@@ -4064,7 +3989,7 @@ int fio_cmd_option_parse(struct thread_data *td, const char *opt, char *val)
 {
 	int ret;
 
-	ret = parse_cmd_option(opt, val, fio_options, td);
+	ret = parse_cmd_option(opt, val, fio_options, td, &td->opt_list);
 	if (!ret) {
 		struct fio_option *o;
 
@@ -4079,7 +4004,8 @@ int fio_cmd_option_parse(struct thread_data *td, const char *opt, char *val)
 int fio_cmd_ioengine_option_parse(struct thread_data *td, const char *opt,
 				char *val)
 {
-	return parse_cmd_option(opt, val, td->io_ops->options, td->eo);
+	return parse_cmd_option(opt, val, td->io_ops->options, td->eo,
+					&td->opt_list);
 }
 
 void fio_fill_default_options(struct thread_data *td)
@@ -4268,19 +4194,19 @@ static int opt_is_set(struct thread_options *o, struct fio_option *opt)
 	return (o->set_options[index] & ((uint64_t)1 << offset)) != 0;
 }
 
-int __fio_option_is_set(struct thread_options *o, unsigned int off1)
+bool __fio_option_is_set(struct thread_options *o, unsigned int off1)
 {
 	struct fio_option *opt, *next;
 
 	next = NULL;
 	while ((opt = find_next_opt(o, next, off1)) != NULL) {
 		if (opt_is_set(o, opt))
-			return 1;
+			return true;
 
 		next = opt;
 	}
 
-	return 0;
+	return false;
 }
 
 void fio_option_mark_set(struct thread_options *o, struct fio_option *opt)

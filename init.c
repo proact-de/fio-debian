@@ -26,8 +26,8 @@
 #include "idletime.h"
 #include "filelock.h"
 
-#include "lib/getopt.h"
-#include "lib/strcasestr.h"
+#include "oslib/getopt.h"
+#include "oslib/strcasestr.h"
 
 #include "crc/test.h"
 
@@ -47,8 +47,8 @@ static char **job_sections;
 static int nr_job_sections;
 
 int exitall_on_terminate = 0;
+int exitall_on_terminate_error = 0;
 int output_format = FIO_OUTPUT_NORMAL;
-int append_terse_output = 0;
 int eta_print = FIO_ETA_AUTO;
 int eta_new_line = 0;
 FILE *f_out = NULL;
@@ -385,6 +385,68 @@ static void set_cmd_options(struct thread_data *td)
 		o->timeout = def_timeout;
 }
 
+static void dump_print_option(struct print_option *p)
+{
+	const char *delim;
+
+	if (!strcmp("description", p->name))
+		delim = "\"";
+	else
+		delim = "";
+
+	log_info("--%s%s", p->name, p->value ? "" : " ");
+	if (p->value)
+		log_info("=%s%s%s ", delim, p->value, delim);
+}
+
+static void dump_opt_list(struct thread_data *td)
+{
+	struct flist_head *entry;
+	struct print_option *p;
+
+	if (flist_empty(&td->opt_list))
+		return;
+
+	flist_for_each(entry, &td->opt_list) {
+		p = flist_entry(entry, struct print_option, list);
+		dump_print_option(p);
+	}
+}
+
+static void fio_dump_options_free(struct thread_data *td)
+{
+	while (!flist_empty(&td->opt_list)) {
+		struct print_option *p;
+
+		p = flist_first_entry(&td->opt_list, struct print_option, list);
+		flist_del_init(&p->list);
+		free(p->name);
+		free(p->value);
+		free(p);
+	}
+}
+
+static void copy_opt_list(struct thread_data *dst, struct thread_data *src)
+{
+	struct flist_head *entry;
+
+	if (flist_empty(&src->opt_list))
+		return;
+
+	flist_for_each(entry, &src->opt_list) {
+		struct print_option *srcp, *dstp;
+
+		srcp = flist_entry(entry, struct print_option, list);
+		dstp = malloc(sizeof(*dstp));
+		dstp->name = strdup(srcp->name);
+		if (srcp->value)
+			dstp->value = strdup(srcp->value);
+		else
+			dstp->value = NULL;
+		flist_add_tail(&dstp->list, &dst->opt_list);
+	}
+}
+
 /*
  * Return a free job structure.
  */
@@ -410,6 +472,10 @@ static struct thread_data *get_new_job(int global, struct thread_data *parent,
 	td = &threads[thread_number++];
 	*td = *parent;
 
+	INIT_FLIST_HEAD(&td->opt_list);
+	if (parent != &def_thread)
+		copy_opt_list(td, parent);
+
 	td->io_ops = NULL;
 	if (!preserve_eo)
 		td->eo = NULL;
@@ -427,7 +493,7 @@ static struct thread_data *get_new_job(int global, struct thread_data *parent,
 	if (jobname)
 		td->o.name = strdup(jobname);
 
-	if (!parent->o.group_reporting)
+	if (!parent->o.group_reporting || parent == &def_thread)
 		stat_number++;
 
 	set_cmd_options(td);
@@ -446,6 +512,7 @@ static void put_job(struct thread_data *td)
 		log_info("fio: %s\n", td->verror);
 
 	fio_options_free(td);
+	fio_dump_options_free(td);
 	if (td->io_ops)
 		free_ioengine(td);
 
@@ -465,7 +532,7 @@ static int __setup_rate(struct thread_data *td, enum fio_ddir ddir)
 	if (td->o.rate[ddir])
 		td->rate_bps[ddir] = td->o.rate[ddir];
 	else
-		td->rate_bps[ddir] = td->o.rate_iops[ddir] * bs;
+		td->rate_bps[ddir] = (uint64_t) td->o.rate_iops[ddir] * bs;
 
 	if (!td->rate_bps[ddir]) {
 		log_err("rate lower than supported\n");
@@ -474,6 +541,7 @@ static int __setup_rate(struct thread_data *td, enum fio_ddir ddir)
 
 	td->rate_next_io_time[ddir] = 0;
 	td->rate_io_issue_bytes[ddir] = 0;
+	td->last_usec = 0;
 	return 0;
 }
 
@@ -630,6 +698,13 @@ static int fixup_options(struct thread_data *td)
 	if (o->iodepth_batch > o->iodepth || !o->iodepth_batch)
 		o->iodepth_batch = o->iodepth;
 
+	/*
+	 * If max batch complete number isn't set or set incorrectly,
+	 * default to the same as iodepth_batch_complete_min
+	 */
+	if (o->iodepth_batch_complete_min > o->iodepth_batch_complete_max)
+		o->iodepth_batch_complete_max = o->iodepth_batch_complete_min;
+
 	if (o->nr_files > td->files_index)
 		o->nr_files = td->files_index;
 
@@ -730,11 +805,16 @@ static int fixup_options(struct thread_data *td)
 
 	/*
 	 * For fully compressible data, just zero them at init time.
-	 * It's faster than repeatedly filling it.
+	 * It's faster than repeatedly filling it. For non-zero
+	 * compression, we should have refill_buffers set. Set it, unless
+	 * the job file already changed it.
 	 */
-	if (td->o.compress_percentage == 100) {
-		td->o.zero_buffers = 1;
-		td->o.compress_percentage = 0;
+	if (o->compress_percentage) {
+		if (o->compress_percentage == 100) {
+			o->zero_buffers = 1;
+			o->compress_percentage = 0;
+		} else if (!fio_option_is_set(o, refill_buffers))
+			o->refill_buffers = 1;
 	}
 
 	/*
@@ -851,6 +931,7 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, int use64)
 	init_rand_seed(&td->file_size_state, td->rand_seeds[FIO_RAND_FILE_SIZE_OFF], use64);
 	init_rand_seed(&td->trim_state, td->rand_seeds[FIO_RAND_TRIM_OFF], use64);
 	init_rand_seed(&td->delay_state, td->rand_seeds[FIO_RAND_START_DELAY], use64);
+	init_rand_seed(&td->poisson_state, td->rand_seeds[FIO_RAND_POISSON_OFF], 0);
 
 	if (!td_random(td))
 		return;
@@ -1136,6 +1217,49 @@ static void gen_log_name(char *name, size_t size, const char *logtype,
 		snprintf(name, size, "%s_%s.%s", logname, logtype, suf);
 }
 
+static int check_waitees(char *waitee)
+{
+	struct thread_data *td;
+	int i, ret = 0;
+
+	for_each_td(td, i) {
+		if (td->subjob_number)
+			continue;
+
+		ret += !strcmp(td->o.name, waitee);
+	}
+
+	return ret;
+}
+
+static bool wait_for_ok(const char *jobname, struct thread_options *o)
+{
+	int nw;
+
+	if (!o->wait_for)
+		return true;
+
+	if (!strcmp(jobname, o->wait_for)) {
+		log_err("%s: a job cannot wait for itself (wait_for=%s).\n",
+				jobname, o->wait_for);
+		return false;
+	}
+
+	if (!(nw = check_waitees(o->wait_for))) {
+		log_err("%s: waitee job %s unknown.\n", jobname, o->wait_for);
+		return false;
+	}
+
+	if (nw > 1) {
+		log_err("%s: multiple waitees %s found,\n"
+			"please avoid duplicates when using wait_for option.\n",
+				jobname, o->wait_for);
+		return false;
+	}
+
+	return true;
+}
+
 /*
  * Adds a job to the list of things todo. Sanitizes the various options
  * to make sure we don't have conflicts, and initializes various
@@ -1192,6 +1316,12 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if (fixup_options(td))
 		goto err;
 
+	/*
+	 * Belongs to fixup_options, but o->name is not necessarily set as yet
+	 */
+	if (!wait_for_ok(jobname, o))
+		goto err;
+
 	flow_init_job(td);
 
 	/*
@@ -1225,6 +1355,10 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if ((o->stonewall || o->new_group) && prev_group_jobs) {
 		prev_group_jobs = 0;
 		groupid++;
+		if (groupid == INT_MAX) {
+			log_err("fio: too many groups defined\n");
+			goto err;
+		}
 	}
 
 	td->groupid = groupid;
@@ -1310,7 +1444,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if (!o->name)
 		o->name = strdup(jobname);
 
-	if (output_format == FIO_OUTPUT_NORMAL) {
+	if (output_format & FIO_OUTPUT_NORMAL) {
 		if (!job_add_num) {
 			if (is_backend && !recursed)
 				fio_server_send_add_job(td);
@@ -1426,9 +1560,9 @@ void add_job_opts(const char **o, int client_type)
 			td = get_new_job(0, td_parent, 0, jobname);
 		}
 		if (in_global)
-			fio_options_parse(td_parent, (char **) &o[i], 1, 0);
+			fio_options_parse(td_parent, (char **) &o[i], 1);
 		else
-			fio_options_parse(td, (char **) &o[i], 1, 0);
+			fio_options_parse(td, (char **) &o[i], 1);
 		i++;
 	}
 
@@ -1668,10 +1802,13 @@ int __parse_jobs_ini(struct thread_data *td,
 			goto out;
 		}
 
-		ret = fio_options_parse(td, opts, num_opts, dump_cmdline);
-		if (!ret)
+		ret = fio_options_parse(td, opts, num_opts);
+		if (!ret) {
+			if (dump_cmdline)
+				dump_opt_list(td);
+
 			ret = add_job(td, name, 0, 0, type);
-		else {
+		} else {
 			log_err("fio: job %s dropped\n", name);
 			put_job(td);
 		}
@@ -1709,6 +1846,7 @@ int parse_jobs_ini(char *file, int is_buf, int stonewall_flag, int type)
 static int fill_def_thread(void)
 {
 	memset(&def_thread, 0, sizeof(def_thread));
+	INIT_FLIST_HEAD(&def_thread.opt_list);
 
 	fio_getaffinity(getpid(), &def_thread.o.cpumask);
 	def_thread.o.error_dump = 1;
@@ -1722,6 +1860,7 @@ static int fill_def_thread(void)
 
 static void show_debug_categories(void)
 {
+#ifdef FIO_INC_DEBUG
 	struct debug_level *dl = &debug_levels[0];
 	int curlen, first = 1;
 
@@ -1747,6 +1886,7 @@ static void show_debug_categories(void)
 		first = 0;
 	}
 	printf("\n");
+#endif
 }
 
 static void usage(const char *name)
@@ -1760,7 +1900,7 @@ static void usage(const char *name)
 	printf("  --runtime\t\tRuntime in seconds\n");
 	printf("  --bandwidth-log\tGenerate per-job bandwidth logs\n");
 	printf("  --minimal\t\tMinimal (terse) output\n");
-	printf("  --output-format=x\tOutput format (terse,json,normal)\n");
+	printf("  --output-format=x\tOutput format (terse,json,json+,normal)\n");
 	printf("  --terse-version=x\tSet terse version output format to 'x'\n");
 	printf("  --version\t\tPrint version info and exit\n");
 	printf("  --help\t\tPrint this page\n");
@@ -1882,6 +2022,9 @@ static int set_debug(const char *string)
 	char *opt;
 	int i;
 
+	if (!string)
+		return 0;
+
 	if (!strcmp(string, "?") || !strcmp(string, "help")) {
 		log_info("fio: dumping debug options:");
 		for (i = 0; debug_levels[i].name; i++) {
@@ -2002,6 +2145,37 @@ static void show_closest_option(const char *name)
 		log_err("Did you mean %s?\n", l_opts[best_option].name);
 }
 
+static int parse_output_format(const char *optarg)
+{
+	char *p, *orig, *opt;
+	int ret = 0;
+
+	p = orig = strdup(optarg);
+
+	output_format = 0;
+
+	while ((opt = strsep(&p, ",")) != NULL) {
+		if (!strcmp(opt, "minimal") ||
+		    !strcmp(opt, "terse") ||
+		    !strcmp(opt, "csv"))
+			output_format |= FIO_OUTPUT_TERSE;
+		else if (!strcmp(opt, "json"))
+			output_format |= FIO_OUTPUT_JSON;
+		else if (!strcmp(opt, "json+"))
+			output_format |= (FIO_OUTPUT_JSON | FIO_OUTPUT_JSON_PLUS);
+		else if (!strcmp(opt, "normal"))
+			output_format |= FIO_OUTPUT_NORMAL;
+		else {
+			log_err("fio: invalid output format %s\n", opt);
+			ret = 1;
+			break;
+		}
+	}
+
+	free(orig);
+	return ret;
+}
+
 int parse_cmd_line(int argc, char *argv[], int client_type)
 {
 	struct thread_data *td = NULL;
@@ -2063,17 +2237,15 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 				do_exit++;
 				break;
 			}
-			if (!strcmp(optarg, "minimal") ||
-			    !strcmp(optarg, "terse") ||
-			    !strcmp(optarg, "csv"))
-				output_format = FIO_OUTPUT_TERSE;
-			else if (!strcmp(optarg, "json"))
-				output_format = FIO_OUTPUT_JSON;
-			else
-				output_format = FIO_OUTPUT_NORMAL;
+			if (parse_output_format(optarg)) {
+				log_err("fio: failed parsing output-format\n");
+				exit_val = 1;
+				do_exit++;
+				break;
+			}
 			break;
 		case 'f':
-			append_terse_output = 1;
+			output_format |= FIO_OUTPUT_TERSE;
 			break;
 		case 'h':
 			did_arg = 1;
@@ -2525,7 +2697,7 @@ int parse_options(int argc, char *argv[])
 		return 0;
 	}
 
-	if (output_format == FIO_OUTPUT_NORMAL)
+	if (output_format & FIO_OUTPUT_NORMAL)
 		log_info("%s\n", fio_version_string);
 
 	return 0;
@@ -2534,4 +2706,9 @@ int parse_options(int argc, char *argv[])
 void options_default_fill(struct thread_options *o)
 {
 	memcpy(o, &def_thread.o, sizeof(*o));
+}
+
+struct thread_data *get_global_options(void)
+{
+	return &def_thread;
 }

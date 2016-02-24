@@ -32,7 +32,7 @@
 #include "profile.h"
 #include "fio_time.h"
 #include "gettime.h"
-#include "lib/getopt.h"
+#include "oslib/getopt.h"
 #include "lib/rand.h"
 #include "lib/rbtree.h"
 #include "client.h"
@@ -95,19 +95,32 @@ enum {
 	FIO_RAND_SEQ_RAND_TRIM_OFF,
 	FIO_RAND_START_DELAY,
 	FIO_DEDUPE_OFF,
+	FIO_RAND_POISSON_OFF,
 	FIO_RAND_NR_OFFS,
 };
 
 enum {
 	IO_MODE_INLINE = 0,
-	IO_MODE_OFFLOAD,
+	IO_MODE_OFFLOAD = 1,
+
+	RATE_PROCESS_LINEAR = 0,
+	RATE_PROCESS_POISSON = 1,
 };
+
+/*
+ * Per-thread/process specific data. Only used for the network client
+ * for now.
+ */
+struct sk_out;
+void sk_out_assign(struct sk_out *);
+void sk_out_drop(void);
 
 /*
  * This describes a single thread/process executing a fio job.
  */
 struct thread_data {
 	struct thread_options o;
+	struct flist_head opt_list;
 	unsigned long flags;
 	void *eo;
 	char verror[FIO_VERROR_SIZE];
@@ -125,7 +138,7 @@ struct thread_data {
 	struct io_log *bw_log;
 	struct io_log *iops_log;
 
-	struct tp_data *tp_data;
+	struct workqueue log_compress_wq;
 
 	struct thread_data *parent;
 
@@ -243,6 +256,8 @@ struct thread_data {
 	unsigned long rate_blocks[DDIR_RWDIR_CNT];
 	unsigned long rate_io_issue_bytes[DDIR_RWDIR_CNT];
 	struct timeval lastrate[DDIR_RWDIR_CNT];
+	int64_t last_usec;
+	struct frand_state poisson_state;
 
 	/*
 	 * Enforced rate submission/completion workqueue
@@ -462,10 +477,10 @@ extern int __must_check fio_init_options(void);
 extern int __must_check parse_options(int, char **);
 extern int parse_jobs_ini(char *, int, int, int);
 extern int parse_cmd_line(int, char **, int);
-extern int fio_backend(void);
+extern int fio_backend(struct sk_out *);
 extern void reset_fio_state(void);
-extern void clear_io_state(struct thread_data *);
-extern int fio_options_parse(struct thread_data *, char **, int, int);
+extern void clear_io_state(struct thread_data *, int);
+extern int fio_options_parse(struct thread_data *, char **, int);
 extern void fio_keywords_init(void);
 extern void fio_keywords_exit(void);
 extern int fio_cmd_option_parse(struct thread_data *, const char *, char *);
@@ -483,6 +498,8 @@ extern int ioengine_load(struct thread_data *);
 extern int parse_dryrun(void);
 extern int fio_running_or_pending_io_threads(void);
 extern int fio_set_fd_nonblocking(int, const char *);
+extern void sig_show_status(int sig);
+extern struct thread_data *get_global_options(void);
 
 extern uintptr_t page_mask;
 extern uintptr_t page_size;
@@ -525,6 +542,7 @@ enum {
 extern void td_set_runstate(struct thread_data *, int);
 extern int td_bump_runstate(struct thread_data *, int);
 extern void td_restore_runstate(struct thread_data *, int);
+extern const char *runstate_to_name(int runstate);
 
 /*
  * Allow 60 seconds for a job to quit on its own, otherwise reap with
@@ -532,8 +550,8 @@ extern void td_restore_runstate(struct thread_data *, int);
  */
 #define FIO_REAP_TIMEOUT	60
 
-#define TERMINATE_ALL		(-1)
-extern void fio_terminate_threads(int);
+#define TERMINATE_ALL		(-1U)
+extern void fio_terminate_threads(unsigned int);
 extern void fio_mark_td_terminate(struct thread_data *);
 
 /*
@@ -557,6 +575,10 @@ extern void reset_all_stats(struct thread_data *);
 extern int is_blktrace(const char *, int *);
 extern int load_blktrace(struct thread_data *, const char *, int);
 #endif
+
+extern int io_queue_event(struct thread_data *td, struct io_u *io_u, int *ret,
+		   enum fio_ddir ddir, uint64_t *bytes_issued, int from_verify,
+		   struct timeval *comp_time);
 
 /*
  * Latency target helpers
@@ -673,9 +695,16 @@ extern const char *fio_get_os_string(int);
 #endif
 
 enum {
-	FIO_OUTPUT_TERSE	= 0,
-	FIO_OUTPUT_JSON,
-	FIO_OUTPUT_NORMAL,
+	__FIO_OUTPUT_TERSE	= 0,
+	__FIO_OUTPUT_JSON	= 1,
+	__FIO_OUTPUT_NORMAL	= 2,
+        __FIO_OUTPUT_JSON_PLUS  = 3,
+	FIO_OUTPUT_NR		= 4,
+
+	FIO_OUTPUT_TERSE	= 1U << __FIO_OUTPUT_TERSE,
+	FIO_OUTPUT_JSON		= 1U << __FIO_OUTPUT_JSON,
+	FIO_OUTPUT_NORMAL	= 1U << __FIO_OUTPUT_NORMAL,
+	FIO_OUTPUT_JSON_PLUS    = 1U << __FIO_OUTPUT_JSON_PLUS,
 };
 
 enum {
