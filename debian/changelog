@@ -1,4 +1,4 @@
-fio (2.6-1) UNRELEASED; urgency=medium
+fio (2.6-1) unstable; urgency=medium
 
   * Imported Upstream version 2.6.
   * patches/fix-ftbfs-with-libmtd.h: Fix FTBFS: libmtd.h:288:8: error:
