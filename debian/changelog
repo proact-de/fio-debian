@@ -6,7 +6,11 @@ fio (2.6-1) UNRELEASED; urgency=medium
   * control:
     - Updated to standards version 3.9.7. No changes needed.
     - Made Vcs-Browser and Vcs-Git URLs secure 
-  - copyright: Adapted path for library files that are now in oslib.
+  - copyright:
+    - Adapted path for library files that are now in oslib.
+    - fio.1: Fixed license to GPL-2. Don´t know how I came to the
+      conclusion that it would be GPL-2+, if the rest without any
+      license specified is GPL-2.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Wed, 24 Feb 2016 10:47:40 +0100
 
