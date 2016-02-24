@@ -14,8 +14,19 @@
 #include "lib/getrusage.h"
 #include "idletime.h"
 #include "lib/pow2.h"
+#include "lib/output_buffer.h"
 
 struct fio_mutex *stat_mutex;
+
+void clear_rusage_stat(struct thread_data *td)
+{
+	struct thread_stat *ts = &td->ts;
+
+	fio_getrusage(&td->ru_start);
+	ts->usr_time = ts->sys_time = 0;
+	ts->ctx = 0;
+	ts->minf = ts->majf = 0;
+}
 
 void update_rusage_stat(struct thread_data *td)
 {
@@ -183,7 +194,8 @@ unsigned int calc_clat_percentiles(unsigned int *io_u_plat, unsigned long nr,
  * Find and display the p-th percentile of clat
  */
 static void show_clat_percentiles(unsigned int *io_u_plat, unsigned long nr,
-				  fio_fp64_t *plist, unsigned int precision)
+				  fio_fp64_t *plist, unsigned int precision,
+				  struct buf_output *out)
 {
 	unsigned int len, j = 0, minv, maxv;
 	unsigned int *ovals;
@@ -200,10 +212,10 @@ static void show_clat_percentiles(unsigned int *io_u_plat, unsigned long nr,
 	 */
 	if (minv > 2000 && maxv > 99999) {
 		scale_down = 1;
-		log_info("    clat percentiles (msec):\n     |");
+		log_buf(out, "    clat percentiles (msec):\n     |");
 	} else {
 		scale_down = 0;
-		log_info("    clat percentiles (usec):\n     |");
+		log_buf(out, "    clat percentiles (usec):\n     |");
 	}
 
 	snprintf(fmt, sizeof(fmt), "%%1.%uf", precision);
@@ -214,7 +226,7 @@ static void show_clat_percentiles(unsigned int *io_u_plat, unsigned long nr,
 
 		/* for formatting */
 		if (j != 0 && (j % per_line) == 0)
-			log_info("     |");
+			log_buf(out, "     |");
 
 		/* end of the list */
 		is_last = (j == len - 1);
@@ -227,13 +239,13 @@ static void show_clat_percentiles(unsigned int *io_u_plat, unsigned long nr,
 		if (scale_down)
 			ovals[j] = (ovals[j] + 999) / 1000;
 
-		log_info(" %sth=[%5u]%c", fbuf, ovals[j], is_last ? '\n' : ',');
+		log_buf(out, " %sth=[%5u]%c", fbuf, ovals[j], is_last ? '\n' : ',');
 
 		if (is_last)
 			break;
 
 		if ((j % per_line) == per_line - 1)	/* for formatting */
-			log_info("\n");
+			log_buf(out, "\n");
 	}
 
 out:
@@ -261,13 +273,13 @@ int calc_lat(struct io_stat *is, unsigned long *min, unsigned long *max,
 	return 1;
 }
 
-void show_group_stats(struct group_run_stats *rs)
+void show_group_stats(struct group_run_stats *rs, struct buf_output *out)
 {
 	char *p1, *p2, *p3, *p4;
 	const char *str[] = { "   READ", "  WRITE" , "   TRIM"};
 	int i;
 
-	log_info("\nRun status group %d (all jobs):\n", rs->groupid);
+	log_buf(out, "\nRun status group %d (all jobs):\n", rs->groupid);
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
 		const int i2p = is_power_of_2(rs->kb_base);
@@ -280,7 +292,7 @@ void show_group_stats(struct group_run_stats *rs)
 		p3 = num2str(rs->min_bw[i], 6, rs->kb_base, i2p, rs->unit_base);
 		p4 = num2str(rs->max_bw[i], 6, rs->kb_base, i2p, rs->unit_base);
 
-		log_info("%s: io=%s, aggrb=%s/s, minb=%s/s, maxb=%s/s,"
+		log_buf(out, "%s: io=%s, aggrb=%s/s, minb=%s/s, maxb=%s/s,"
 			 " mint=%llumsec, maxt=%llumsec\n",
 				rs->unified_rw_rep ? "  MIXED" : str[i],
 				p1, p2, p3, p4,
@@ -343,7 +355,7 @@ void stat_calc_lat_m(struct thread_stat *ts, double *io_u_lat)
 }
 
 static void display_lat(const char *name, unsigned long min, unsigned long max,
-			double mean, double dev)
+			double mean, double dev, struct buf_output *out)
 {
 	const char *base = "(usec)";
 	char *minp, *maxp;
@@ -354,7 +366,7 @@ static void display_lat(const char *name, unsigned long min, unsigned long max,
 	minp = num2str(min, 6, 1, 0, 0);
 	maxp = num2str(max, 6, 1, 0, 0);
 
-	log_info("    %s %s: min=%s, max=%s, avg=%5.02f,"
+	log_buf(out, "    %s %s: min=%s, max=%s, avg=%5.02f,"
 		 " stdev=%5.02f\n", name, base, minp, maxp, mean, dev);
 
 	free(minp);
@@ -362,7 +374,7 @@ static void display_lat(const char *name, unsigned long min, unsigned long max,
 }
 
 static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
-			     int ddir)
+			     int ddir, struct buf_output *out)
 {
 	const char *str[] = { "read ", "write", "trim" };
 	unsigned long min, max, runt;
@@ -386,7 +398,7 @@ static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 	iops = (1000 * (uint64_t)ts->total_io_u[ddir]) / runt;
 	iops_p = num2str(iops, 6, 1, 0, 0);
 
-	log_info("  %s: io=%s, bw=%s/s, iops=%s, runt=%6llumsec\n",
+	log_buf(out, "  %s: io=%s, bw=%s/s, iops=%s, runt=%6llumsec\n",
 				rs->unified_rw_rep ? "mixed" : str[ddir],
 				io_p, bw_p, iops_p,
 				(unsigned long long) ts->runtime[ddir]);
@@ -396,17 +408,17 @@ static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 	free(iops_p);
 
 	if (calc_lat(&ts->slat_stat[ddir], &min, &max, &mean, &dev))
-		display_lat("slat", min, max, mean, dev);
+		display_lat("slat", min, max, mean, dev, out);
 	if (calc_lat(&ts->clat_stat[ddir], &min, &max, &mean, &dev))
-		display_lat("clat", min, max, mean, dev);
+		display_lat("clat", min, max, mean, dev, out);
 	if (calc_lat(&ts->lat_stat[ddir], &min, &max, &mean, &dev))
-		display_lat(" lat", min, max, mean, dev);
+		display_lat(" lat", min, max, mean, dev, out);
 
 	if (ts->clat_percentiles) {
 		show_clat_percentiles(ts->io_u_plat[ddir],
 					ts->clat_stat[ddir].samples,
 					ts->percentile_list,
-					ts->percentile_precision);
+					ts->percentile_precision, out);
 	}
 	if (calc_lat(&ts->bw_stat[ddir], &min, &max, &mean, &dev)) {
 		double p_of_agg = 100.0, fkb_base = (double)rs->kb_base;
@@ -433,14 +445,14 @@ static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 			bw_str = (rs->unit_base == 1 ? "Mbit" : "MB");
 		}
 
-		log_info("    bw (%-4s/s): min=%5lu, max=%5lu, per=%3.2f%%,"
+		log_buf(out, "    bw (%-4s/s): min=%5lu, max=%5lu, per=%3.2f%%,"
 			 " avg=%5.02f, stdev=%5.02f\n", bw_str, min, max,
 							p_of_agg, mean, dev);
 	}
 }
 
 static int show_lat(double *io_u_lat, int nr, const char **ranges,
-		    const char *msg)
+		    const char *msg, struct buf_output *out)
 {
 	int new_line = 1, i, line = 0, shown = 0;
 
@@ -450,43 +462,43 @@ static int show_lat(double *io_u_lat, int nr, const char **ranges,
 		shown = 1;
 		if (new_line) {
 			if (line)
-				log_info("\n");
-			log_info("    lat (%s) : ", msg);
+				log_buf(out, "\n");
+			log_buf(out, "    lat (%s) : ", msg);
 			new_line = 0;
 			line = 0;
 		}
 		if (line)
-			log_info(", ");
-		log_info("%s%3.2f%%", ranges[i], io_u_lat[i]);
+			log_buf(out, ", ");
+		log_buf(out, "%s%3.2f%%", ranges[i], io_u_lat[i]);
 		line++;
 		if (line == 5)
 			new_line = 1;
 	}
 
 	if (shown)
-		log_info("\n");
+		log_buf(out, "\n");
 
 	return shown;
 }
 
-static void show_lat_u(double *io_u_lat_u)
+static void show_lat_u(double *io_u_lat_u, struct buf_output *out)
 {
 	const char *ranges[] = { "2=", "4=", "10=", "20=", "50=", "100=",
 				 "250=", "500=", "750=", "1000=", };
 
-	show_lat(io_u_lat_u, FIO_IO_U_LAT_U_NR, ranges, "usec");
+	show_lat(io_u_lat_u, FIO_IO_U_LAT_U_NR, ranges, "usec", out);
 }
 
-static void show_lat_m(double *io_u_lat_m)
+static void show_lat_m(double *io_u_lat_m, struct buf_output *out)
 {
 	const char *ranges[] = { "2=", "4=", "10=", "20=", "50=", "100=",
 				 "250=", "500=", "750=", "1000=", "2000=",
 				 ">=2000=", };
 
-	show_lat(io_u_lat_m, FIO_IO_U_LAT_M_NR, ranges, "msec");
+	show_lat(io_u_lat_m, FIO_IO_U_LAT_M_NR, ranges, "msec", out);
 }
 
-static void show_latencies(struct thread_stat *ts)
+static void show_latencies(struct thread_stat *ts, struct buf_output *out)
 {
 	double io_u_lat_u[FIO_IO_U_LAT_U_NR];
 	double io_u_lat_m[FIO_IO_U_LAT_M_NR];
@@ -494,8 +506,8 @@ static void show_latencies(struct thread_stat *ts)
 	stat_calc_lat_u(ts, io_u_lat_u);
 	stat_calc_lat_m(ts, io_u_lat_m);
 
-	show_lat_u(io_u_lat_u);
-	show_lat_m(io_u_lat_m);
+	show_lat_u(io_u_lat_u, out);
+	show_lat_m(io_u_lat_m, out);
 }
 
 static int block_state_category(int block_state)
@@ -604,7 +616,7 @@ static const char *block_state_names[] = {
 };
 
 static void show_block_infos(int nr_block_infos, uint32_t *block_infos,
-			     fio_fp64_t *plist)
+			     fio_fp64_t *plist, struct buf_output *out)
 {
 	int len, pos, i;
 	unsigned int *percentiles = NULL;
@@ -613,7 +625,7 @@ static void show_block_infos(int nr_block_infos, uint32_t *block_infos,
 	len = calc_block_percentiles(nr_block_infos, block_infos, plist,
 				     &percentiles, block_state_counts);
 
-	log_info("  block lifetime percentiles :\n   |");
+	log_buf(out, "  block lifetime percentiles :\n   |");
 	pos = 0;
 	for (i = 0; i < len; i++) {
 		uint32_t block_info = percentiles[i];
@@ -625,24 +637,25 @@ static void show_block_infos(int nr_block_infos, uint32_t *block_infos,
 		assert(strln < LINE_LENGTH);
 		if (pos + strln > LINE_LENGTH) {
 			pos = 0;
-			log_info("\n   |");
+			log_buf(out, "\n   |");
 		}
-		log_info("%s", str);
+		log_buf(out, "%s", str);
 		pos += strln;
 #undef LINE_LENGTH
 	}
 	if (percentiles)
 		free(percentiles);
 
-	log_info("        states               :");
+	log_buf(out, "        states               :");
 	for (i = 0; i < BLOCK_STATE_COUNT; i++)
-		log_info(" %s=%u%c",
+		log_buf(out, " %s=%u%c",
 			 block_state_names[i], block_state_counts[i],
 			 i == BLOCK_STATE_COUNT - 1 ? '\n' : ',');
 }
 
 static void show_thread_status_normal(struct thread_stat *ts,
-				      struct group_run_stats *rs)
+				      struct group_run_stats *rs,
+				      struct buf_output *out)
 {
 	double usr_cpu, sys_cpu;
 	unsigned long runtime;
@@ -657,27 +670,27 @@ static void show_thread_status_normal(struct thread_stat *ts,
 	os_ctime_r((const time_t *) &time_p, time_buf, sizeof(time_buf));
 
 	if (!ts->error) {
-		log_info("%s: (groupid=%d, jobs=%d): err=%2d: pid=%d: %s",
+		log_buf(out, "%s: (groupid=%d, jobs=%d): err=%2d: pid=%d: %s",
 					ts->name, ts->groupid, ts->members,
 					ts->error, (int) ts->pid, time_buf);
 	} else {
-		log_info("%s: (groupid=%d, jobs=%d): err=%2d (%s): pid=%d: %s",
+		log_buf(out, "%s: (groupid=%d, jobs=%d): err=%2d (%s): pid=%d: %s",
 					ts->name, ts->groupid, ts->members,
 					ts->error, ts->verror, (int) ts->pid,
 					time_buf);
 	}
 
 	if (strlen(ts->description))
-		log_info("  Description  : [%s]\n", ts->description);
+		log_buf(out, "  Description  : [%s]\n", ts->description);
 
 	if (ts->io_bytes[DDIR_READ])
-		show_ddir_status(rs, ts, DDIR_READ);
+		show_ddir_status(rs, ts, DDIR_READ, out);
 	if (ts->io_bytes[DDIR_WRITE])
-		show_ddir_status(rs, ts, DDIR_WRITE);
+		show_ddir_status(rs, ts, DDIR_WRITE, out);
 	if (ts->io_bytes[DDIR_TRIM])
-		show_ddir_status(rs, ts, DDIR_TRIM);
+		show_ddir_status(rs, ts, DDIR_TRIM, out);
 
-	show_latencies(ts);
+	show_latencies(ts, out);
 
 	runtime = ts->total_run_time;
 	if (runtime) {
@@ -690,32 +703,32 @@ static void show_thread_status_normal(struct thread_stat *ts,
 		sys_cpu = 0;
 	}
 
-	log_info("  cpu          : usr=%3.2f%%, sys=%3.2f%%, ctx=%llu,"
+	log_buf(out, "  cpu          : usr=%3.2f%%, sys=%3.2f%%, ctx=%llu,"
 		 " majf=%llu, minf=%llu\n", usr_cpu, sys_cpu,
 			(unsigned long long) ts->ctx,
 			(unsigned long long) ts->majf,
 			(unsigned long long) ts->minf);
 
 	stat_calc_dist(ts->io_u_map, ddir_rw_sum(ts->total_io_u), io_u_dist);
-	log_info("  IO depths    : 1=%3.1f%%, 2=%3.1f%%, 4=%3.1f%%, 8=%3.1f%%,"
+	log_buf(out, "  IO depths    : 1=%3.1f%%, 2=%3.1f%%, 4=%3.1f%%, 8=%3.1f%%,"
 		 " 16=%3.1f%%, 32=%3.1f%%, >=64=%3.1f%%\n", io_u_dist[0],
 					io_u_dist[1], io_u_dist[2],
 					io_u_dist[3], io_u_dist[4],
 					io_u_dist[5], io_u_dist[6]);
 
 	stat_calc_dist(ts->io_u_submit, ts->total_submit, io_u_dist);
-	log_info("     submit    : 0=%3.1f%%, 4=%3.1f%%, 8=%3.1f%%, 16=%3.1f%%,"
+	log_buf(out, "     submit    : 0=%3.1f%%, 4=%3.1f%%, 8=%3.1f%%, 16=%3.1f%%,"
 		 " 32=%3.1f%%, 64=%3.1f%%, >=64=%3.1f%%\n", io_u_dist[0],
 					io_u_dist[1], io_u_dist[2],
 					io_u_dist[3], io_u_dist[4],
 					io_u_dist[5], io_u_dist[6]);
 	stat_calc_dist(ts->io_u_complete, ts->total_complete, io_u_dist);
-	log_info("     complete  : 0=%3.1f%%, 4=%3.1f%%, 8=%3.1f%%, 16=%3.1f%%,"
+	log_buf(out, "     complete  : 0=%3.1f%%, 4=%3.1f%%, 8=%3.1f%%, 16=%3.1f%%,"
 		 " 32=%3.1f%%, 64=%3.1f%%, >=64=%3.1f%%\n", io_u_dist[0],
 					io_u_dist[1], io_u_dist[2],
 					io_u_dist[3], io_u_dist[4],
 					io_u_dist[5], io_u_dist[6]);
-	log_info("     issued    : total=r=%llu/w=%llu/d=%llu,"
+	log_buf(out, "     issued    : total=r=%llu/w=%llu/d=%llu,"
 				 " short=r=%llu/w=%llu/d=%llu,"
 				 " drop=r=%llu/w=%llu/d=%llu\n",
 					(unsigned long long) ts->total_io_u[0],
@@ -728,13 +741,13 @@ static void show_thread_status_normal(struct thread_stat *ts,
 					(unsigned long long) ts->drop_io_u[1],
 					(unsigned long long) ts->drop_io_u[2]);
 	if (ts->continue_on_error) {
-		log_info("     errors    : total=%llu, first_error=%d/<%s>\n",
+		log_buf(out, "     errors    : total=%llu, first_error=%d/<%s>\n",
 					(unsigned long long)ts->total_err_count,
 					ts->first_error,
 					strerror(ts->first_error));
 	}
 	if (ts->latency_depth) {
-		log_info("     latency   : target=%llu, window=%llu, percentile=%.2f%%, depth=%u\n",
+		log_buf(out, "     latency   : target=%llu, window=%llu, percentile=%.2f%%, depth=%u\n",
 					(unsigned long long)ts->latency_target,
 					(unsigned long long)ts->latency_window,
 					ts->latency_percentile.u.f,
@@ -743,11 +756,12 @@ static void show_thread_status_normal(struct thread_stat *ts,
 
 	if (ts->nr_block_infos)
 		show_block_infos(ts->nr_block_infos, ts->block_infos,
-				  ts->percentile_list);
+				  ts->percentile_list, out);
 }
 
 static void show_ddir_status_terse(struct thread_stat *ts,
-				   struct group_run_stats *rs, int ddir)
+				   struct group_run_stats *rs, int ddir,
+				   struct buf_output *out)
 {
 	unsigned long min, max;
 	unsigned long long bw, iops;
@@ -766,19 +780,19 @@ static void show_ddir_status_terse(struct thread_stat *ts,
 		iops = (1000 * (uint64_t) ts->total_io_u[ddir]) / runt;
 	}
 
-	log_info(";%llu;%llu;%llu;%llu",
+	log_buf(out, ";%llu;%llu;%llu;%llu",
 		(unsigned long long) ts->io_bytes[ddir] >> 10, bw, iops,
 					(unsigned long long) ts->runtime[ddir]);
 
 	if (calc_lat(&ts->slat_stat[ddir], &min, &max, &mean, &dev))
-		log_info(";%lu;%lu;%f;%f", min, max, mean, dev);
+		log_buf(out, ";%lu;%lu;%f;%f", min, max, mean, dev);
 	else
-		log_info(";%lu;%lu;%f;%f", 0UL, 0UL, 0.0, 0.0);
+		log_buf(out, ";%lu;%lu;%f;%f", 0UL, 0UL, 0.0, 0.0);
 
 	if (calc_lat(&ts->clat_stat[ddir], &min, &max, &mean, &dev))
-		log_info(";%lu;%lu;%f;%f", min, max, mean, dev);
+		log_buf(out, ";%lu;%lu;%f;%f", min, max, mean, dev);
 	else
-		log_info(";%lu;%lu;%f;%f", 0UL, 0UL, 0.0, 0.0);
+		log_buf(out, ";%lu;%lu;%f;%f", 0UL, 0UL, 0.0, 0.0);
 
 	if (ts->clat_percentiles) {
 		len = calc_clat_percentiles(ts->io_u_plat[ddir],
@@ -790,16 +804,16 @@ static void show_ddir_status_terse(struct thread_stat *ts,
 
 	for (i = 0; i < FIO_IO_U_LIST_MAX_LEN; i++) {
 		if (i >= len) {
-			log_info(";0%%=0");
+			log_buf(out, ";0%%=0");
 			continue;
 		}
-		log_info(";%f%%=%u", ts->percentile_list[i].u.f, ovals[i]);
+		log_buf(out, ";%f%%=%u", ts->percentile_list[i].u.f, ovals[i]);
 	}
 
 	if (calc_lat(&ts->lat_stat[ddir], &min, &max, &mean, &dev))
-		log_info(";%lu;%lu;%f;%f", min, max, mean, dev);
+		log_buf(out, ";%lu;%lu;%f;%f", min, max, mean, dev);
 	else
-		log_info(";%lu;%lu;%f;%f", 0UL, 0UL, 0.0, 0.0);
+		log_buf(out, ";%lu;%lu;%f;%f", 0UL, 0UL, 0.0, 0.0);
 
 	if (ovals)
 		free(ovals);
@@ -813,9 +827,9 @@ static void show_ddir_status_terse(struct thread_stat *ts,
 				p_of_agg = 100.0;
 		}
 
-		log_info(";%lu;%lu;%f%%;%f;%f", min, max, p_of_agg, mean, dev);
+		log_buf(out, ";%lu;%lu;%f%%;%f;%f", min, max, p_of_agg, mean, dev);
 	} else
-		log_info(";%lu;%lu;%f%%;%f;%f", 0UL, 0UL, 0.0, 0.0, 0.0);
+		log_buf(out, ";%lu;%lu;%f%%;%f;%f", 0UL, 0UL, 0.0, 0.0, 0.0);
 }
 
 static void add_ddir_status_json(struct thread_stat *ts,
@@ -828,7 +842,7 @@ static void add_ddir_status_json(struct thread_stat *ts,
 	unsigned int len, minv, maxv;
 	int i;
 	const char *ddirname[] = {"read", "write", "trim"};
-	struct json_object *dir_object, *tmp_object, *percentile_object;
+	struct json_object *dir_object, *tmp_object, *percentile_object, *clat_bins_object;
 	char buf[120];
 	double p_of_agg = 100.0;
 
@@ -899,6 +913,18 @@ static void add_ddir_status_json(struct thread_stat *ts,
 		json_object_add_value_int(percentile_object, (const char *)buf, ovals[i]);
 	}
 
+	if (output_format & FIO_OUTPUT_JSON_PLUS) {
+		clat_bins_object = json_create_object();
+		json_object_add_value_object(tmp_object, "bins", clat_bins_object);
+		for(i = 0; i < FIO_IO_U_PLAT_NR; i++) {
+			snprintf(buf, sizeof(buf), "%d", i);
+			json_object_add_value_int(clat_bins_object, (const char *)buf, ts->io_u_plat[ddir][i]);
+		}
+		json_object_add_value_int(clat_bins_object, "FIO_IO_U_PLAT_BITS", FIO_IO_U_PLAT_BITS);
+		json_object_add_value_int(clat_bins_object, "FIO_IO_U_PLAT_VAL", FIO_IO_U_PLAT_VAL);
+		json_object_add_value_int(clat_bins_object, "FIO_IO_U_PLAT_NR", FIO_IO_U_PLAT_NR);
+	}
+
 	if (!calc_lat(&ts->lat_stat[ddir], &min, &max, &mean, &dev)) {
 		min = max = 0;
 		mean = dev = 0.0;
@@ -930,7 +956,8 @@ static void add_ddir_status_json(struct thread_stat *ts,
 }
 
 static void show_thread_status_terse_v2(struct thread_stat *ts,
-					struct group_run_stats *rs)
+					struct group_run_stats *rs,
+					struct buf_output *out)
 {
 	double io_u_dist[FIO_IO_U_MAP_NR];
 	double io_u_lat_u[FIO_IO_U_LAT_U_NR];
@@ -939,13 +966,13 @@ static void show_thread_status_terse_v2(struct thread_stat *ts,
 	int i;
 
 	/* General Info */
-	log_info("2;%s;%d;%d", ts->name, ts->groupid, ts->error);
+	log_buf(out, "2;%s;%d;%d", ts->name, ts->groupid, ts->error);
 	/* Log Read Status */
-	show_ddir_status_terse(ts, rs, DDIR_READ);
+	show_ddir_status_terse(ts, rs, DDIR_READ, out);
 	/* Log Write Status */
-	show_ddir_status_terse(ts, rs, DDIR_WRITE);
+	show_ddir_status_terse(ts, rs, DDIR_WRITE, out);
 	/* Log Trim Status */
-	show_ddir_status_terse(ts, rs, DDIR_TRIM);
+	show_ddir_status_terse(ts, rs, DDIR_TRIM, out);
 
 	/* CPU Usage */
 	if (ts->total_run_time) {
@@ -958,7 +985,7 @@ static void show_thread_status_terse_v2(struct thread_stat *ts,
 		sys_cpu = 0;
 	}
 
-	log_info(";%f%%;%f%%;%llu;%llu;%llu", usr_cpu, sys_cpu,
+	log_buf(out, ";%f%%;%f%%;%llu;%llu;%llu", usr_cpu, sys_cpu,
 						(unsigned long long) ts->ctx,
 						(unsigned long long) ts->majf,
 						(unsigned long long) ts->minf);
@@ -969,30 +996,31 @@ static void show_thread_status_terse_v2(struct thread_stat *ts,
 	stat_calc_lat_m(ts, io_u_lat_m);
 
 	/* Only show fixed 7 I/O depth levels*/
-	log_info(";%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%",
+	log_buf(out, ";%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%",
 			io_u_dist[0], io_u_dist[1], io_u_dist[2], io_u_dist[3],
 			io_u_dist[4], io_u_dist[5], io_u_dist[6]);
 
 	/* Microsecond latency */
 	for (i = 0; i < FIO_IO_U_LAT_U_NR; i++)
-		log_info(";%3.2f%%", io_u_lat_u[i]);
+		log_buf(out, ";%3.2f%%", io_u_lat_u[i]);
 	/* Millisecond latency */
 	for (i = 0; i < FIO_IO_U_LAT_M_NR; i++)
-		log_info(";%3.2f%%", io_u_lat_m[i]);
+		log_buf(out, ";%3.2f%%", io_u_lat_m[i]);
 	/* Additional output if continue_on_error set - default off*/
 	if (ts->continue_on_error)
-		log_info(";%llu;%d", (unsigned long long) ts->total_err_count, ts->first_error);
-	log_info("\n");
+		log_buf(out, ";%llu;%d", (unsigned long long) ts->total_err_count, ts->first_error);
+	log_buf(out, "\n");
 
 	/* Additional output if description is set */
 	if (strlen(ts->description))
-		log_info(";%s", ts->description);
+		log_buf(out, ";%s", ts->description);
 
-	log_info("\n");
+	log_buf(out, "\n");
 }
 
 static void show_thread_status_terse_v3_v4(struct thread_stat *ts,
-					   struct group_run_stats *rs, int ver)
+					   struct group_run_stats *rs, int ver,
+					   struct buf_output *out)
 {
 	double io_u_dist[FIO_IO_U_MAP_NR];
 	double io_u_lat_u[FIO_IO_U_LAT_U_NR];
@@ -1001,15 +1029,15 @@ static void show_thread_status_terse_v3_v4(struct thread_stat *ts,
 	int i;
 
 	/* General Info */
-	log_info("%d;%s;%s;%d;%d", ver, fio_version_string,
+	log_buf(out, "%d;%s;%s;%d;%d", ver, fio_version_string,
 					ts->name, ts->groupid, ts->error);
 	/* Log Read Status */
-	show_ddir_status_terse(ts, rs, DDIR_READ);
+	show_ddir_status_terse(ts, rs, DDIR_READ, out);
 	/* Log Write Status */
-	show_ddir_status_terse(ts, rs, DDIR_WRITE);
+	show_ddir_status_terse(ts, rs, DDIR_WRITE, out);
 	/* Log Trim Status */
 	if (ver == 4)
-		show_ddir_status_terse(ts, rs, DDIR_TRIM);
+		show_ddir_status_terse(ts, rs, DDIR_TRIM, out);
 
 	/* CPU Usage */
 	if (ts->total_run_time) {
@@ -1022,7 +1050,7 @@ static void show_thread_status_terse_v3_v4(struct thread_stat *ts,
 		sys_cpu = 0;
 	}
 
-	log_info(";%f%%;%f%%;%llu;%llu;%llu", usr_cpu, sys_cpu,
+	log_buf(out, ";%f%%;%f%%;%llu;%llu;%llu", usr_cpu, sys_cpu,
 						(unsigned long long) ts->ctx,
 						(unsigned long long) ts->majf,
 						(unsigned long long) ts->minf);
@@ -1033,33 +1061,59 @@ static void show_thread_status_terse_v3_v4(struct thread_stat *ts,
 	stat_calc_lat_m(ts, io_u_lat_m);
 
 	/* Only show fixed 7 I/O depth levels*/
-	log_info(";%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%",
+	log_buf(out, ";%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%;%3.1f%%",
 			io_u_dist[0], io_u_dist[1], io_u_dist[2], io_u_dist[3],
 			io_u_dist[4], io_u_dist[5], io_u_dist[6]);
 
 	/* Microsecond latency */
 	for (i = 0; i < FIO_IO_U_LAT_U_NR; i++)
-		log_info(";%3.2f%%", io_u_lat_u[i]);
+		log_buf(out, ";%3.2f%%", io_u_lat_u[i]);
 	/* Millisecond latency */
 	for (i = 0; i < FIO_IO_U_LAT_M_NR; i++)
-		log_info(";%3.2f%%", io_u_lat_m[i]);
+		log_buf(out, ";%3.2f%%", io_u_lat_m[i]);
 
 	/* disk util stats, if any */
-	show_disk_util(1, NULL);
+	show_disk_util(1, NULL, out);
 
 	/* Additional output if continue_on_error set - default off*/
 	if (ts->continue_on_error)
-		log_info(";%llu;%d", (unsigned long long) ts->total_err_count, ts->first_error);
+		log_buf(out, ";%llu;%d", (unsigned long long) ts->total_err_count, ts->first_error);
 
 	/* Additional output if description is set */
 	if (strlen(ts->description))
-		log_info(";%s", ts->description);
+		log_buf(out, ";%s", ts->description);
 
-	log_info("\n");
+	log_buf(out, "\n");
+}
+
+void json_add_job_opts(struct json_object *root, const char *name,
+		       struct flist_head *opt_list, bool num_jobs)
+{
+	struct json_object *dir_object;
+	struct flist_head *entry;
+	struct print_option *p;
+
+	if (flist_empty(opt_list))
+		return;
+
+	dir_object = json_create_object();
+	json_object_add_value_object(root, name, dir_object);
+
+	flist_for_each(entry, opt_list) {
+		const char *pos = "";
+
+		p = flist_entry(entry, struct print_option, list);
+		if (!num_jobs && !strcmp(p->name, "numjobs"))
+			continue;
+		if (p->value)
+			pos = p->value;
+		json_object_add_value_string(dir_object, p->name, pos);
+	}
 }
 
 static struct json_object *show_thread_status_json(struct thread_stat *ts,
-				    struct group_run_stats *rs)
+						   struct group_run_stats *rs,
+						   struct flist_head *opt_list)
 {
 	struct json_object *root, *tmp;
 	struct jobs_eta *je;
@@ -1070,17 +1124,20 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 	int i;
 	size_t size;
 
-
 	root = json_create_object();
 	json_object_add_value_string(root, "jobname", ts->name);
 	json_object_add_value_int(root, "groupid", ts->groupid);
 	json_object_add_value_int(root, "error", ts->error);
 
 	/* ETA Info */
-	je = get_jobs_eta(1, &size);
-	json_object_add_value_int(root, "eta", je->eta_sec);
-	json_object_add_value_int(root, "elapsed", je->elapsed_sec);
+	je = get_jobs_eta(true, &size);
+	if (je) {
+		json_object_add_value_int(root, "eta", je->eta_sec);
+		json_object_add_value_int(root, "elapsed", je->elapsed_sec);
+	}
 
+	if (opt_list)
+		json_add_job_opts(root, "job options", opt_list, true);
 
 	add_ddir_status_json(ts, rs, DDIR_READ, root);
 	add_ddir_status_json(ts, rs, DDIR_WRITE, root);
@@ -1167,7 +1224,7 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 
 		if (len) {
 			struct json_object *block, *percentile_object, *states;
-			int state, i;
+			int state;
 			block = json_create_object();
 			json_object_add_value_object(root, "block", block);
 
@@ -1198,29 +1255,35 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 }
 
 static void show_thread_status_terse(struct thread_stat *ts,
-				     struct group_run_stats *rs)
+				     struct group_run_stats *rs,
+				     struct buf_output *out)
 {
 	if (terse_version == 2)
-		show_thread_status_terse_v2(ts, rs);
+		show_thread_status_terse_v2(ts, rs, out);
 	else if (terse_version == 3 || terse_version == 4)
-		show_thread_status_terse_v3_v4(ts, rs, terse_version);
+		show_thread_status_terse_v3_v4(ts, rs, terse_version, out);
 	else
 		log_err("fio: bad terse version!? %d\n", terse_version);
 }
 
 struct json_object *show_thread_status(struct thread_stat *ts,
-				       struct group_run_stats *rs)
+				       struct group_run_stats *rs,
+				       struct flist_head *opt_list,
+				       struct buf_output *out)
 {
-	if (output_format == FIO_OUTPUT_TERSE)
-		show_thread_status_terse(ts, rs);
-	else if (output_format == FIO_OUTPUT_JSON)
-		return show_thread_status_json(ts, rs);
-	else
-		show_thread_status_normal(ts, rs);
-	return NULL;
+	struct json_object *ret = NULL;
+
+	if (output_format & FIO_OUTPUT_TERSE)
+		show_thread_status_terse(ts, rs,  out);
+	if (output_format & FIO_OUTPUT_JSON)
+		ret = show_thread_status_json(ts, rs, opt_list);
+	if (output_format & FIO_OUTPUT_NORMAL)
+		show_thread_status_normal(ts, rs,  out);
+
+	return ret;
 }
 
-static void sum_stat(struct io_stat *dst, struct io_stat *src, int nr)
+static void sum_stat(struct io_stat *dst, struct io_stat *src, bool first)
 {
 	double mean, S;
 
@@ -1235,7 +1298,7 @@ static void sum_stat(struct io_stat *dst, struct io_stat *src, int nr)
 	 * <http://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
 	 *  #Parallel_algorithm>
 	 */
-	if (nr == 1) {
+	if (first) {
 		mean = src->mean.u.f;
 		S = src->S.u.f;
 	} else {
@@ -1279,31 +1342,38 @@ void sum_group_stats(struct group_run_stats *dst, struct group_run_stats *src)
 		dst->unit_base = src->unit_base;
 }
 
-void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src, int nr)
+void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src,
+		      bool first)
 {
 	int l, k;
 
 	for (l = 0; l < DDIR_RWDIR_CNT; l++) {
 		if (!dst->unified_rw_rep) {
-			sum_stat(&dst->clat_stat[l], &src->clat_stat[l], nr);
-			sum_stat(&dst->slat_stat[l], &src->slat_stat[l], nr);
-			sum_stat(&dst->lat_stat[l], &src->lat_stat[l], nr);
-			sum_stat(&dst->bw_stat[l], &src->bw_stat[l], nr);
+			sum_stat(&dst->clat_stat[l], &src->clat_stat[l], first);
+			sum_stat(&dst->slat_stat[l], &src->slat_stat[l], first);
+			sum_stat(&dst->lat_stat[l], &src->lat_stat[l], first);
+			sum_stat(&dst->bw_stat[l], &src->bw_stat[l], first);
 
 			dst->io_bytes[l] += src->io_bytes[l];
 
 			if (dst->runtime[l] < src->runtime[l])
 				dst->runtime[l] = src->runtime[l];
 		} else {
-			sum_stat(&dst->clat_stat[0], &src->clat_stat[l], nr);
-			sum_stat(&dst->slat_stat[0], &src->slat_stat[l], nr);
-			sum_stat(&dst->lat_stat[0], &src->lat_stat[l], nr);
-			sum_stat(&dst->bw_stat[0], &src->bw_stat[l], nr);
+			sum_stat(&dst->clat_stat[0], &src->clat_stat[l], first);
+			sum_stat(&dst->slat_stat[0], &src->slat_stat[l], first);
+			sum_stat(&dst->lat_stat[0], &src->lat_stat[l], first);
+			sum_stat(&dst->bw_stat[0], &src->bw_stat[l], first);
 
 			dst->io_bytes[0] += src->io_bytes[l];
 
 			if (dst->runtime[0] < src->runtime[l])
 				dst->runtime[0] = src->runtime[l];
+
+			/*
+			 * We're summing to the same destination, so override
+			 * 'first' after the first iteration of the loop
+			 */
+			first = false;
 		}
 	}
 
@@ -1386,6 +1456,9 @@ void __show_run_stats(void)
 	int unit_base_warned = 0;
 	struct json_object *root = NULL;
 	struct json_array *array = NULL;
+	struct buf_output output[FIO_OUTPUT_NR];
+	struct flist_head **opt_lists;
+
 	runstats = malloc(sizeof(struct group_run_stats) * (groupid + 1));
 
 	for (i = 0; i < groupid + 1; i++)
@@ -1410,9 +1483,12 @@ void __show_run_stats(void)
 	}
 
 	threadstats = malloc(nr_ts * sizeof(struct thread_stat));
+	opt_lists = malloc(nr_ts * sizeof(struct flist_head *));
 
-	for (i = 0; i < nr_ts; i++)
+	for (i = 0; i < nr_ts; i++) {
 		init_thread_stat(&threadstats[i]);
+		opt_lists[i] = NULL;
+	}
 
 	j = 0;
 	last_ts = -1;
@@ -1431,6 +1507,7 @@ void __show_run_stats(void)
 		ts->clat_percentiles = td->o.clat_percentiles;
 		ts->percentile_precision = td->o.percentile_precision;
 		memcpy(ts->percentile_list, td->o.percentile_list, sizeof(td->o.percentile_list));
+		opt_lists[j] = &td->opt_list;
 
 		idx++;
 		ts->members++;
@@ -1496,7 +1573,7 @@ void __show_run_stats(void)
 		for (k = 0; k < ts->nr_block_infos; k++)
 			ts->block_infos[k] = td->ts.block_infos[k];
 
-		sum_thread_stats(ts, &td->ts, idx);
+		sum_thread_stats(ts, &td->ts, idx == 1);
 	}
 
 	for (i = 0; i < nr_ts; i++) {
@@ -1545,12 +1622,16 @@ void __show_run_stats(void)
 		}
 	}
 
+	for (i = 0; i < FIO_OUTPUT_NR; i++)
+		buf_output_init(&output[i]);
+
 	/*
 	 * don't overwrite last signal output
 	 */
-	if (output_format == FIO_OUTPUT_NORMAL)
-		log_info("\n");
-	else if (output_format == FIO_OUTPUT_JSON) {
+	if (output_format & FIO_OUTPUT_NORMAL)
+		log_buf(&output[__FIO_OUTPUT_NORMAL], "\n");
+	if (output_format & FIO_OUTPUT_JSON) {
+		struct thread_data *global;
 		char time_buf[32];
 		time_t time_p;
 
@@ -1563,32 +1644,41 @@ void __show_run_stats(void)
 		json_object_add_value_string(root, "fio version", fio_version_string);
 		json_object_add_value_int(root, "timestamp", time_p);
 		json_object_add_value_string(root, "time", time_buf);
+		global = get_global_options();
+		json_add_job_opts(root, "global options", &global->opt_list, false);
 		array = json_create_array();
 		json_object_add_value_array(root, "jobs", array);
 	}
+
+	if (is_backend)
+		fio_server_send_job_options(&get_global_options()->opt_list, -1U);
 
 	for (i = 0; i < nr_ts; i++) {
 		ts = &threadstats[i];
 		rs = &runstats[ts->groupid];
 
-		if (is_backend)
+		if (is_backend) {
+			fio_server_send_job_options(opt_lists[i], i);
 			fio_server_send_ts(ts, rs);
-		else if (output_format == FIO_OUTPUT_TERSE)
-			show_thread_status_terse(ts, rs);
-		else if (output_format == FIO_OUTPUT_JSON) {
-			struct json_object *tmp = show_thread_status_json(ts, rs);
-			json_array_add_value_object(array, tmp);
-		} else
-			show_thread_status_normal(ts, rs);
+		} else {
+			if (output_format & FIO_OUTPUT_TERSE)
+				show_thread_status_terse(ts, rs, &output[__FIO_OUTPUT_TERSE]);
+			if (output_format & FIO_OUTPUT_JSON) {
+				struct json_object *tmp = show_thread_status_json(ts, rs, opt_lists[i]);
+				json_array_add_value_object(array, tmp);
+			}
+			if (output_format & FIO_OUTPUT_NORMAL)
+				show_thread_status_normal(ts, rs, &output[__FIO_OUTPUT_NORMAL]);
+		}
 	}
-	if (output_format == FIO_OUTPUT_JSON) {
+	if (!is_backend && (output_format & FIO_OUTPUT_JSON)) {
 		/* disk util stats, if any */
-		show_disk_util(1, root);
+		show_disk_util(1, root, &output[__FIO_OUTPUT_JSON]);
 
-		show_idle_prof_stats(FIO_OUTPUT_JSON, root);
+		show_idle_prof_stats(FIO_OUTPUT_JSON, root, &output[__FIO_OUTPUT_JSON]);
 
-		json_print_object(root);
-		log_info("\n");
+		json_print_object(root, &output[__FIO_OUTPUT_JSON]);
+		log_buf(&output[__FIO_OUTPUT_JSON], "\n");
 		json_free_object(root);
 	}
 
@@ -1598,30 +1688,26 @@ void __show_run_stats(void)
 		rs->groupid = i;
 		if (is_backend)
 			fio_server_send_gs(rs);
-		else if (output_format == FIO_OUTPUT_NORMAL)
-			show_group_stats(rs);
+		else if (output_format & FIO_OUTPUT_NORMAL)
+			show_group_stats(rs, &output[__FIO_OUTPUT_NORMAL]);
 	}
 
 	if (is_backend)
 		fio_server_send_du();
-	else if (output_format == FIO_OUTPUT_NORMAL) {
-		show_disk_util(0, NULL);
-		show_idle_prof_stats(FIO_OUTPUT_NORMAL, NULL);
+	else if (output_format & FIO_OUTPUT_NORMAL) {
+		show_disk_util(0, NULL, &output[__FIO_OUTPUT_NORMAL]);
+		show_idle_prof_stats(FIO_OUTPUT_NORMAL, NULL, &output[__FIO_OUTPUT_NORMAL]);
 	}
 
-	if ( !(output_format == FIO_OUTPUT_TERSE) && append_terse_output) {
-		log_info("\nAdditional Terse Output:\n");
-
-		for (i = 0; i < nr_ts; i++) {
-			ts = &threadstats[i];
-			rs = &runstats[ts->groupid];
-			show_thread_status_terse(ts, rs);
-		}
+	for (i = 0; i < FIO_OUTPUT_NR; i++) {
+		buf_output_flush(&output[i]);
+		buf_output_free(&output[i]);
 	}
 
 	log_info_flush();
 	free(runstats);
 	free(threadstats);
+	free(opt_lists);
 }
 
 void show_run_stats(void)
@@ -1644,19 +1730,19 @@ void __show_running_run_stats(void)
 	fio_gettime(&tv, NULL);
 
 	for_each_td(td, i) {
-		rt[i] = mtime_since(&td->start, &tv);
-		if (td_read(td) && td->io_bytes[DDIR_READ])
-			td->ts.runtime[DDIR_READ] += rt[i];
-		if (td_write(td) && td->io_bytes[DDIR_WRITE])
-			td->ts.runtime[DDIR_WRITE] += rt[i];
-		if (td_trim(td) && td->io_bytes[DDIR_TRIM])
-			td->ts.runtime[DDIR_TRIM] += rt[i];
-
 		td->update_rusage = 1;
 		td->ts.io_bytes[DDIR_READ] = td->io_bytes[DDIR_READ];
 		td->ts.io_bytes[DDIR_WRITE] = td->io_bytes[DDIR_WRITE];
 		td->ts.io_bytes[DDIR_TRIM] = td->io_bytes[DDIR_TRIM];
 		td->ts.total_run_time = mtime_since(&td->epoch, &tv);
+
+		rt[i] = mtime_since(&td->start, &tv);
+		if (td_read(td) && td->ts.io_bytes[DDIR_READ])
+			td->ts.runtime[DDIR_READ] += rt[i];
+		if (td_write(td) && td->ts.io_bytes[DDIR_WRITE])
+			td->ts.runtime[DDIR_WRITE] += rt[i];
+		if (td_trim(td) && td->ts.io_bytes[DDIR_TRIM])
+			td->ts.runtime[DDIR_TRIM] += rt[i];
 	}
 
 	for_each_td(td, i) {
@@ -1672,11 +1758,11 @@ void __show_running_run_stats(void)
 	__show_run_stats();
 
 	for_each_td(td, i) {
-		if (td_read(td) && td->io_bytes[DDIR_READ])
+		if (td_read(td) && td->ts.io_bytes[DDIR_READ])
 			td->ts.runtime[DDIR_READ] -= rt[i];
-		if (td_write(td) && td->io_bytes[DDIR_WRITE])
+		if (td_write(td) && td->ts.io_bytes[DDIR_WRITE])
 			td->ts.runtime[DDIR_WRITE] -= rt[i];
-		if (td_trim(td) && td->io_bytes[DDIR_TRIM])
+		if (td_trim(td) && td->ts.io_bytes[DDIR_TRIM])
 			td->ts.runtime[DDIR_TRIM] -= rt[i];
 	}
 

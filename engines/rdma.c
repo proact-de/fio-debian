@@ -41,6 +41,7 @@
 
 #include "../fio.h"
 #include "../hash.h"
+#include "../optgroup.h"
 
 #include <rdma/rdma_cma.h>
 #include <infiniband/arch.h>
@@ -115,7 +116,7 @@ static struct fio_option options[] = {
 			  },
 			  { .ival = "recv",
 			    .oval = FIO_RDMA_CHA_RECV,
-			    .help = "Posted Recieve",
+			    .help = "Posted Receive",
 			  },
 		},
 		.category = FIO_OPT_C_ENGINE,

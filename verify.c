@@ -661,38 +661,63 @@ int verify_io_u_async(struct thread_data *td, struct io_u **io_u_ptr)
 	return 0;
 }
 
+/*
+ * Thanks Rusty, for spending the time so I don't have to.
+ *
+ * http://rusty.ozlabs.org/?p=560
+ */
+static int mem_is_zero(const void *data, size_t length)
+{
+	const unsigned char *p = data;
+	size_t len;
+
+	/* Check first 16 bytes manually */
+	for (len = 0; len < 16; len++) {
+		if (!length)
+			return 1;
+		if (*p)
+			return 0;
+		p++;
+		length--;
+	}
+
+	/* Now we know that's zero, memcmp with self. */
+	return memcmp(data, p, length) == 0;
+}
+
+static int mem_is_zero_slow(const void *data, size_t length, size_t *offset)
+{
+	const unsigned char *p = data;
+
+	*offset = 0;
+	while (length) {
+		if (*p)
+			break;
+		(*offset)++;
+		length--;
+		p++;
+	}
+
+	return !length;
+}
+
 static int verify_trimmed_io_u(struct thread_data *td, struct io_u *io_u)
 {
-	static char zero_buf[1024];
-	unsigned int this_len, len;
-	int ret = 0;
-	void *p;
+	size_t offset;
 
 	if (!td->o.trim_zero)
 		return 0;
 
-	len = io_u->buflen;
-	p = io_u->buf;
-	do {
-		this_len = sizeof(zero_buf);
-		if (this_len > len)
-			this_len = len;
-		if (memcmp(p, zero_buf, this_len)) {
-			ret = EILSEQ;
-			break;
-		}
-		len -= this_len;
-		p += this_len;
-	} while (len);
-
-	if (!ret)
+	if (mem_is_zero(io_u->buf, io_u->buflen))
 		return 0;
+
+	mem_is_zero_slow(io_u->buf, io_u->buflen, &offset);
 
 	log_err("trim: verify failed at file %s offset %llu, length %lu"
 		", block offset %lu\n",
 			io_u->file->file_name, io_u->offset, io_u->buflen,
-			(unsigned long) (p - io_u->buf));
-	return ret;
+			(unsigned long) offset);
+	return EILSEQ;
 }
 
 static int verify_header(struct io_u *io_u, struct thread_data *td,
@@ -755,6 +780,11 @@ err:
 	log_err(" at file %s offset %llu, length %u\n",
 		io_u->file->file_name,
 		io_u->offset + hdr_num * hdr_len, hdr_len);
+
+	if (td->o.verify_dump)
+		dump_buf(p, hdr_len, io_u->offset + hdr_num * hdr_len,
+				"hdr_fail", io_u->file);
+
 	return EILSEQ;
 }
 
@@ -1578,7 +1608,7 @@ int verify_state_hdr(struct verify_state_hdr *hdr, struct thread_io_list *s,
 	hdr->size = le64_to_cpu(hdr->size);
 	hdr->crc = le64_to_cpu(hdr->crc);
 
-	if (hdr->version != VSTATE_HDR_VERSION ||
+	if (hdr->version != VSTATE_HDR_VERSION &&
 	    hdr->version != VSTATE_HDR_VERSION_V1)
 		return 1;
 

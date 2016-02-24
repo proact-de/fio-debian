@@ -19,6 +19,7 @@ enum fio_memtype {
 	MEM_SHMHUGE,	/* use shared memory segments with huge pages */
 	MEM_MMAP,	/* use anonynomous mmap */
 	MEM_MMAPHUGE,	/* memory mapped huge file */
+	MEM_MMAPSHARED, /* use mmap with shared flag */
 };
 
 #define ERROR_STR_MAX	128
@@ -39,6 +40,7 @@ struct thread_options {
 	uint64_t set_options[NR_OPTS_SZ];
 	char *description;
 	char *name;
+	char *wait_for;
 	char *directory;
 	char *filename;
 	char *filename_format;
@@ -54,7 +56,8 @@ struct thread_options {
 	unsigned int iodepth;
 	unsigned int iodepth_low;
 	unsigned int iodepth_batch;
-	unsigned int iodepth_batch_complete;
+	unsigned int iodepth_batch_complete_min;
+	unsigned int iodepth_batch_complete_max;
 
 	unsigned long long size;
 	unsigned long long io_limit;
@@ -129,6 +132,7 @@ struct thread_options {
 	unsigned int verify_only;
 
 	unsigned int random_distribution;
+	unsigned int exitall_error;
 
 	fio_fp64_t zipf_theta;
 	fio_fp64_t pareto_h;
@@ -168,6 +172,7 @@ struct thread_options {
 	unsigned int numjobs;
 	os_cpu_mask_t cpumask;
 	os_cpu_mask_t verify_cpumask;
+	os_cpu_mask_t log_gz_cpumask;
 	unsigned int cpus_allowed_policy;
 	char *numa_cpunodes;
 	unsigned short numa_mem_mode;
@@ -229,6 +234,7 @@ struct thread_options {
 	unsigned int io_submit_mode;
 	unsigned int rate_iops[DDIR_RWDIR_CNT];
 	unsigned int rate_iops_min[DDIR_RWDIR_CNT];
+	unsigned int rate_process;
 
 	char *ioscheduler;
 
@@ -284,6 +290,7 @@ struct thread_options_pack {
 	uint64_t set_options[NR_OPTS_SZ];
 	uint8_t description[FIO_TOP_STR_MAX];
 	uint8_t name[FIO_TOP_STR_MAX];
+	uint8_t wait_for[FIO_TOP_STR_MAX];
 	uint8_t directory[FIO_TOP_STR_MAX];
 	uint8_t filename[FIO_TOP_STR_MAX];
 	uint8_t filename_format[FIO_TOP_STR_MAX];
@@ -299,7 +306,9 @@ struct thread_options_pack {
 	uint32_t iodepth;
 	uint32_t iodepth_low;
 	uint32_t iodepth_batch;
-	uint32_t iodepth_batch_complete;
+	uint32_t iodepth_batch_complete_min;
+	uint32_t iodepth_batch_complete_max;
+	uint32_t __proper_alignment_for_64b;
 
 	uint64_t size;
 	uint64_t io_limit;
@@ -370,7 +379,7 @@ struct thread_options_pack {
 	uint32_t bs_is_seq_rand;
 
 	uint32_t random_distribution;
-	uint32_t pad;
+	uint32_t exitall_error;
 
 	fio_fp64_t zipf_theta;
 	fio_fp64_t pareto_h;
@@ -408,8 +417,14 @@ struct thread_options_pack {
 	uint32_t stonewall;
 	uint32_t new_group;
 	uint32_t numjobs;
+	/*
+	 * We currently can't convert these, so don't enable them
+	 */
+#if 0
 	uint8_t cpumask[FIO_TOP_STR_MAX];
 	uint8_t verify_cpumask[FIO_TOP_STR_MAX];
+	uint8_t log_gz_cpumask[FIO_TOP_STR_MAX];
+#endif
 	uint32_t cpus_allowed_policy;
 	uint32_t iolog;
 	uint32_t rwmixcycle;
@@ -467,6 +482,8 @@ struct thread_options_pack {
 	uint32_t io_submit_mode;
 	uint32_t rate_iops[DDIR_RWDIR_CNT];
 	uint32_t rate_iops_min[DDIR_RWDIR_CNT];
+	uint32_t rate_process;
+	uint32_t padding_0;   /* for alignment assert */
 
 	uint8_t ioscheduler[FIO_TOP_STR_MAX];
 

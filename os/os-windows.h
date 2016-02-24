@@ -16,8 +16,14 @@
 #include "../file.h"
 #include "../log.h"
 #include "../lib/hweight.h"
+#include "../oslib/strcasestr.h"
 
 #include "windows/posix.h"
+
+/* Cygwin doesn't define rand_r if C99 or newer is being used */
+#if defined(WIN32) && !defined(rand_r)
+int rand_r(unsigned *);
+#endif
 
 #ifndef PTHREAD_STACK_MIN
 #define PTHREAD_STACK_MIN 65535
