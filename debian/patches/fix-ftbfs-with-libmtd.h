@@ -3,9 +3,9 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
 
 --- a/oslib/libmtd.h
 +++ b/oslib/libmtd.h
-@@ -29,6 +29,8 @@
- extern "C" {
- #endif
+@@ -32,6 +32,8 @@
+ // Needed for uint8_t, uint64_t
+ #include <stdint.h>
  
 +#include <stdint.h>
 +
