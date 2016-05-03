@@ -7,6 +7,7 @@ fio (2.9-1) UNRELEASED; urgency=medium
     * Removed Michael Prokop as uploader as per his request. Thanks
       for sponsoring the package initially.
     * Added Sven Hoexter as uploader as he sponsored the last versions.
+  * docs: Add file MORAL-LICENSE.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 03 May 2016 16:44:40 +0200
 
