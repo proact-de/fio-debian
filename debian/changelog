@@ -2,7 +2,11 @@ fio (2.9-1) UNRELEASED; urgency=medium
 
   * Imported Upstream version 2.9
   * patches: Refreshed, no manual changes needed.
-  * control: Upgraded to standards version 3.9.8.0, no changes needed.
+  * control:
+    * Upgraded to standards version 3.9.8.0, no changes needed.
+    * Removed Michael Prokop as uploader as per his request. Thanks
+      for sponsoring the package initially.
+    * Added Sven Hoexter as uploader as he sponsored the last versions.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 03 May 2016 16:44:40 +0200
 
