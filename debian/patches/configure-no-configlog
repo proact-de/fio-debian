@@ -3,7 +3,7 @@ Author: Martin Steigerwald <ms@teamix.de>
 
 --- a/configure
 +++ b/configure
-@@ -1740,3 +1740,5 @@
+@@ -1837,3 +1837,5 @@
  include \$(SRCDIR)/Makefile
  EOF
  fi
