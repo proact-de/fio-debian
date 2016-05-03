@@ -1,8 +1,7 @@
 fio (2.9-1) unstable; urgency=medium
 
   * Imported Upstream version 2.9.
-    * Fixes FTBFS: libmtd.h:288:8: error: unknown type name 'uint8_t'
-      (Closes: #815735).
+    * Fixes fio: Crashes with alignment error on ARM (Closes: #821767).
   * patches: Refreshed, no manual changes needed.
   * control:
     * Upgraded to standards version 3.9.8.0, no changes needed.
