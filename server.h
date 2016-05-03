@@ -38,7 +38,7 @@ struct fio_net_cmd_reply {
 };
 
 enum {
-	FIO_SERVER_VER			= 51,
+	FIO_SERVER_VER			= 53,
 
 	FIO_SERVER_MAX_FRAGMENT_PDU	= 1024,
 	FIO_SERVER_MAX_CMD_MB		= 2048,
@@ -211,7 +211,7 @@ extern void fio_server_send_ts(struct thread_stat *, struct group_run_stats *);
 extern void fio_server_send_gs(struct group_run_stats *);
 extern void fio_server_send_du(void);
 extern void fio_server_send_job_options(struct flist_head *, unsigned int);
-extern int fio_server_get_verify_state(const char *, int, void **, int *);
+extern int fio_server_get_verify_state(const char *, int, void **);
 
 extern struct fio_net_cmd *fio_net_recv_cmd(int sk, bool wait);
 

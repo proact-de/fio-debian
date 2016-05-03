@@ -20,6 +20,14 @@
 
 char client_sockaddr_str[INET6_ADDRSTRLEN] = { 0 };
 
+struct pattern_fmt_desc fmt_desc[] = {
+	{
+		.fmt   = "%o",
+		.len   = FIELD_SIZE(struct io_u *, offset),
+		.paste = paste_blockoff
+	}
+};
+
 /*
  * Check if mmap/mmaphuge has a :/foo/bar/file at the end. If so, return that.
  */
@@ -44,34 +52,27 @@ static int bs_cmp(const void *p1, const void *p2)
 	return (int) bsp1->perc - (int) bsp2->perc;
 }
 
-static int bssplit_ddir(struct thread_options *o, int ddir, char *str)
+struct split {
+	unsigned int nr;
+	unsigned int val1[100];
+	unsigned int val2[100];
+};
+
+static int split_parse_ddir(struct thread_options *o, struct split *split,
+			    enum fio_ddir ddir, char *str)
 {
-	struct bssplit *bssplit;
-	unsigned int i, perc, perc_missing;
-	unsigned int max_bs, min_bs;
+	unsigned int i, perc;
 	long long val;
 	char *fname;
 
-	o->bssplit_nr[ddir] = 4;
-	bssplit = malloc(4 * sizeof(struct bssplit));
+	split->nr = 0;
 
 	i = 0;
-	max_bs = 0;
-	min_bs = -1;
 	while ((fname = strsep(&str, ":")) != NULL) {
 		char *perc_str;
 
 		if (!strlen(fname))
 			break;
-
-		/*
-		 * grow struct buffer, if needed
-		 */
-		if (i == o->bssplit_nr[ddir]) {
-			o->bssplit_nr[ddir] <<= 1;
-			bssplit = realloc(bssplit, o->bssplit_nr[ddir]
-						  * sizeof(struct bssplit));
-		}
 
 		perc_str = strstr(fname, "/");
 		if (perc_str) {
@@ -87,28 +88,53 @@ static int bssplit_ddir(struct thread_options *o, int ddir, char *str)
 
 		if (str_to_decimal(fname, &val, 1, o, 0, 0)) {
 			log_err("fio: bssplit conversion failed\n");
-			free(bssplit);
 			return 1;
 		}
 
-		if (val > max_bs)
-			max_bs = val;
-		if (val < min_bs)
-			min_bs = val;
-
-		bssplit[i].bs = val;
-		bssplit[i].perc = perc;
+		split->val1[i] = val;
+		split->val2[i] = perc;
 		i++;
+		if (i == 100)
+			break;
 	}
 
-	o->bssplit_nr[ddir] = i;
+	split->nr = i;
+	return 0;
+}
+
+static int bssplit_ddir(struct thread_options *o, enum fio_ddir ddir, char *str)
+{
+	unsigned int i, perc, perc_missing;
+	unsigned int max_bs, min_bs;
+	struct split split;
+
+	memset(&split, 0, sizeof(split));
+
+	if (split_parse_ddir(o, &split, ddir, str))
+		return 1;
+	if (!split.nr)
+		return 0;
+
+	max_bs = 0;
+	min_bs = -1;
+	o->bssplit[ddir] = malloc(split.nr * sizeof(struct bssplit));
+	o->bssplit_nr[ddir] = split.nr;
+	for (i = 0; i < split.nr; i++) {
+		if (split.val1[i] > max_bs)
+			max_bs = split.val1[i];
+		if (split.val1[i] < min_bs)
+			min_bs = split.val1[i];
+
+		o->bssplit[ddir][i].bs = split.val1[i];
+		o->bssplit[ddir][i].perc =split.val2[i];
+	}
 
 	/*
 	 * Now check if the percentages add up, and how much is missing
 	 */
 	perc = perc_missing = 0;
 	for (i = 0; i < o->bssplit_nr[ddir]; i++) {
-		struct bssplit *bsp = &bssplit[i];
+		struct bssplit *bsp = &o->bssplit[ddir][i];
 
 		if (bsp->perc == -1U)
 			perc_missing++;
@@ -118,7 +144,8 @@ static int bssplit_ddir(struct thread_options *o, int ddir, char *str)
 
 	if (perc > 100 && perc_missing > 1) {
 		log_err("fio: bssplit percentages add to more than 100%%\n");
-		free(bssplit);
+		free(o->bssplit[ddir]);
+		o->bssplit[ddir] = NULL;
 		return 1;
 	}
 
@@ -130,7 +157,7 @@ static int bssplit_ddir(struct thread_options *o, int ddir, char *str)
 		if (perc_missing == 1 && o->bssplit_nr[ddir] == 1)
 			perc = 100;
 		for (i = 0; i < o->bssplit_nr[ddir]; i++) {
-			struct bssplit *bsp = &bssplit[i];
+			struct bssplit *bsp = &o->bssplit[ddir][i];
 
 			if (bsp->perc == -1U)
 				bsp->perc = (100 - perc) / perc_missing;
@@ -143,60 +170,78 @@ static int bssplit_ddir(struct thread_options *o, int ddir, char *str)
 	/*
 	 * now sort based on percentages, for ease of lookup
 	 */
-	qsort(bssplit, o->bssplit_nr[ddir], sizeof(struct bssplit), bs_cmp);
-	o->bssplit[ddir] = bssplit;
+	qsort(o->bssplit[ddir], o->bssplit_nr[ddir], sizeof(struct bssplit), bs_cmp);
 	return 0;
 }
 
-static int str_bssplit_cb(void *data, const char *input)
+typedef int (split_parse_fn)(struct thread_options *, enum fio_ddir, char *);
+
+static int str_split_parse(struct thread_data *td, char *str, split_parse_fn *fn)
 {
-	struct thread_data *td = data;
-	char *str, *p, *odir, *ddir;
+	char *odir, *ddir;
 	int ret = 0;
-
-	if (parse_dryrun())
-		return 0;
-
-	p = str = strdup(input);
-
-	strip_blank_front(&str);
-	strip_blank_end(str);
 
 	odir = strchr(str, ',');
 	if (odir) {
 		ddir = strchr(odir + 1, ',');
 		if (ddir) {
-			ret = bssplit_ddir(&td->o, DDIR_TRIM, ddir + 1);
+			ret = fn(&td->o, DDIR_TRIM, ddir + 1);
 			if (!ret)
 				*ddir = '\0';
 		} else {
 			char *op;
 
 			op = strdup(odir + 1);
-			ret = bssplit_ddir(&td->o, DDIR_TRIM, op);
+			ret = fn(&td->o, DDIR_TRIM, op);
 
 			free(op);
 		}
 		if (!ret)
-			ret = bssplit_ddir(&td->o, DDIR_WRITE, odir + 1);
+			ret = fn(&td->o, DDIR_WRITE, odir + 1);
 		if (!ret) {
 			*odir = '\0';
-			ret = bssplit_ddir(&td->o, DDIR_READ, str);
+			ret = fn(&td->o, DDIR_READ, str);
 		}
 	} else {
 		char *op;
 
 		op = strdup(str);
-		ret = bssplit_ddir(&td->o, DDIR_WRITE, op);
+		ret = fn(&td->o, DDIR_WRITE, op);
 		free(op);
 
 		if (!ret) {
 			op = strdup(str);
-			ret = bssplit_ddir(&td->o, DDIR_TRIM, op);
+			ret = fn(&td->o, DDIR_TRIM, op);
 			free(op);
 		}
 		if (!ret)
-			ret = bssplit_ddir(&td->o, DDIR_READ, str);
+			ret = fn(&td->o, DDIR_READ, str);
+	}
+
+	return ret;
+}
+
+static int str_bssplit_cb(void *data, const char *input)
+{
+	struct thread_data *td = data;
+	char *str, *p;
+	int ret = 0;
+
+	p = str = strdup(input);
+
+	strip_blank_front(&str);
+	strip_blank_end(str);
+
+	ret = str_split_parse(td, str, bssplit_ddir);
+
+	if (parse_dryrun()) {
+		int i;
+
+		for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+			free(td->o.bssplit[i]);
+			td->o.bssplit[i] = NULL;
+			td->o.bssplit_nr[i] = 0;
+		}
 	}
 
 	free(p);
@@ -706,14 +751,199 @@ static int str_sfr_cb(void *data, const char *str)
 }
 #endif
 
+static int zone_cmp(const void *p1, const void *p2)
+{
+	const struct zone_split *zsp1 = p1;
+	const struct zone_split *zsp2 = p2;
+
+	return (int) zsp2->access_perc - (int) zsp1->access_perc;
+}
+
+static int zone_split_ddir(struct thread_options *o, enum fio_ddir ddir,
+			   char *str)
+{
+	unsigned int i, perc, perc_missing, sperc, sperc_missing;
+	struct split split;
+
+	memset(&split, 0, sizeof(split));
+
+	if (split_parse_ddir(o, &split, ddir, str))
+		return 1;
+	if (!split.nr)
+		return 0;
+
+	o->zone_split[ddir] = malloc(split.nr * sizeof(struct zone_split));
+	o->zone_split_nr[ddir] = split.nr;
+	for (i = 0; i < split.nr; i++) {
+		o->zone_split[ddir][i].access_perc = split.val1[i];
+		o->zone_split[ddir][i].size_perc = split.val2[i];
+	}
+
+	/*
+	 * Now check if the percentages add up, and how much is missing
+	 */
+	perc = perc_missing = 0;
+	sperc = sperc_missing = 0;
+	for (i = 0; i < o->zone_split_nr[ddir]; i++) {
+		struct zone_split *zsp = &o->zone_split[ddir][i];
+
+		if (zsp->access_perc == (uint8_t) -1U)
+			perc_missing++;
+		else
+			perc += zsp->access_perc;
+
+		if (zsp->size_perc == (uint8_t) -1U)
+			sperc_missing++;
+		else
+			sperc += zsp->size_perc;
+
+	}
+
+	if (perc > 100 || sperc > 100) {
+		log_err("fio: zone_split percentages add to more than 100%%\n");
+		free(o->zone_split[ddir]);
+		o->zone_split[ddir] = NULL;
+		return 1;
+	}
+	if (perc < 100) {
+		log_err("fio: access percentage don't add up to 100 for zoned "
+			"random distribution (got=%u)\n", perc);
+		free(o->zone_split[ddir]);
+		o->zone_split[ddir] = NULL;
+		return 1;
+	}
+
+	/*
+	 * If values didn't have a percentage set, divide the remains between
+	 * them.
+	 */
+	if (perc_missing) {
+		if (perc_missing == 1 && o->zone_split_nr[ddir] == 1)
+			perc = 100;
+		for (i = 0; i < o->zone_split_nr[ddir]; i++) {
+			struct zone_split *zsp = &o->zone_split[ddir][i];
+
+			if (zsp->access_perc == (uint8_t) -1U)
+				zsp->access_perc = (100 - perc) / perc_missing;
+		}
+	}
+	if (sperc_missing) {
+		if (sperc_missing == 1 && o->zone_split_nr[ddir] == 1)
+			sperc = 100;
+		for (i = 0; i < o->zone_split_nr[ddir]; i++) {
+			struct zone_split *zsp = &o->zone_split[ddir][i];
+
+			if (zsp->size_perc == (uint8_t) -1U)
+				zsp->size_perc = (100 - sperc) / sperc_missing;
+		}
+	}
+
+	/*
+	 * now sort based on percentages, for ease of lookup
+	 */
+	qsort(o->zone_split[ddir], o->zone_split_nr[ddir], sizeof(struct zone_split), zone_cmp);
+	return 0;
+}
+
+static void __td_zone_gen_index(struct thread_data *td, enum fio_ddir ddir)
+{
+	unsigned int i, j, sprev, aprev;
+
+	td->zone_state_index[ddir] = malloc(sizeof(struct zone_split_index) * 100);
+
+	sprev = aprev = 0;
+	for (i = 0; i < td->o.zone_split_nr[ddir]; i++) {
+		struct zone_split *zsp = &td->o.zone_split[ddir][i];
+
+		for (j = aprev; j < aprev + zsp->access_perc; j++) {
+			struct zone_split_index *zsi = &td->zone_state_index[ddir][j];
+
+			zsi->size_perc = sprev + zsp->size_perc;
+			zsi->size_perc_prev = sprev;
+		}
+
+		aprev += zsp->access_perc;
+		sprev += zsp->size_perc;
+	}
+}
+
+/*
+ * Generate state table for indexes, so we don't have to do it inline from
+ * the hot IO path
+ */
+static void td_zone_gen_index(struct thread_data *td)
+{
+	int i;
+
+	td->zone_state_index = malloc(DDIR_RWDIR_CNT *
+					sizeof(struct zone_split_index *));
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++)
+		__td_zone_gen_index(td, i);
+}
+
+static int parse_zoned_distribution(struct thread_data *td, const char *input)
+{
+	char *str, *p;
+	int i, ret = 0;
+
+	p = str = strdup(input);
+
+	strip_blank_front(&str);
+	strip_blank_end(str);
+
+	/* We expect it to start like that, bail if not */
+	if (strncmp(str, "zoned:", 6)) {
+		log_err("fio: mismatch in zoned input <%s>\n", str);
+		free(p);
+		return 1;
+	}
+	str += strlen("zoned:");
+
+	ret = str_split_parse(td, str, zone_split_ddir);
+
+	free(p);
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		int j;
+
+		dprint(FD_PARSE, "zone ddir %d (nr=%u): \n", i, td->o.zone_split_nr[i]);
+
+		for (j = 0; j < td->o.zone_split_nr[i]; j++) {
+			struct zone_split *zsp = &td->o.zone_split[i][j];
+
+			dprint(FD_PARSE, "\t%d: %u/%u\n", j, zsp->access_perc,
+								zsp->size_perc);
+		}
+	}
+
+	if (parse_dryrun()) {
+		int i;
+
+		for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+			free(td->o.zone_split[i]);
+			td->o.zone_split[i] = NULL;
+			td->o.zone_split_nr[i] = 0;
+		}
+
+		return ret;
+	}
+
+	if (!ret)
+		td_zone_gen_index(td);
+	else {
+		for (i = 0; i < DDIR_RWDIR_CNT; i++)
+			td->o.zone_split_nr[i] = 0;
+	}
+
+	return ret;
+}
+
 static int str_random_distribution_cb(void *data, const char *str)
 {
 	struct thread_data *td = data;
 	double val;
 	char *nr;
-
-	if (parse_dryrun())
-		return 0;
 
 	if (td->o.random_distribution == FIO_RAND_DIST_ZIPF)
 		val = FIO_DEF_ZIPF;
@@ -721,6 +951,8 @@ static int str_random_distribution_cb(void *data, const char *str)
 		val = FIO_DEF_PARETO;
 	else if (td->o.random_distribution == FIO_RAND_DIST_GAUSS)
 		val = 0.0;
+	else if (td->o.random_distribution == FIO_RAND_DIST_ZONED)
+		return parse_zoned_distribution(td, str);
 	else
 		return 0;
 
@@ -738,18 +970,24 @@ static int str_random_distribution_cb(void *data, const char *str)
 			log_err("fio: zipf theta must different than 1.0\n");
 			return 1;
 		}
+		if (parse_dryrun())
+			return 0;
 		td->o.zipf_theta.u.f = val;
 	} else if (td->o.random_distribution == FIO_RAND_DIST_PARETO) {
 		if (val <= 0.00 || val >= 1.00) {
 			log_err("fio: pareto input out of range (0 < input < 1.0)\n");
 			return 1;
 		}
+		if (parse_dryrun())
+			return 0;
 		td->o.pareto_h.u.f = val;
 	} else {
 		if (val <= 0.00 || val >= 100.0) {
 			log_err("fio: normal deviation out of range (0 < input < 100.0)\n");
 			return 1;
 		}
+		if (parse_dryrun())
+			return 0;
 		td->o.gauss_dev.u.f = val;
 	}
 
@@ -954,20 +1192,13 @@ static int str_dedupe_cb(void *data, unsigned long long *il)
 
 static int str_verify_pattern_cb(void *data, const char *input)
 {
-	struct pattern_fmt_desc fmt_desc[] = {
-		{
-			.fmt   = "%o",
-			.len   = FIELD_SIZE(struct io_u *, offset),
-			.paste = paste_blockoff
-		}
-	};
 	struct thread_data *td = data;
 	int ret;
 
 	td->o.verify_fmt_sz = ARRAY_SIZE(td->o.verify_fmt);
 	ret = parse_and_fill_pattern(input, strlen(input), td->o.verify_pattern,
-			MAX_PATTERN_SIZE, fmt_desc, sizeof(fmt_desc),
-			td->o.verify_fmt, &td->o.verify_fmt_sz);
+				     MAX_PATTERN_SIZE, fmt_desc, sizeof(fmt_desc),
+				     td->o.verify_fmt, &td->o.verify_fmt_sz);
 	if (ret < 0)
 		return 1;
 
@@ -1238,6 +1469,11 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 #ifdef CONFIG_PWRITEV
 			  { .ival = "pvsync",
 			    .help = "Use preadv/pwritev",
+			  },
+#endif
+#ifdef CONFIG_PWRITEV2
+			  { .ival = "pvsync2",
+			    .help = "Use preadv2/pwritev2",
 			  },
 #endif
 #ifdef CONFIG_LIBAIO
@@ -1704,6 +1940,11 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .oval = FIO_RAND_DIST_GAUSS,
 			    .help = "Normal (gaussian) distribution",
 			  },
+			  { .ival = "zoned",
+			    .oval = FIO_RAND_DIST_ZONED,
+			    .help = "Zoned random distribution",
+			  },
+
 		},
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_RANDOM,
@@ -3069,6 +3310,16 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_INT,
 		.off1	= td_var_offset(log_avg_msec),
 		.help	= "Average bw/iops/lat logs over this period of time",
+		.def	= "0",
+		.category = FIO_OPT_C_LOG,
+		.group	= FIO_OPT_G_INVALID,
+	},
+	{
+		.name	= "log_max_value",
+		.lname	= "Log maximum instead of average",
+		.type	= FIO_OPT_BOOL,
+		.off1	= td_var_offset(log_max),
+		.help	= "Log max sample in a window instead of average",
 		.def	= "0",
 		.category = FIO_OPT_C_LOG,
 		.group	= FIO_OPT_G_INVALID,

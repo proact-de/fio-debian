@@ -25,10 +25,16 @@ enum fio_memtype {
 #define ERROR_STR_MAX	128
 
 #define BSSPLIT_MAX	64
+#define ZONESPLIT_MAX	64
 
 struct bssplit {
 	uint32_t bs;
 	uint32_t perc;
+};
+
+struct zone_split {
+	uint8_t access_perc;
+	uint8_t size_perc;
 };
 
 #define NR_OPTS_SZ	(FIO_MAX_OPTS / (8 * sizeof(uint64_t)))
@@ -120,6 +126,7 @@ struct thread_options {
 	unsigned long long rand_seed;
 	unsigned int dep_use_os_rand;
 	unsigned int log_avg_msec;
+	unsigned int log_max;
 	unsigned int log_offset;
 	unsigned int log_gz;
 	unsigned int log_gz_store;
@@ -133,6 +140,9 @@ struct thread_options {
 
 	unsigned int random_distribution;
 	unsigned int exitall_error;
+
+	struct zone_split *zone_split[DDIR_RWDIR_CNT];
+	unsigned int zone_split_nr[DDIR_RWDIR_CNT];
 
 	fio_fp64_t zipf_theta;
 	fio_fp64_t pareto_h;
@@ -369,6 +379,7 @@ struct thread_options_pack {
 	uint64_t rand_seed;
 	uint32_t dep_use_os_rand;
 	uint32_t log_avg_msec;
+	uint32_t log_max;
 	uint32_t log_offset;
 	uint32_t log_gz;
 	uint32_t log_gz_store;
@@ -380,6 +391,9 @@ struct thread_options_pack {
 
 	uint32_t random_distribution;
 	uint32_t exitall_error;
+
+	struct zone_split zone_split[DDIR_RWDIR_CNT][ZONESPLIT_MAX];
+	uint32_t zone_split_nr[DDIR_RWDIR_CNT];
 
 	fio_fp64_t zipf_theta;
 	fio_fp64_t pareto_h;
@@ -397,6 +411,7 @@ struct thread_options_pack {
 	uint32_t fsync_blocks;
 	uint32_t fdatasync_blocks;
 	uint32_t barrier_blocks;
+	uint32_t pad1;
 	uint64_t start_delay;
 	uint64_t start_delay_high;
 	uint64_t timeout;
@@ -461,6 +476,7 @@ struct thread_options_pack {
 	uint64_t trim_backlog;
 	uint32_t clat_percentiles;
 	uint32_t percentile_precision;
+	uint32_t pad2;
 	fio_fp64_t percentile_list[FIO_IO_U_LIST_MAX_LEN];
 
 	uint8_t read_iolog_file[FIO_TOP_STR_MAX];
@@ -483,7 +499,6 @@ struct thread_options_pack {
 	uint32_t rate_iops[DDIR_RWDIR_CNT];
 	uint32_t rate_iops_min[DDIR_RWDIR_CNT];
 	uint32_t rate_process;
-	uint32_t padding_0;   /* for alignment assert */
 
 	uint8_t ioscheduler[FIO_TOP_STR_MAX];
 
@@ -516,6 +531,7 @@ struct thread_options_pack {
 	uint64_t number_ios;
 
 	uint32_t sync_file_range;
+	uint32_t pad3;
 
 	uint64_t latency_target;
 	uint64_t latency_window;

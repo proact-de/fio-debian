@@ -347,7 +347,7 @@ err:
 	return NULL;
 }
 
-int fio_client_add_ini_file(void *cookie, const char *ini_file, int remote)
+int fio_client_add_ini_file(void *cookie, const char *ini_file, bool remote)
 {
 	struct fio_client *client = cookie;
 	struct client_file *cf;
@@ -789,7 +789,7 @@ static int __fio_client_send_local_ini(struct fio_client *client,
 }
 
 int fio_client_send_ini(struct fio_client *client, const char *filename,
-			int remote)
+			bool remote)
 {
 	int ret;
 
@@ -816,6 +816,8 @@ int fio_clients_send_ini(const char *filename)
 	struct flist_head *entry, *tmp;
 
 	flist_for_each_safe(entry, tmp, &client_list) {
+		bool failed = false;
+
 		client = flist_entry(entry, struct fio_client, list);
 
 		if (client->nr_files) {
@@ -827,12 +829,13 @@ int fio_clients_send_ini(const char *filename)
 				cf = &client->files[i];
 
 				if (fio_client_send_cf(client, cf)) {
+					failed = true;
 					remove_client(client);
 					break;
 				}
 			}
 		}
-		if (client->sent_job)
+		if (client->sent_job || failed)
 			continue;
 		if (!filename || fio_client_send_ini(client, filename, 0))
 			remove_client(client);
