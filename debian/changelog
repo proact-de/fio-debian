@@ -1,7 +1,6 @@
 fio (2.9-1) unstable; urgency=medium
 
   * Imported Upstream version 2.9.
-    * Fixes fio: Crashes with alignment error on ARM (Closes: #821767).
   * patches: Refreshed, no manual changes needed.
   * control:
     * Upgraded to standards version 3.9.8.0, no changes needed.
