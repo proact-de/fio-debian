@@ -309,6 +309,8 @@ requeue:
 		put_io_u(td, io_u);
 		return true;
 	} else if (ret == FIO_Q_QUEUED) {
+		if (td_io_commit(td))
+			return true;
 		if (io_u_queued_complete(td, 1) < 0)
 			return true;
 	} else if (ret == FIO_Q_COMPLETED) {
@@ -520,6 +522,14 @@ sync_done:
 			if (*ret < 0)
 				break;
 		}
+
+		/*
+		 * when doing I/O (not when verifying),
+		 * check for any errors that are to be ignored
+		 */
+		if (!from_verify)
+			break;
+
 		return 0;
 	case FIO_Q_QUEUED:
 		/*
@@ -871,7 +881,14 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 		if (flow_threshold_exceeded(td))
 			continue;
 
-		if (!td->o.time_based && bytes_issued >= total_bytes)
+		/*
+		 * Break if we exceeded the bytes. The exception is time
+		 * based runs, but we still need to break out of the loop
+		 * for those to run verification, if enabled.
+		 */
+		if (bytes_issued >= total_bytes &&
+		    (!td->o.time_based ||
+		     (td->o.time_based && td->o.verify != VERIFY_NONE)))
 			break;
 
 		io_u = get_io_u(td);
@@ -1053,6 +1070,41 @@ reap:
 		bytes_done[i] = td->bytes_done[i] - bytes_done[i];
 }
 
+static void free_file_completion_logging(struct thread_data *td)
+{
+	struct fio_file *f;
+	unsigned int i;
+
+	for_each_file(td, f, i) {
+		if (!f->last_write_comp)
+			break;
+		sfree(f->last_write_comp);
+	}
+}
+
+static int init_file_completion_logging(struct thread_data *td,
+					unsigned int depth)
+{
+	struct fio_file *f;
+	unsigned int i;
+
+	if (td->o.verify == VERIFY_NONE || !td->o.verify_state_save)
+		return 0;
+
+	for_each_file(td, f, i) {
+		f->last_write_comp = scalloc(depth, sizeof(uint64_t));
+		if (!f->last_write_comp)
+			goto cleanup;
+	}
+
+	return 0;
+
+cleanup:
+	free_file_completion_logging(td);
+	log_err("fio: failed to alloc write comp data\n");
+	return 1;
+}
+
 static void cleanup_io_u(struct thread_data *td)
 {
 	struct io_u *io_u;
@@ -1071,8 +1123,7 @@ static void cleanup_io_u(struct thread_data *td)
 	io_u_qexit(&td->io_u_freelist);
 	io_u_qexit(&td->io_u_all);
 
-	if (td->last_write_comp)
-		sfree(td->last_write_comp);
+	free_file_completion_logging(td);
 }
 
 static int init_io_u(struct thread_data *td)
@@ -1189,13 +1240,8 @@ static int init_io_u(struct thread_data *td)
 		p += max_bs;
 	}
 
-	if (td->o.verify != VERIFY_NONE) {
-		td->last_write_comp = scalloc(max_units, sizeof(uint64_t));
-		if (!td->last_write_comp) {
-			log_err("fio: failed to alloc write comp data\n");
-			return 1;
-		}
-	}
+	if (init_file_completion_logging(td, max_units))
+		return 1;
 
 	return 0;
 }
@@ -1701,6 +1747,15 @@ err:
 	cgroup_shutdown(td, &cgroup_mnt);
 	verify_free_state(td);
 
+	if (td->zone_state_index) {
+		int i;
+
+		for (i = 0; i < DDIR_RWDIR_CNT; i++)
+			free(td->zone_state_index[i]);
+		free(td->zone_state_index);
+		td->zone_state_index = NULL;
+	}
+
 	if (fio_option_is_set(o, cpumask)) {
 		ret = fio_cpuset_exit(&o->cpumask);
 		if (ret)
@@ -1938,12 +1993,11 @@ static int fio_verify_load_state(struct thread_data *td)
 
 	if (is_backend) {
 		void *data;
-		int ver;
 
 		ret = fio_server_get_verify_state(td->o.name,
-					td->thread_number - 1, &data, &ver);
+					td->thread_number - 1, &data);
 		if (!ret)
-			verify_convert_assign_state(td, data, ver);
+			verify_assign_state(td, data);
 	} else
 		ret = verify_load_state(td, "local");
 

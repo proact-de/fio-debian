@@ -971,9 +971,9 @@ static int handle_trigger_cmd(struct fio_net_cmd *cmd)
 		struct all_io_list state;
 
 		state.threads = cpu_to_le64((uint64_t) 0);
-		fio_net_queue_cmd(FIO_NET_CMD_VTRIGGER, &state, sizeof(state), NULL, SK_F_COPY);
+		fio_net_queue_cmd(FIO_NET_CMD_VTRIGGER, &state, sizeof(state), NULL, SK_F_COPY | SK_F_INLINE);
 	} else
-		fio_net_queue_cmd(FIO_NET_CMD_VTRIGGER, rep, sz, NULL, SK_F_FREE);
+		fio_net_queue_cmd(FIO_NET_CMD_VTRIGGER, rep, sz, NULL, SK_F_FREE | SK_F_INLINE);
 
 	exec_trigger(buf);
 	return 0;
@@ -1819,7 +1819,7 @@ void fio_server_send_start(struct thread_data *td)
 }
 
 int fio_server_get_verify_state(const char *name, int threadnumber,
-				void **datap, int *version)
+				void **datap)
 {
 	struct thread_io_list *s;
 	struct cmd_sendfile out;
@@ -1871,7 +1871,7 @@ fail:
 	 * the header, and the thread_io_list checksum
 	 */
 	s = rep->data + sizeof(struct verify_state_hdr);
-	if (verify_state_hdr(rep->data, s, version)) {
+	if (verify_state_hdr(rep->data, s)) {
 		ret = EILSEQ;
 		goto fail;
 	}
@@ -1916,11 +1916,10 @@ static int fio_init_server_ip(void)
 		return -1;
 	}
 #ifdef SO_REUSEPORT
-	if (setsockopt(sk, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
-		log_err("fio: setsockopt(REUSEPORT): %s\n", strerror(errno));
-		close(sk);
-		return -1;
-	}
+	/*
+	 * Not fatal if fails, so just ignore it if that happens
+	 */
+	setsockopt(sk, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 #endif
 
 	if (use_ipv6) {

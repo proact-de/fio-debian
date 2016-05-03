@@ -919,11 +919,13 @@ static int exists_and_not_file(const char *filename)
 	return 1;
 }
 
-static void td_fill_rand_seeds_internal(struct thread_data *td, int use64)
+static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 {
+	int i;
+
 	init_rand_seed(&td->bsrange_state, td->rand_seeds[FIO_RAND_BS_OFF], use64);
 	init_rand_seed(&td->verify_state, td->rand_seeds[FIO_RAND_VER_OFF], use64);
-	init_rand_seed(&td->rwmix_state, td->rand_seeds[FIO_RAND_MIX_OFF], use64);
+	init_rand_seed(&td->rwmix_state, td->rand_seeds[FIO_RAND_MIX_OFF], false);
 
 	if (td->o.file_service_type == FIO_FSERVICE_RANDOM)
 		init_rand_seed(&td->next_file_state, td->rand_seeds[FIO_RAND_FILE_OFF], use64);
@@ -932,6 +934,8 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, int use64)
 	init_rand_seed(&td->trim_state, td->rand_seeds[FIO_RAND_TRIM_OFF], use64);
 	init_rand_seed(&td->delay_state, td->rand_seeds[FIO_RAND_START_DELAY], use64);
 	init_rand_seed(&td->poisson_state, td->rand_seeds[FIO_RAND_POISSON_OFF], 0);
+	init_rand_seed(&td->dedupe_state, td->rand_seeds[FIO_DEDUPE_OFF], false);
+	init_rand_seed(&td->zone_state, td->rand_seeds[FIO_RAND_ZONE_OFF], false);
 
 	if (!td_random(td))
 		return;
@@ -940,14 +944,17 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, int use64)
 		td->rand_seeds[FIO_RAND_BLOCK_OFF] = FIO_RANDSEED * td->thread_number;
 
 	init_rand_seed(&td->random_state, td->rand_seeds[FIO_RAND_BLOCK_OFF], use64);
-	init_rand_seed(&td->seq_rand_state[DDIR_READ], td->rand_seeds[FIO_RAND_SEQ_RAND_READ_OFF], use64);
-	init_rand_seed(&td->seq_rand_state[DDIR_WRITE], td->rand_seeds[FIO_RAND_SEQ_RAND_WRITE_OFF], use64);
-	init_rand_seed(&td->seq_rand_state[DDIR_TRIM], td->rand_seeds[FIO_RAND_SEQ_RAND_TRIM_OFF], use64);
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		struct frand_state *s = &td->seq_rand_state[i];
+
+		init_rand_seed(s, td->rand_seeds[FIO_RAND_SEQ_RAND_READ_OFF], false);
+	}
 }
 
 void td_fill_rand_seeds(struct thread_data *td)
 {
-	int use64;
+	bool use64;
 
 	if (td->o.allrand_repeatable) {
 		unsigned int i;
@@ -966,8 +973,6 @@ void td_fill_rand_seeds(struct thread_data *td)
 
 	init_rand_seed(&td->buf_state, td->rand_seeds[FIO_RAND_BUF_OFF], use64);
 	frand_copy(&td->buf_state_prev, &td->buf_state);
-
-	init_rand_seed(&td->dedupe_state, td->rand_seeds[FIO_DEDUPE_OFF], use64);
 }
 
 /*
@@ -1074,7 +1079,7 @@ static int setup_random_seeds(struct thread_data *td)
 		seed *= 0x9e370001UL;
 
 	for (i = 0; i < FIO_RAND_NR_OFFS; i++) {
-		td->rand_seeds[i] = seed;
+		td->rand_seeds[i] = seed * td->thread_number + i;
 		seed *= 0x9e370001UL;
 	}
 
@@ -1773,15 +1778,48 @@ int __parse_jobs_ini(struct thread_data *td,
 			strip_blank_end(p);
 
 			if (!strncmp(p, "include", strlen("include"))) {
-				char *filename = p + strlen("include") + 1;
+				char *filename = p + strlen("include") + 1,
+					*ts, *full_fn = NULL;
 
-				if ((ret = __parse_jobs_ini(td, filename,
-						is_buf, stonewall_flag, type, 1,
-						name, &opts, &alloc_opts, &num_opts))) {
-					log_err("Error %d while parsing include file %s\n",
-						ret, filename);
-					break;
+				/*
+				 * Allow for the include filename
+				 * specification to be relative.
+				 */
+				if (access(filename, F_OK) &&
+				    (ts = strrchr(file, '/'))) {
+					int len = ts - file +
+						strlen(filename) + 2;
+
+					if (!(full_fn = calloc(1, len))) {
+						ret = ENOMEM;
+						break;
+					}
+
+					strncpy(full_fn,
+						file, (ts - file) + 1);
+					strncpy(full_fn + (ts - file) + 1,
+						filename, strlen(filename));
+					full_fn[len - 1] = 0;
+					filename = full_fn;
 				}
+
+				ret = __parse_jobs_ini(td, filename, is_buf,
+						       stonewall_flag, type, 1,
+						       name, &opts,
+						       &alloc_opts, &num_opts);
+
+				if (ret) {
+					log_err("Error %d while parsing "
+						"include file %s\n",
+						ret, filename);
+				}
+
+				if (full_fn)
+					free(full_fn);
+
+				if (ret)
+					break;
+
 				continue;
 			}
 
@@ -2514,14 +2552,14 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 				    !strncmp(argv[optind], "-", 1))
 					break;
 
-				if (fio_client_add_ini_file(cur_client, argv[optind], 0))
+				if (fio_client_add_ini_file(cur_client, argv[optind], false))
 					break;
 				optind++;
 			}
 			break;
 		case 'R':
 			did_arg = 1;
-			if (fio_client_add_ini_file(cur_client, optarg, 1)) {
+			if (fio_client_add_ini_file(cur_client, optarg, true)) {
 				do_exit++;
 				exit_val = 1;
 			}

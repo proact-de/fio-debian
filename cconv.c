@@ -23,6 +23,8 @@ static void __string_to_net(uint8_t *dst, const char *src, size_t dst_size)
 
 static void free_thread_options_to_cpu(struct thread_options *o)
 {
+	int i;
+
 	free(o->description);
 	free(o->name);
 	free(o->wait_for);
@@ -43,6 +45,11 @@ static void free_thread_options_to_cpu(struct thread_options *o)
 	free(o->ioscheduler);
 	free(o->profile);
 	free(o->cgroup);
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		free(o->bssplit[i]);
+		free(o->zone_split[i]);
+	}
 }
 
 void convert_thread_options_to_cpu(struct thread_options *o,
@@ -111,6 +118,16 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 			}
 		}
 
+		o->zone_split_nr[i] = le32_to_cpu(top->zone_split_nr[i]);
+
+		if (o->zone_split_nr[i]) {
+			o->zone_split[i] = malloc(o->zone_split_nr[i] * sizeof(struct zone_split));
+			for (j = 0; j < o->zone_split_nr[i]; j++) {
+				o->zone_split[i][j].access_perc = top->zone_split[i][j].access_perc;
+				o->zone_split[i][j].size_perc = top->zone_split[i][j].size_perc;
+			}
+		}
+
 		o->rwmix[i] = le32_to_cpu(top->rwmix[i]);
 		o->rate[i] = le32_to_cpu(top->rate[i]);
 		o->ratemin[i] = le32_to_cpu(top->ratemin[i]);
@@ -160,6 +177,7 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->allrand_repeatable = le32_to_cpu(top->allrand_repeatable);
 	o->rand_seed = le64_to_cpu(top->rand_seed);
 	o->log_avg_msec = le32_to_cpu(top->log_avg_msec);
+	o->log_max = le32_to_cpu(top->log_max);
 	o->log_offset = le32_to_cpu(top->log_offset);
 	o->log_gz = le32_to_cpu(top->log_gz);
 	o->log_gz_store = le32_to_cpu(top->log_gz_store);
@@ -348,6 +366,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->allrand_repeatable = cpu_to_le32(o->allrand_repeatable);
 	top->rand_seed = __cpu_to_le64(o->rand_seed);
 	top->log_avg_msec = cpu_to_le32(o->log_avg_msec);
+	top->log_max = cpu_to_le32(o->log_max);
 	top->log_offset = cpu_to_le32(o->log_offset);
 	top->log_gz = cpu_to_le32(o->log_gz);
 	top->log_gz_store = cpu_to_le32(o->log_gz_store);
@@ -448,6 +467,21 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 			for (j = 0; j < bssplit_nr; j++) {
 				top->bssplit[i][j].bs = cpu_to_le32(o->bssplit[i][j].bs);
 				top->bssplit[i][j].perc = cpu_to_le32(o->bssplit[i][j].perc);
+			}
+		}
+
+		top->zone_split_nr[i] = cpu_to_le32(o->zone_split_nr[i]);
+
+		if (o->zone_split_nr[i]) {
+			unsigned int zone_split_nr = o->zone_split_nr[i];
+
+			if (zone_split_nr > ZONESPLIT_MAX) {
+				log_err("fio: ZONESPLIT_MAX is too small\n");
+				zone_split_nr = ZONESPLIT_MAX;
+			}
+			for (j = 0; j < zone_split_nr; j++) {
+				top->zone_split[i][j].access_perc = o->zone_split[i][j].access_perc;
+				top->zone_split[i][j].size_perc = o->zone_split[i][j].size_perc;
 			}
 		}
 
