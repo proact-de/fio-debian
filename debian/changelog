@@ -1,14 +1,9 @@
-fio (2.10-1) UNRELEASED; urgency=medium
+fio (2.10-1) unstable; urgency=medium
 
   * Imported Upstream version 2.10.
   * patches: Refreshed, no manual changes needed.
   * debian/rules: Enabled using the "bindnow" linker flag to disable more
     insecure late binding.
-
- -- Martin Steigerwald <martin.steigerwald@teamix.de>  Mon, 23 May 2016 16:28:16 +0200
-
-fio (2.9-1) unstable; urgency=medium
-
   * Imported Upstream version 2.9.
   * patches: Refreshed, no manual changes needed.
   * control:
@@ -18,7 +13,7 @@ fio (2.9-1) unstable; urgency=medium
     * Added Sven Hoexter as uploader as he sponsored the last versions.
   * docs: Add file MORAL-LICENSE.
 
- -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 03 May 2016 16:44:40 +0200
+ -- Martin Steigerwald <martin.steigerwald@teamix.de>  Mon, 23 May 2016 16:28:16 +0200
 
 fio (2.6-1) unstable; urgency=medium
 
