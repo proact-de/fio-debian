@@ -11,6 +11,7 @@
 #include "fio.h"
 #include "smalloc.h"
 #include "diskutil.h"
+#include "helper_thread.h"
 
 static int last_majdev, last_mindev;
 static struct disk_util *last_du;
@@ -121,7 +122,7 @@ int update_io_ticks(void)
 
 	fio_mutex_down(disk_util_mutex);
 
-	if (!helper_exit) {
+	if (!helper_should_exit()) {
 		flist_for_each(entry, &disk_list) {
 			du = flist_entry(entry, struct disk_util, list);
 			update_io_tick_disk(du);

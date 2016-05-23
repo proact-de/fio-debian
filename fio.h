@@ -79,6 +79,7 @@ enum {
 	TD_F_NEED_LOCK		= 1U << 11,
 	TD_F_CHILD		= 1U << 12,
 	TD_F_NO_PROGRESS        = 1U << 13,
+	TD_F_REGROW_LOGS	= 1U << 14,
 };
 
 enum {
@@ -169,6 +170,15 @@ struct thread_data {
 	union {
 		unsigned int next_file;
 		struct frand_state next_file_state;
+	};
+	union {
+		struct zipf_state next_file_zipf;
+		struct gauss_state next_file_gauss;
+	};
+	union {
+		double zipf_theta;
+		double pareto_h;
+		double gauss_dev;
 	};
 	int error;
 	int sig;
@@ -445,8 +455,6 @@ extern int nr_clients;
 extern int log_syslog;
 extern int status_interval;
 extern const char fio_version_string[];
-extern int helper_do_stat;
-extern pthread_cond_t helper_cond;
 extern char *trigger_file;
 extern char *trigger_cmd;
 extern char *trigger_remote_cmd;

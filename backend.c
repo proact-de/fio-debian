@@ -57,11 +57,7 @@
 #include "workqueue.h"
 #include "lib/mountcheck.h"
 #include "rate-submit.h"
-
-static pthread_t helper_thread;
-static pthread_mutex_t helper_lock;
-pthread_cond_t helper_cond;
-int helper_do_stat = 0;
+#include "helper_thread.h"
 
 static struct fio_mutex *startup_mutex;
 static struct flist_head *cgroup_list;
@@ -79,7 +75,6 @@ unsigned int stat_number = 0;
 int shm_id = 0;
 int temp_stall_ts;
 unsigned long done_secs = 0;
-volatile int helper_exit = 0;
 
 #define PAGE_ALIGN(buf)	\
 	(char *) (((uintptr_t) (buf) + page_mask) & ~page_mask)
@@ -445,6 +440,12 @@ static int wait_for_completions(struct thread_data *td, struct timeval *time)
 	const int full = queue_full(td);
 	int min_evts = 0;
 	int ret;
+
+	if (td->flags & TD_F_REGROW_LOGS) {
+		ret = io_u_quiesce(td);
+		regrow_logs(td);
+		return ret;
+	}
 
 	/*
 	 * if the queue is full, we MUST reap at least 1 event
@@ -1477,6 +1478,14 @@ static void *thread_main(void *data)
 	}
 
 	/*
+	 * Do this early, we don't want the compress threads to be limited
+	 * to the same CPUs as the IO workers. So do this before we set
+	 * any potential CPU affinity
+	 */
+	if (iolog_compress_init(td, sk_out))
+		goto err;
+
+	/*
 	 * If we have a gettimeofday() thread, make sure we exclude that
 	 * thread from this job
 	 */
@@ -1610,9 +1619,6 @@ static void *thread_main(void *data)
 			goto err;
 	}
 
-	if (iolog_compress_init(td, sk_out))
-		goto err;
-
 	fio_verify_init(td);
 
 	if (rate_submit_init(td, sk_out))
@@ -1710,6 +1716,8 @@ static void *thread_main(void *data)
 			break;
 	}
 
+	td_set_runstate(td, TD_FINISHING);
+
 	update_rusage_stat(td);
 	td->ts.total_run_time = mtime_since_now(&td->epoch);
 	td->ts.io_bytes[DDIR_READ] = td->io_bytes[DDIR_READ];
@@ -1722,7 +1730,7 @@ static void *thread_main(void *data)
 
 	fio_unpin_memory(td);
 
-	fio_writeout_logs(td);
+	td_writeout_logs(td, true);
 
 	iolog_compress_exit(td);
 	rate_submit_exit(td);
@@ -1818,8 +1826,9 @@ static int fork_main(struct sk_out *sk_out, int shmid, int offset)
 
 static void dump_td_info(struct thread_data *td)
 {
-	log_err("fio: job '%s' hasn't exited in %lu seconds, it appears to "
-		"be stuck. Doing forceful exit of this job.\n", td->o.name,
+	log_err("fio: job '%s' (state=%d) hasn't exited in %lu seconds, it "
+		"appears to be stuck. Doing forceful exit of this job.\n",
+			td->o.name, td->runstate,
 			(unsigned long) time_since_now(&td->terminate_time));
 }
 
@@ -1905,6 +1914,7 @@ static void reap_threads(unsigned int *nr_running, unsigned int *t_rate,
 		 * move on.
 		 */
 		if (td->terminate &&
+		    td->runstate < TD_FSYNCING &&
 		    time_since_now(&td->terminate_time) >= FIO_REAP_TIMEOUT) {
 			dump_td_info(td);
 			td_set_runstate(td, TD_REAPED);
@@ -2319,82 +2329,10 @@ reap:
 	update_io_ticks();
 }
 
-static void wait_for_helper_thread_exit(void)
-{
-	void *ret;
-
-	helper_exit = 1;
-	pthread_cond_signal(&helper_cond);
-	pthread_join(helper_thread, &ret);
-}
-
 static void free_disk_util(void)
 {
 	disk_util_prune_entries();
-
-	pthread_cond_destroy(&helper_cond);
-}
-
-static void *helper_thread_main(void *data)
-{
-	struct sk_out *sk_out = data;
-	int ret = 0;
-
-	sk_out_assign(sk_out);
-
-	fio_mutex_up(startup_mutex);
-
-	while (!ret) {
-		uint64_t sec = DISK_UTIL_MSEC / 1000;
-		uint64_t nsec = (DISK_UTIL_MSEC % 1000) * 1000000;
-		struct timespec ts;
-		struct timeval tv;
-
-		gettimeofday(&tv, NULL);
-		ts.tv_sec = tv.tv_sec + sec;
-		ts.tv_nsec = (tv.tv_usec * 1000) + nsec;
-
-		if (ts.tv_nsec >= 1000000000ULL) {
-			ts.tv_nsec -= 1000000000ULL;
-			ts.tv_sec++;
-		}
-
-		pthread_cond_timedwait(&helper_cond, &helper_lock, &ts);
-
-		ret = update_io_ticks();
-
-		if (helper_do_stat) {
-			helper_do_stat = 0;
-			__show_running_run_stats();
-		}
-
-		if (!is_backend)
-			print_thread_status();
-	}
-
-	sk_out_drop();
-	return NULL;
-}
-
-static int create_helper_thread(struct sk_out *sk_out)
-{
-	int ret;
-
-	setup_disk_util();
-
-	pthread_cond_init(&helper_cond, NULL);
-	pthread_mutex_init(&helper_lock, NULL);
-
-	ret = pthread_create(&helper_thread, NULL, helper_thread_main, sk_out);
-	if (ret) {
-		log_err("Can't create helper thread: %s\n", strerror(ret));
-		return 1;
-	}
-
-	dprint(FD_MUTEX, "wait on startup_mutex\n");
-	fio_mutex_down(startup_mutex);
-	dprint(FD_MUTEX, "done waiting on startup_mutex\n");
-	return 0;
+	helper_thread_destroy();
 }
 
 int fio_backend(struct sk_out *sk_out)
@@ -2427,14 +2365,14 @@ int fio_backend(struct sk_out *sk_out)
 
 	set_genesis_time();
 	stat_init();
-	create_helper_thread(sk_out);
+	helper_thread_create(startup_mutex, sk_out);
 
 	cgroup_list = smalloc(sizeof(*cgroup_list));
 	INIT_FLIST_HEAD(cgroup_list);
 
 	run_threads(sk_out);
 
-	wait_for_helper_thread_exit();
+	helper_thread_exit();
 
 	if (!fio_abort) {
 		__show_run_stats();

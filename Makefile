@@ -26,7 +26,7 @@ OPTFLAGS= -g -ffast-math
 CFLAGS	= -std=gnu99 -Wwrite-strings -Wall -Wdeclaration-after-statement $(OPTFLAGS) $(EXTFLAGS) $(BUILD_CFLAGS) -I. -I$(SRCDIR)
 LIBS	+= -lm $(EXTLIBS)
 PROGS	= fio
-SCRIPTS = $(addprefix $(SRCDIR)/,tools/fio_generate_plots tools/plot/fio2gnuplot tools/genfio)
+SCRIPTS = $(addprefix $(SRCDIR)/,tools/fio_generate_plots tools/plot/fio2gnuplot tools/genfio tools/fiologparser.py)
 
 ifndef CONFIG_FIO_NO_OPT
   CFLAGS += -O3
@@ -45,11 +45,11 @@ SOURCE :=	$(patsubst $(SRCDIR)/%,%,$(wildcard $(SRCDIR)/crc/*.c)) \
 		server.c client.c iolog.c backend.c libfio.c flow.c cconv.c \
 		gettime-thread.c helpers.c json.c idletime.c td_error.c \
 		profiles/tiobench.c profiles/act.c io_u_queue.c filelock.c \
-		workqueue.c rate-submit.c optgroup.c
+		workqueue.c rate-submit.c optgroup.c helper_thread.c
 
 ifdef CONFIG_LIBHDFS
   HDFSFLAGS= -I $(JAVA_HOME)/include -I $(JAVA_HOME)/include/linux -I $(FIO_LIBHDFS_INCLUDE)
-  HDFSLIB= -Wl,-rpath $(JAVA_HOME)/jre/lib/amd64/server -L$(JAVA_HOME)/jre/lib/amd64/server -ljvm $(FIO_LIBHDFS_LIB)/libhdfs.a
+  HDFSLIB= -Wl,-rpath $(JAVA_HOME)/jre/lib/`uname -m`/server -L$(JAVA_HOME)/jre/lib/`uname -m`/server -ljvm $(FIO_LIBHDFS_LIB)/libhdfs.a
   CFLAGS += $(HDFSFLAGS)
   SOURCE += engines/libhdfs.c
 endif
@@ -123,6 +123,9 @@ ifdef CONFIG_MTD
   SOURCE += engines/mtd.c
   SOURCE += oslib/libmtd.c
   SOURCE += oslib/libmtd_legacy.c
+endif
+ifdef CONFIG_PMEMBLK
+  SOURCE += engines/pmemblk.c
 endif
 
 ifeq ($(CONFIG_TARGET_OS), Linux)
