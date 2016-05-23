@@ -41,6 +41,16 @@ enum {
 	IO_LOG_TYPE_IOPS,
 };
 
+#define DEF_LOG_ENTRIES		1024
+#define MAX_LOG_ENTRIES		(1024 * DEF_LOG_ENTRIES)
+
+struct io_logs {
+	struct flist_head list;
+	uint64_t nr_samples;
+	uint64_t max_samples;
+	void *log;
+};
+
 /*
  * Dynamically growing data sample log
  */
@@ -48,9 +58,14 @@ struct io_log {
 	/*
 	 * Entries already logged
 	 */
-	uint64_t nr_samples;
-	uint64_t max_samples;
-	void *log;
+	struct flist_head io_logs;
+	uint32_t cur_log_max;
+
+	/*
+	 * When the current log runs out of space, store events here until
+	 * we have a chance to regrow
+	 */
+	struct io_logs *pending;
 
 	unsigned int log_ddir_mask;
 
@@ -63,7 +78,7 @@ struct io_log {
 	/*
 	 * If we fail extending the log, stop collecting more entries.
 	 */
-	unsigned int disabled;
+	bool disabled;
 
 	/*
 	 * Log offsets
@@ -126,10 +141,15 @@ static inline struct io_sample *__get_sample(void *samples, int log_offset,
 	return (struct io_sample *) ((char *) samples + sample_offset);
 }
 
+struct io_logs *iolog_cur_log(struct io_log *);
+uint64_t iolog_nr_samples(struct io_log *);
+void regrow_logs(struct thread_data *);
+
 static inline struct io_sample *get_sample(struct io_log *iolog,
+					   struct io_logs *cur_log,
 					   uint64_t sample)
 {
-	return __get_sample(iolog->log, iolog->log_offset, sample);
+	return __get_sample(cur_log->log, iolog->log_offset, sample);
 }
 
 enum {
@@ -205,13 +225,19 @@ struct log_params {
 	int log_compress;
 };
 
-extern void finalize_logs(struct thread_data *td);
+static inline bool per_unit_log(struct io_log *log)
+{
+	return log && !log->avg_msec;
+}
+
+extern void finalize_logs(struct thread_data *td, bool);
 extern void setup_log(struct io_log **, struct log_params *, const char *);
 extern void flush_log(struct io_log *, int);
 extern void flush_samples(FILE *, void *, uint64_t);
 extern void free_log(struct io_log *);
-extern void fio_writeout_logs(struct thread_data *);
-extern int iolog_flush(struct io_log *, int);
+extern void fio_writeout_logs(bool);
+extern void td_writeout_logs(struct thread_data *, bool);
+extern int iolog_cur_flush(struct io_log *, struct io_logs *);
 
 static inline void init_ipo(struct io_piece *ipo)
 {

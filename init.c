@@ -919,6 +919,23 @@ static int exists_and_not_file(const char *filename)
 	return 1;
 }
 
+static void init_rand_file_service(struct thread_data *td)
+{
+	unsigned long nranges = td->o.nr_files << FIO_FSERVICE_SHIFT;
+	const unsigned int seed = td->rand_seeds[FIO_RAND_FILE_OFF];
+
+	if (td->o.file_service_type == FIO_FSERVICE_ZIPF) {
+		zipf_init(&td->next_file_zipf, nranges, td->zipf_theta, seed);
+		zipf_disable_hash(&td->next_file_zipf);
+	} else if (td->o.file_service_type == FIO_FSERVICE_PARETO) {
+		pareto_init(&td->next_file_zipf, nranges, td->pareto_h, seed);
+		zipf_disable_hash(&td->next_file_zipf);
+	} else if (td->o.file_service_type == FIO_FSERVICE_GAUSS) {
+		gauss_init(&td->next_file_gauss, nranges, td->gauss_dev, seed);
+		gauss_disable_hash(&td->next_file_gauss);
+	}
+}
+
 static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 {
 	int i;
@@ -929,6 +946,8 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 
 	if (td->o.file_service_type == FIO_FSERVICE_RANDOM)
 		init_rand_seed(&td->next_file_state, td->rand_seeds[FIO_RAND_FILE_OFF], use64);
+	else if (td->o.file_service_type & __FIO_FSERVICE_NONUNIFORM)
+		init_rand_file_service(td);
 
 	init_rand_seed(&td->file_size_state, td->rand_seeds[FIO_RAND_FILE_SIZE_OFF], use64);
 	init_rand_seed(&td->trim_state, td->rand_seeds[FIO_RAND_TRIM_OFF], use64);
@@ -1416,6 +1435,11 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		};
 		const char *suf;
 
+		if (fio_option_is_set(o, bw_avg_time))
+			p.avg_msec = min(o->log_avg_msec, o->bw_avg_time);
+		else
+			o->bw_avg_time = p.avg_msec;
+
 		if (p.log_gz_store)
 			suf = "log.fz";
 		else
@@ -1435,6 +1459,11 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_gz_store = o->log_gz_store,
 		};
 		const char *suf;
+
+		if (fio_option_is_set(o, iops_avg_time))
+			p.avg_msec = min(o->log_avg_msec, o->iops_avg_time);
+		else
+			o->iops_avg_time = p.avg_msec;
 
 		if (p.log_gz_store)
 			suf = "log.fz";

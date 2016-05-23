@@ -761,12 +761,16 @@ static unsigned long long get_fs_free_counts(struct thread_data *td)
 uint64_t get_start_offset(struct thread_data *td, struct fio_file *f)
 {
 	struct thread_options *o = &td->o;
+	uint64_t offset;
 
 	if (o->file_append && f->filetype == FIO_TYPE_FILE)
 		return f->real_file_size;
 
-	return td->o.start_offset +
-		td->subjob_number * td->o.offset_increment;
+	offset = td->o.start_offset + td->subjob_number * td->o.offset_increment;
+	if (offset % td_max_bs(td))
+		offset -= (offset % td_max_bs(td));
+
+	return offset;
 }
 
 /*
@@ -890,8 +894,10 @@ int setup_files(struct thread_data *td)
 		if (f->io_size == -1ULL)
 			total_size = -1ULL;
 		else {
-                        if (o->size_percent)
-                                f->io_size = (f->io_size * o->size_percent) / 100;
+                        if (o->size_percent) {
+				f->io_size = (f->io_size * o->size_percent) / 100;
+				f->io_size -= (f->io_size % td_min_bs(td));
+			}
 			total_size += f->io_size;
 		}
 

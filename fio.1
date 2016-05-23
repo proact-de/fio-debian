@@ -566,10 +566,24 @@ Round robin over opened files (default).
 .TP
 .B sequential
 Do each file in the set sequentially.
+.TP
+.B zipf
+Use a zipfian distribution to decide what file to access.
+.TP
+.B pareto
+Use a pareto distribution to decide what file to access.
+.TP
+.B gauss
+Use a gaussian (normal) distribution to decide what file to access.
 .RE
 .P
-The number of I/Os to issue before switching to a new file can be specified by
-appending `:\fIint\fR' to the service type.
+For \fBrandom\fR, \fBroundrobin\fR, and \fBsequential\fR, a postfix can be
+appended to tell fio how many I/Os to issue before switching to a new file.
+For example, specifying \fBfile_service_type=random:8\fR would cause fio to
+issue \fI8\fR I/Os before selecting a new file at random. For the non-uniform
+distributions, a floating point postfix can be given to influence how the
+distribution is skewed. See \fBrandom_distribution\fR for a description of how
+that would work.
 .RE
 .TP
 .BI ioengine \fR=\fPstr
@@ -700,6 +714,9 @@ treated as erases. Depending on the underlying device type, the I/O may have
 to go in a certain pattern, e.g., on NAND, writing sequentially to erase blocks
 and discarding before overwriting. The writetrim mode works well for this
 constraint.
+.TP
+.B pmemblk
+Read and write through the NVML libpmemblk interface.
 .RE
 .P
 .RE
@@ -1180,12 +1197,14 @@ Terminate all jobs if one job finishes in error.  Default: wait for each job
 to finish.
 .TP
 .BI bwavgtime \fR=\fPint
-Average bandwidth calculations over the given time in milliseconds.  Default:
-500ms.
+Average bandwidth calculations over the given time in milliseconds. If the job
+also does bandwidth logging through \fBwrite_bw_log\fR, then the minimum of
+this option and \fBlog_avg_msec\fR will be used.  Default: 500ms.
 .TP
 .BI iopsavgtime \fR=\fPint
-Average IOPS calculations over the given time in milliseconds.  Default:
-500ms.
+Average IOPS calculations over the given time in milliseconds. If the job
+also does IOPS logging through \fBwrite_iops_log\fR, then the minimum of
+this option and \fBlog_avg_msec\fR will be used.  Default: 500ms.
 .TP
 .BI create_serialize \fR=\fPbool
 If true, serialize file creation for the jobs.  Default: true.
@@ -1772,6 +1791,9 @@ Preallocate donor's file on init
 .BI 1:
 allocate space immediately inside defragment event, and free right after event
 .RE
+.TP 
+.BI (rbd)clustername \fR=\fPstr
+Specifies the name of the ceph cluster.
 .TP
 .BI (rbd)rbdname \fR=\fPstr
 Specifies the name of the RBD.
@@ -1780,7 +1802,9 @@ Specifies the name of the RBD.
 Specifies the name of the Ceph pool containing the RBD.
 .TP
 .BI (rbd)clientname \fR=\fPstr
-Specifies the username (without the 'client.' prefix) used to access the Ceph cluster.
+Specifies the username (without the 'client.' prefix) used to access the Ceph
+cluster. If the clustername is specified, the clientname shall be the full
+type.id string. If no type. prefix is given, fio will add 'client.' by default.
 .TP
 .BI (mtd)skipbad \fR=\fPbool
 Skip operations against known bad blocks.
