@@ -1,3 +1,10 @@
+fio (2.10-1) UNRELEASED; urgency=medium
+
+  * Imported Upstream version 2.10.
+  * patches: Refreshed, no manual changes needed.
+
+ -- Martin Steigerwald <martin.steigerwald@teamix.de>  Mon, 23 May 2016 16:28:16 +0200
+
 fio (2.9-1) unstable; urgency=medium
 
   * Imported Upstream version 2.9.
