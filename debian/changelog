@@ -4,6 +4,7 @@ fio (2.10-1) unstable; urgency=medium
   * patches: Refreshed, no manual changes needed.
   * debian/rules: Enabled using the "bindnow" linker flag to disable more
     insecure late binding.
+  * docs: Added file tools/fiologparser.py.
   * Imported Upstream version 2.9.
   * patches: Refreshed, no manual changes needed.
   * control:

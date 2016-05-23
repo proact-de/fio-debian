@@ -3,3 +3,4 @@ HOWTO
 MORAL-LICENSE
 REPORTING-BUGS
 examples/
+tools/fiologparser.py
