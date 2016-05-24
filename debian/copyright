@@ -162,6 +162,11 @@ Files: tools/fio_generate_plots.1
 Copyright: Written by Martin Steigerwald <ms@teamix.de>
 License: GPL-2
 
+Files: tools/fiologparser.py
+Copyright: 2016 Mark Nelson <mnelson@redhat.com>
+           2016 Ben England <bengland@redhat.com>
+License: GPL-2
+
 Files: tools/genfio tools/plot/fio2gnuplot tools/plot/fio2gnuplot.1 tools/plot/fio2gnuplot.manpage tools/plot/graph2D.gpm tools/plot/graph3D.gpm tools/plot/math.gpm
 Copyright: 2013 eNovance SAS <licensing@enovance.com>
            Erwan Velu <erwan@enovance.com>
