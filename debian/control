@@ -12,7 +12,7 @@ Vcs-Browser: https://anonscm.debian.org/cgit/collab-maint/fio.git
 Package: fio
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, python
-Suggests: gnuplot, gfio
+Suggests: gnuplot, gfio, python-scipy
 Description: flexible I/O tester
  fio is a tool that will spawn a number of threads or processes doing a
  particular type of I/O action as specified by the user. fio takes a
