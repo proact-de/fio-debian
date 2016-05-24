@@ -1,7 +1,8 @@
-fio (2.10-1.1) UNRELEASED; urgency=medium
+fio (2.10-2) UNRELEASED; urgency=medium
 
   * copyright: Added fiologparser.py copyrights as per git blame.
   * control: Added python-scipy as suggests for fiologparser.py.
+  * control: Removed Sven Hoexter as uploader again as per his request.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 24 May 2016 12:33:25 +0200
 
