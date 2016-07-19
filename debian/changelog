@@ -1,6 +1,7 @@
 fio (2.10-2~bpo8+1) jessie-backports; urgency=medium
 
-  * Rebuild for jessie-backports (Closes: #821767).
+  * Rebuild for jessie-backports. This is supposed to fix bug
+    "Crashes with alignment error on ARM" (Closes: #821767).
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Tue, 19 Jul 2016 15:33:15 +0200
 
