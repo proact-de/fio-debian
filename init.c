@@ -47,7 +47,6 @@ static char **job_sections;
 static int nr_job_sections;
 
 int exitall_on_terminate = 0;
-int exitall_on_terminate_error = 0;
 int output_format = FIO_OUTPUT_NORMAL;
 int eta_print = FIO_ETA_AUTO;
 int eta_new_line = 0;
@@ -104,7 +103,7 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 	},
 	{
 		.name		= (char *) "bandwidth-log",
-		.has_arg	= required_argument,
+		.has_arg	= no_argument,
 		.val		= 'b' | FIO_CLIENT_FLAG,
 	},
 	{
@@ -114,7 +113,7 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 	},
 	{
 		.name		= (char *) "output-format",
-		.has_arg	= optional_argument,
+		.has_arg	= required_argument,
 		.val		= 'F' | FIO_CLIENT_FLAG,
 	},
 	{
@@ -299,7 +298,6 @@ void free_threads_shm(void)
 static void free_shm(void)
 {
 	if (threads) {
-		file_hash_exit();
 		flow_exit();
 		fio_debug_jobp = NULL;
 		free_threads_shm();
@@ -310,8 +308,9 @@ static void free_shm(void)
 	free(trigger_remote_cmd);
 	trigger_file = trigger_cmd = trigger_remote_cmd = NULL;
 
-	options_free(fio_options, &def_thread);
+	options_free(fio_options, &def_thread.o);
 	fio_filelock_exit();
+	file_hash_exit();
 	scleanup();
 }
 
@@ -323,8 +322,6 @@ static void free_shm(void)
  */
 static int setup_thread_area(void)
 {
-	void *hash;
-
 	if (threads)
 		return 0;
 
@@ -335,7 +332,6 @@ static int setup_thread_area(void)
 	do {
 		size_t size = max_jobs * sizeof(struct thread_data);
 
-		size += file_hash_size;
 		size += sizeof(unsigned int);
 
 #ifndef CONFIG_NO_SHM
@@ -367,10 +363,8 @@ static int setup_thread_area(void)
 #endif
 
 	memset(threads, 0, max_jobs * sizeof(struct thread_data));
-	hash = (void *) threads + max_jobs * sizeof(struct thread_data);
-	fio_debug_jobp = (void *) hash + file_hash_size;
+	fio_debug_jobp = (void *) threads + max_jobs * sizeof(struct thread_data);
 	*fio_debug_jobp = -1;
-	file_hash_init(hash);
 
 	flow_init();
 
@@ -677,7 +671,7 @@ static int fixup_options(struct thread_data *td)
 			"verify limited\n");
 		ret = warnings_fatal;
 	}
-	if (o->bs_unaligned && (o->odirect || td->io_ops->flags & FIO_RAWIO))
+	if (o->bs_unaligned && (o->odirect || td_ioengine_flagged(td, FIO_RAWIO)))
 		log_err("fio: bs_unaligned may not work with raw io\n");
 
 	/*
@@ -764,7 +758,7 @@ static int fixup_options(struct thread_data *td)
 
 	if (o->pre_read) {
 		o->invalidate_cache = 0;
-		if (td->io_ops->flags & FIO_PIPEIO) {
+		if (td_ioengine_flagged(td, FIO_PIPEIO)) {
 			log_info("fio: cannot pre-read files with an IO engine"
 				 " that isn't seekable. Pre-read disabled.\n");
 			ret = warnings_fatal;
@@ -772,7 +766,7 @@ static int fixup_options(struct thread_data *td)
 	}
 
 	if (!o->unit_base) {
-		if (td->io_ops->flags & FIO_BIT_BASED)
+		if (td_ioengine_flagged(td, FIO_BIT_BASED))
 			o->unit_base = 1;
 		else
 			o->unit_base = 8;
@@ -795,7 +789,7 @@ static int fixup_options(struct thread_data *td)
 	 * Windows doesn't support O_DIRECT or O_SYNC with the _open interface,
 	 * so fail if we're passed those flags
 	 */
-	if ((td->io_ops->flags & FIO_SYNCIO) && (td->o.odirect || td->o.sync_io)) {
+	if (td_ioengine_flagged(td, FIO_SYNCIO) && (td->o.odirect || td->o.sync_io)) {
 		log_err("fio: Windows does not support direct or non-buffered io with"
 				" the synchronous ioengines. Use the 'windowsaio' ioengine"
 				" with 'direct=1' and 'iodepth=1' instead.\n");
@@ -844,7 +838,7 @@ static int fixup_options(struct thread_data *td)
 	if (fio_option_is_set(&td->o, rand_seed))
 		td->o.rand_repeatable = 0;
 
-	if ((td->io_ops->flags & FIO_NOEXTEND) && td->o.file_append) {
+	if (td_ioengine_flagged(td, FIO_NOEXTEND) && td->o.file_append) {
 		log_err("fio: can't append/extent with IO engine %s\n", td->io_ops->name);
 		ret = 1;
 	}
@@ -860,7 +854,7 @@ static int fixup_options(struct thread_data *td)
 		td->loops = 1;
 
 	if (td->o.block_error_hist && td->o.nr_files != 1) {
-		log_err("fio: block error histogram only available with "
+		log_err("fio: block error histogram only available "
 			"with a single file per job, but %d files "
 			"provided\n", td->o.nr_files);
 		ret = 1;
@@ -904,21 +898,6 @@ static const char *get_engine_name(const char *str)
 	return p;
 }
 
-static int exists_and_not_file(const char *filename)
-{
-	struct stat sb;
-
-	if (lstat(filename, &sb) == -1)
-		return 0;
-
-	/* \\.\ is the device namespace in Windows, where every file
-	 * is a device node */
-	if (S_ISREG(sb.st_mode) && strncmp(filename, "\\\\.\\", 4) != 0)
-		return 0;
-
-	return 1;
-}
-
 static void init_rand_file_service(struct thread_data *td)
 {
 	unsigned long nranges = td->o.nr_files << FIO_FSERVICE_SHIFT;
@@ -936,12 +915,25 @@ static void init_rand_file_service(struct thread_data *td)
 	}
 }
 
+void td_fill_verify_state_seed(struct thread_data *td)
+{
+	bool use64;
+
+	if (td->o.random_generator == FIO_RAND_GEN_TAUSWORTHE64)
+		use64 = 1;
+	else
+		use64 = 0;
+
+	init_rand_seed(&td->verify_state, td->rand_seeds[FIO_RAND_VER_OFF],
+		use64);
+}
+
 static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 {
 	int i;
 
 	init_rand_seed(&td->bsrange_state, td->rand_seeds[FIO_RAND_BS_OFF], use64);
-	init_rand_seed(&td->verify_state, td->rand_seeds[FIO_RAND_VER_OFF], use64);
+	td_fill_verify_state_seed(td);
 	init_rand_seed(&td->rwmix_state, td->rand_seeds[FIO_RAND_MIX_OFF], false);
 
 	if (td->o.file_service_type == FIO_FSERVICE_RANDOM)
@@ -1051,6 +1043,10 @@ int ioengine_load(struct thread_data *td)
 		*(struct thread_data **)td->eo = td;
 	}
 
+	if (td->o.odirect)
+		td->io_ops->flags |= FIO_RAWIO;
+
+	td_set_ioengine_flags(td);
 	return 0;
 }
 
@@ -1226,7 +1222,7 @@ static char *make_filename(char *buf, size_t buf_size,struct thread_options *o,
 	return buf;
 }
 
-int parse_dryrun(void)
+bool parse_dryrun(void)
 {
 	return dump_cmdline || parse_only;
 }
@@ -1322,14 +1318,11 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if (ioengine_load(td))
 		goto err;
 
-	if (o->odirect)
-		td->io_ops->flags |= FIO_RAWIO;
-
 	file_alloced = 0;
 	if (!o->filename && !td->files_index && !o->read_iolog_file) {
 		file_alloced = 1;
 
-		if (o->nr_files == 1 && exists_and_not_file(jobname))
+		if (o->nr_files == 1 && exists_and_not_regfile(jobname))
 			add_file(td, jobname, job_add_num, 0);
 		else {
 			for (i = 0; i < o->nr_files; i++)
@@ -1355,7 +1348,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if (td->eo)
 		*(struct thread_data **)td->eo = NULL;
 
-	if (td->io_ops->flags & FIO_DISKLESSIO) {
+	if (td_ioengine_flagged(td, FIO_DISKLESSIO)) {
 		struct fio_file *f;
 
 		for_each_file(td, f, i)
@@ -1396,15 +1389,18 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if (setup_rate(td))
 		goto err;
 
-	if (o->lat_log_file) {
+	if (o->write_lat_log) {
 		struct log_params p = {
 			.td = td,
 			.avg_msec = o->log_avg_msec,
+			.hist_msec = o->log_hist_msec,
+			.hist_coarseness = o->log_hist_coarseness,
 			.log_type = IO_LOG_TYPE_LAT,
 			.log_offset = o->log_offset,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
+		const char *pre = o->lat_log_file ? o->lat_log_file : o->name;
 		const char *suf;
 
 		if (p.log_gz_store)
@@ -1412,65 +1408,109 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		else
 			suf = "log";
 
-		gen_log_name(logname, sizeof(logname), "lat", o->lat_log_file,
+		gen_log_name(logname, sizeof(logname), "lat", pre,
 				td->thread_number, suf, o->per_job_logs);
 		setup_log(&td->lat_log, &p, logname);
 
-		gen_log_name(logname, sizeof(logname), "slat", o->lat_log_file,
+		gen_log_name(logname, sizeof(logname), "slat", pre,
 				td->thread_number, suf, o->per_job_logs);
 		setup_log(&td->slat_log, &p, logname);
 
-		gen_log_name(logname, sizeof(logname), "clat", o->lat_log_file,
+		gen_log_name(logname, sizeof(logname), "clat", pre,
 				td->thread_number, suf, o->per_job_logs);
 		setup_log(&td->clat_log, &p, logname);
 	}
-	if (o->bw_log_file) {
+
+	if (o->write_hist_log) {
 		struct log_params p = {
 			.td = td,
 			.avg_msec = o->log_avg_msec,
+			.hist_msec = o->log_hist_msec,
+			.hist_coarseness = o->log_hist_coarseness,
+			.log_type = IO_LOG_TYPE_HIST,
+			.log_offset = o->log_offset,
+			.log_gz = o->log_gz,
+			.log_gz_store = o->log_gz_store,
+		};
+		const char *pre = o->hist_log_file ? o->hist_log_file : o->name;
+		const char *suf;
+
+#ifndef CONFIG_ZLIB
+		if (td->client_type) {
+			log_err("fio: --write_hist_log requires zlib in client/server mode\n");
+			goto err;
+		}
+#endif
+
+		if (p.log_gz_store)
+			suf = "log.fz";
+		else
+			suf = "log";
+
+		gen_log_name(logname, sizeof(logname), "clat_hist", pre,
+				td->thread_number, suf, o->per_job_logs);
+		setup_log(&td->clat_hist_log, &p, logname);
+	}
+
+	if (o->write_bw_log) {
+		struct log_params p = {
+			.td = td,
+			.avg_msec = o->log_avg_msec,
+			.hist_msec = o->log_hist_msec,
+			.hist_coarseness = o->log_hist_coarseness,
 			.log_type = IO_LOG_TYPE_BW,
 			.log_offset = o->log_offset,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
+		const char *pre = o->bw_log_file ? o->bw_log_file : o->name;
 		const char *suf;
 
 		if (fio_option_is_set(o, bw_avg_time))
 			p.avg_msec = min(o->log_avg_msec, o->bw_avg_time);
 		else
 			o->bw_avg_time = p.avg_msec;
+	
+		p.hist_msec = o->log_hist_msec;
+		p.hist_coarseness = o->log_hist_coarseness;
 
 		if (p.log_gz_store)
 			suf = "log.fz";
 		else
 			suf = "log";
 
-		gen_log_name(logname, sizeof(logname), "bw", o->bw_log_file,
+		gen_log_name(logname, sizeof(logname), "bw", pre,
 				td->thread_number, suf, o->per_job_logs);
 		setup_log(&td->bw_log, &p, logname);
 	}
-	if (o->iops_log_file) {
+	if (o->write_iops_log) {
 		struct log_params p = {
 			.td = td,
 			.avg_msec = o->log_avg_msec,
+			.hist_msec = o->log_hist_msec,
+			.hist_coarseness = o->log_hist_coarseness,
 			.log_type = IO_LOG_TYPE_IOPS,
 			.log_offset = o->log_offset,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
+		const char *pre = o->iops_log_file ? o->iops_log_file : o->name;
 		const char *suf;
 
 		if (fio_option_is_set(o, iops_avg_time))
 			p.avg_msec = min(o->log_avg_msec, o->iops_avg_time);
 		else
 			o->iops_avg_time = p.avg_msec;
+	
+		p.hist_msec = o->log_hist_msec;
+		p.hist_coarseness = o->log_hist_coarseness;
 
 		if (p.log_gz_store)
 			suf = "log.fz";
 		else
 			suf = "log";
 
-		gen_log_name(logname, sizeof(logname), "iops", o->iops_log_file,
+		gen_log_name(logname, sizeof(logname), "iops", pre,
 				td->thread_number, suf, o->per_job_logs);
 		setup_log(&td->iops_log, &p, logname);
 	}
@@ -1483,7 +1523,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			if (is_backend && !recursed)
 				fio_server_send_add_job(td);
 
-			if (!(td->io_ops->flags & FIO_NOIO)) {
+			if (!td_ioengine_flagged(td, FIO_NOIO)) {
 				char *c1, *c2, *c3, *c4;
 				char *c5 = NULL, *c6 = NULL;
 
@@ -1965,7 +2005,7 @@ static void usage(const char *name)
 	printf("  --parse-only\t\tParse options only, don't start any IO\n");
 	printf("  --output\t\tWrite output to file\n");
 	printf("  --runtime\t\tRuntime in seconds\n");
-	printf("  --bandwidth-log\tGenerate per-job bandwidth logs\n");
+	printf("  --bandwidth-log\tGenerate aggregate bandwidth logs\n");
 	printf("  --minimal\t\tMinimal (terse) output\n");
 	printf("  --output-format=x\tOutput format (terse,json,json+,normal)\n");
 	printf("  --terse-version=x\tSet terse version output format to 'x'\n");
@@ -2248,7 +2288,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 	struct thread_data *td = NULL;
 	int c, ini_idx = 0, lidx, ret = 0, do_exit = 0, exit_val = 0;
 	char *ostr = cmd_optstr;
-	void *pid_file = NULL;
+	char *pid_file = NULL;
 	void *cur_client = NULL;
 	int backend = 0;
 
@@ -2267,6 +2307,8 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 		switch (c) {
 		case 'a':
 			smalloc_pool_size = atoi(optarg);
+			smalloc_pool_size <<= 10;
+			sinit();
 			break;
 		case 't':
 			if (check_str_time(optarg, &def_timeout, 1)) {
@@ -2298,12 +2340,6 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			output_format = FIO_OUTPUT_TERSE;
 			break;
 		case 'F':
-			if (!optarg) {
-				log_err("fio: missing --output-format argument\n");
-				exit_val = 1;
-				do_exit++;
-				break;
-			}
 			if (parse_output_format(optarg)) {
 				log_err("fio: failed parsing output-format\n");
 				exit_val = 1;

@@ -65,6 +65,8 @@ struct thread_options {
 	unsigned int iodepth_batch_complete_min;
 	unsigned int iodepth_batch_complete_max;
 
+	unsigned int unique_filename;
+
 	unsigned long long size;
 	unsigned long long io_limit;
 	unsigned int size_percent;
@@ -119,6 +121,7 @@ struct thread_options {
 	unsigned int verify_state_save;
 	unsigned int use_thread;
 	unsigned int unlink;
+	unsigned int unlink_each_loop;
 	unsigned int do_disk_util;
 	unsigned int override_sync;
 	unsigned int rand_repeatable;
@@ -126,10 +129,13 @@ struct thread_options {
 	unsigned long long rand_seed;
 	unsigned int dep_use_os_rand;
 	unsigned int log_avg_msec;
+	unsigned int log_hist_msec;
+	unsigned int log_hist_coarseness;
 	unsigned int log_max;
 	unsigned int log_offset;
 	unsigned int log_gz;
 	unsigned int log_gz_store;
+	unsigned int log_unix_epoch;
 	unsigned int norandommap;
 	unsigned int softrandommap;
 	unsigned int bs_unaligned;
@@ -227,9 +233,16 @@ struct thread_options {
 
 	char *read_iolog_file;
 	char *write_iolog_file;
+
+	unsigned int write_bw_log;
+	unsigned int write_lat_log;
+	unsigned int write_iops_log;
+	unsigned int write_hist_log;
+
 	char *bw_log_file;
 	char *lat_log_file;
 	char *iops_log_file;
+	char *hist_log_file;
 	char *replay_redirect;
 
 	/*
@@ -325,6 +338,7 @@ struct thread_options_pack {
 	uint32_t size_percent;
 	uint32_t fill_device;
 	uint32_t file_append;
+	uint32_t unique_filename;
 	uint64_t file_size_low;
 	uint64_t file_size_high;
 	uint64_t start_offset;
@@ -372,6 +386,7 @@ struct thread_options_pack {
 	uint32_t verify_state_save;
 	uint32_t use_thread;
 	uint32_t unlink;
+	uint32_t unlink_each_loop;
 	uint32_t do_disk_util;
 	uint32_t override_sync;
 	uint32_t rand_repeatable;
@@ -379,15 +394,19 @@ struct thread_options_pack {
 	uint64_t rand_seed;
 	uint32_t dep_use_os_rand;
 	uint32_t log_avg_msec;
+	uint32_t log_hist_msec;
+	uint32_t log_hist_coarseness;
 	uint32_t log_max;
 	uint32_t log_offset;
 	uint32_t log_gz;
 	uint32_t log_gz_store;
+	uint32_t log_unix_epoch;
 	uint32_t norandommap;
 	uint32_t softrandommap;
 	uint32_t bs_unaligned;
 	uint32_t fsync_on_close;
 	uint32_t bs_is_seq_rand;
+	uint32_t pad1;
 
 	uint32_t random_distribution;
 	uint32_t exitall_error;
@@ -411,7 +430,6 @@ struct thread_options_pack {
 	uint32_t fsync_blocks;
 	uint32_t fdatasync_blocks;
 	uint32_t barrier_blocks;
-	uint32_t pad1;
 	uint64_t start_delay;
 	uint64_t start_delay_high;
 	uint64_t timeout;
@@ -476,14 +494,20 @@ struct thread_options_pack {
 	uint64_t trim_backlog;
 	uint32_t clat_percentiles;
 	uint32_t percentile_precision;
-	uint32_t pad2;
 	fio_fp64_t percentile_list[FIO_IO_U_LIST_MAX_LEN];
 
 	uint8_t read_iolog_file[FIO_TOP_STR_MAX];
 	uint8_t write_iolog_file[FIO_TOP_STR_MAX];
+
+	uint32_t write_bw_log;
+	uint32_t write_lat_log;
+	uint32_t write_iops_log;
+	uint32_t write_hist_log;
+
 	uint8_t bw_log_file[FIO_TOP_STR_MAX];
 	uint8_t lat_log_file[FIO_TOP_STR_MAX];
 	uint8_t iops_log_file[FIO_TOP_STR_MAX];
+	uint8_t hist_log_file[FIO_TOP_STR_MAX];
 	uint8_t replay_redirect[FIO_TOP_STR_MAX];
 
 	/*
@@ -531,7 +555,7 @@ struct thread_options_pack {
 	uint64_t number_ios;
 
 	uint32_t sync_file_range;
-	uint32_t pad3;
+	uint32_t pad2;
 
 	uint64_t latency_target;
 	uint64_t latency_window;

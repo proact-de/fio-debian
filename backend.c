@@ -524,6 +524,9 @@ sync_done:
 				break;
 		}
 
+		if (td->flags & TD_F_REGROW_LOGS)
+			regrow_logs(td);
+
 		/*
 		 * when doing I/O (not when verifying),
 		 * check for any errors that are to be ignored
@@ -568,6 +571,28 @@ static inline bool io_in_polling(struct thread_data *td)
 	return !td->o.iodepth_batch_complete_min &&
 		   !td->o.iodepth_batch_complete_max;
 }
+/*
+ * Unlinks files from thread data fio_file structure
+ */
+static int unlink_all_files(struct thread_data *td)
+{
+	struct fio_file *f;
+	unsigned int i;
+	int ret = 0;
+
+	for_each_file(td, f, i) {
+		if (f->filetype != FIO_TYPE_FILE)
+			continue;
+		ret = td_io_unlink_file(td, f);
+		if (ret)
+			break;
+	}
+
+	if (ret)
+		td_verror(td, ret, "unlink_all_files");
+
+	return ret;
+}
 
 /*
  * The main verify engine. Runs over the writes we previously submitted,
@@ -599,6 +624,15 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 
 	if (td->error)
 		return;
+
+	/*
+	 * verify_state needs to be reset before verification
+	 * proceeds so that expected random seeds match actual
+	 * random seeds in headers. The main loop will reset
+	 * all random number generators if randrepeat is set.
+	 */
+	if (!td->o.rand_repeatable)
+		td_fill_verify_state_seed(td);
 
 	td_set_runstate(td, TD_VERIFYING);
 
@@ -640,7 +674,7 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 				break;
 
 			while ((io_u = get_io_u(td)) != NULL) {
-				if (IS_ERR(io_u)) {
+				if (IS_ERR_OR_NULL(io_u)) {
 					io_u = NULL;
 					ret = FIO_Q_BUSY;
 					goto reap;
@@ -661,7 +695,7 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 					continue;
 				} else if (io_u->ddir == DDIR_TRIM) {
 					io_u->ddir = DDIR_READ;
-					io_u_set(io_u, IO_U_F_TRIMMED);
+					io_u_set(td, io_u, IO_U_F_TRIMMED);
 					break;
 				} else if (io_u->ddir == DDIR_WRITE) {
 					io_u->ddir = DDIR_READ;
@@ -990,7 +1024,7 @@ reap:
 		if (ret < 0)
 			break;
 		if (!ddir_rw_sum(td->bytes_done) &&
-		    !(td->io_ops->flags & FIO_NOIO))
+		    !td_ioengine_flagged(td, FIO_NOIO))
 			continue;
 
 		if (!in_ramp_time(td) && should_check_rate(td)) {
@@ -1141,7 +1175,7 @@ static int init_io_u(struct thread_data *td)
 	td->orig_buffer_size = (unsigned long long) max_bs
 					* (unsigned long long) max_units;
 
-	if ((td->io_ops->flags & FIO_NOIO) || !(td_read(td) || td_write(td)))
+	if (td_ioengine_flagged(td, FIO_NOIO) || !(td_read(td) || td_write(td)))
 		data_xfer = 0;
 
 	err = 0;
@@ -1161,7 +1195,7 @@ static int init_io_u(struct thread_data *td)
 	 * lucky and the allocator gives us an aligned address.
 	 */
 	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
-	    (td->io_ops->flags & FIO_RAWIO))
+	    td_ioengine_flagged(td, FIO_RAWIO))
 		td->orig_buffer_size += page_mask + td->o.mem_align;
 
 	if (td->o.mem_type == MEM_SHMHUGE || td->o.mem_type == MEM_MMAPHUGE) {
@@ -1180,7 +1214,7 @@ static int init_io_u(struct thread_data *td)
 		return 1;
 
 	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
-	    (td->io_ops->flags & FIO_RAWIO))
+	    td_ioengine_flagged(td, FIO_RAWIO))
 		p = PAGE_ALIGN(td->orig_buffer) + td->o.mem_align;
 	else
 		p = td->orig_buffer;
@@ -1249,11 +1283,12 @@ static int init_io_u(struct thread_data *td)
 
 static int switch_ioscheduler(struct thread_data *td)
 {
+#ifdef FIO_HAVE_IOSCHED_SWITCH
 	char tmp[256], tmp2[128];
 	FILE *f;
 	int ret;
 
-	if (td->io_ops->flags & FIO_DISKLESSIO)
+	if (td_ioengine_flagged(td, FIO_DISKLESSIO))
 		return 0;
 
 	sprintf(tmp, "%s/queue/scheduler", td->sysfs_root);
@@ -1296,6 +1331,14 @@ static int switch_ioscheduler(struct thread_data *td)
 	 */
 	tmp[strlen(tmp) - 1] = '\0';
 
+	/*
+	 * Write to "none" entry doesn't fail, so check the result here.
+	 */
+	if (!strcmp(tmp, "none")) {
+		log_err("fio: io scheduler is not tunable\n");
+		fclose(f);
+		return 0;
+	}
 
 	sprintf(tmp2, "[%s]", td->o.ioscheduler);
 	if (!strstr(tmp, tmp2)) {
@@ -1307,6 +1350,9 @@ static int switch_ioscheduler(struct thread_data *td)
 
 	fclose(f);
 	return 0;
+#else
+	return 0;
+#endif
 }
 
 static bool keep_running(struct thread_data *td)
@@ -1383,10 +1429,10 @@ static uint64_t do_dry_run(struct thread_data *td)
 			break;
 
 		io_u = get_io_u(td);
-		if (!io_u)
+		if (IS_ERR_OR_NULL(io_u))
 			break;
 
-		io_u_set(io_u, IO_U_F_FLIGHT);
+		io_u_set(td, io_u, IO_U_F_FLIGHT);
 		io_u->error = 0;
 		io_u->resid = 0;
 		if (ddir_rw(acct_ddir(io_u)))
@@ -1425,7 +1471,7 @@ static void *thread_main(void *data)
 	struct thread_data *td = fd->td;
 	struct thread_options *o = &td->o;
 	struct sk_out *sk_out = fd->sk_out;
-	pthread_condattr_t attr;
+	int deadlock_loop_cnt;
 	int clear_state;
 	int ret;
 
@@ -1450,12 +1496,18 @@ static void *thread_main(void *data)
 	INIT_FLIST_HEAD(&td->verify_list);
 	INIT_FLIST_HEAD(&td->trim_list);
 	INIT_FLIST_HEAD(&td->next_rand_list);
-	pthread_mutex_init(&td->io_u_lock, NULL);
 	td->io_hist_tree = RB_ROOT;
 
-	pthread_condattr_init(&attr);
-	pthread_cond_init(&td->verify_cond, &attr);
-	pthread_cond_init(&td->free_cond, &attr);
+	ret = mutex_cond_init_pshared(&td->io_u_lock, &td->free_cond);
+	if (ret) {
+		td_verror(td, ret, "mutex_cond_init_pshared");
+		goto err;
+	}
+	ret = cond_init_pshared(&td->verify_cond);
+	if (ret) {
+		td_verror(td, ret, "mutex_cond_pshared");
+		goto err;
+	}
 
 	td_set_runstate(td, TD_INITIALIZED);
 	dprint(FD_MUTEX, "up startup_mutex\n");
@@ -1624,7 +1676,7 @@ static void *thread_main(void *data)
 	if (rate_submit_init(td, sk_out))
 		goto err;
 
-	fio_gettime(&td->epoch, NULL);
+	set_epoch_time(td, o->log_unix_epoch);
 	fio_getrusage(&td->ru_start);
 	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
@@ -1646,8 +1698,12 @@ static void *thread_main(void *data)
 		fio_gettime(&td->start, NULL);
 		memcpy(&td->tv_cache, &td->start, sizeof(td->start));
 
-		if (clear_state)
+		if (clear_state) {
 			clear_io_state(td, 0);
+
+			if (o->unlink_each_loop && unlink_all_files(td))
+				break;
+		}
 
 		prune_io_piece_log(td);
 
@@ -1667,6 +1723,14 @@ static void *thread_main(void *data)
 			}
 		}
 
+		/*
+		 * If we took too long to shut down, the main thread could
+		 * already consider us reaped/exited. If that happens, break
+		 * out and clean up.
+		 */
+		if (td->runstate >= TD_EXITED)
+			break;
+
 		clear_state = 1;
 
 		/*
@@ -1676,9 +1740,19 @@ static void *thread_main(void *data)
 		 * the rusage_sem, which would never get upped because
 		 * this thread is waiting for the stat mutex.
 		 */
-		check_update_rusage(td);
+		deadlock_loop_cnt = 0;
+		do {
+			check_update_rusage(td);
+			if (!fio_mutex_down_trylock(stat_mutex))
+				break;
+			usleep(1000);
+			if (deadlock_loop_cnt++ > 5000) {
+				log_err("fio seems to be stuck grabbing stat_mutex, forcibly exiting\n");
+				td->error = EDEADLK;
+				goto err;
+			}
+		} while (1);
 
-		fio_mutex_down(stat_mutex);
 		if (td_read(td) && td->io_bytes[DDIR_READ])
 			update_runtime(td, elapsed_us, DDIR_READ);
 		if (td_write(td) && td->io_bytes[DDIR_WRITE])
@@ -1693,7 +1767,7 @@ static void *thread_main(void *data)
 
 		if (!o->do_verify ||
 		    o->verify == VERIFY_NONE ||
-		    (td->io_ops->flags & FIO_UNIDIR))
+		    td_ioengine_flagged(td, FIO_UNIDIR))
 			continue;
 
 		clear_io_state(td, 0);
@@ -1789,39 +1863,6 @@ err:
 
 	sk_out_drop();
 	return (void *) (uintptr_t) td->error;
-}
-
-
-/*
- * We cannot pass the td data into a forked process, so attach the td and
- * pass it to the thread worker.
- */
-static int fork_main(struct sk_out *sk_out, int shmid, int offset)
-{
-	struct fork_data *fd;
-	void *data, *ret;
-
-#if !defined(__hpux) && !defined(CONFIG_NO_SHM)
-	data = shmat(shmid, NULL, 0);
-	if (data == (void *) -1) {
-		int __err = errno;
-
-		perror("shmat");
-		return __err;
-	}
-#else
-	/*
-	 * HP-UX inherits shm mappings?
-	 */
-	data = threads;
-#endif
-
-	fd = calloc(1, sizeof(*fd));
-	fd->td = data + offset * sizeof(struct thread_data);
-	fd->sk_out = sk_out;
-	ret = thread_main(fd);
-	shmdt(data);
-	return (int) (uintptr_t) ret;
 }
 
 static void dump_td_info(struct thread_data *td)
@@ -2161,6 +2202,7 @@ reap:
 		struct thread_data *map[REAL_MAX_JOBS];
 		struct timeval this_start;
 		int this_jobs = 0, left;
+		struct fork_data *fd;
 
 		/*
 		 * create threads (TD_NOT_CREATED -> TD_CREATED)
@@ -2210,13 +2252,12 @@ reap:
 			map[this_jobs++] = td;
 			nr_started++;
 
-			if (td->o.use_thread) {
-				struct fork_data *fd;
-				int ret;
+			fd = calloc(1, sizeof(*fd));
+			fd->td = td;
+			fd->sk_out = sk_out;
 
-				fd = calloc(1, sizeof(*fd));
-				fd->td = td;
-				fd->sk_out = sk_out;
+			if (td->o.use_thread) {
+				int ret;
 
 				dprint(FD_PROCESS, "will pthread_create\n");
 				ret = pthread_create(&td->thread, NULL,
@@ -2237,8 +2278,9 @@ reap:
 				dprint(FD_PROCESS, "will fork\n");
 				pid = fork();
 				if (!pid) {
-					int ret = fork_main(sk_out, shm_id, i);
+					int ret;
 
+					ret = (int)(uintptr_t)thread_main(fd);
 					_exit(ret);
 				} else if (i == fio_debug_jobno)
 					*fio_debug_jobp = pid;
@@ -2380,7 +2422,7 @@ int fio_backend(struct sk_out *sk_out)
 			for (i = 0; i < DDIR_RWDIR_CNT; i++) {
 				struct io_log *log = agg_io_log[i];
 
-				flush_log(log, 0);
+				flush_log(log, false);
 				free_log(log);
 			}
 		}

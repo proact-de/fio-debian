@@ -362,8 +362,12 @@ static int get_next_seq_offset(struct thread_data *td, struct fio_file *f,
 	if (f->last_pos[ddir] < f->real_file_size) {
 		uint64_t pos;
 
-		if (f->last_pos[ddir] == f->file_offset && o->ddir_seq_add < 0)
-			f->last_pos[ddir] = f->real_file_size;
+		if (f->last_pos[ddir] == f->file_offset && o->ddir_seq_add < 0) {
+			if (f->real_file_size > f->io_size)
+				f->last_pos[ddir] = f->io_size;
+			else
+				f->last_pos[ddir] = f->real_file_size;
+		}
 
 		pos = f->last_pos[ddir] - f->file_offset;
 		if (pos && o->ddir_seq_add) {
@@ -378,8 +382,14 @@ static int get_next_seq_offset(struct thread_data *td, struct fio_file *f,
 			if (pos >= f->real_file_size) {
 				if (o->ddir_seq_add > 0)
 					pos = f->file_offset;
-				else
-					pos = f->real_file_size + o->ddir_seq_add;
+				else {
+					if (f->real_file_size > f->io_size)
+						pos = f->io_size;
+					else
+						pos = f->real_file_size;
+
+					pos += o->ddir_seq_add;
+				}
 			}
 		}
 
@@ -409,7 +419,7 @@ static int get_next_block(struct thread_data *td, struct io_u *io_u,
 				*is_random = 1;
 			} else {
 				*is_random = 0;
-				io_u_set(io_u, IO_U_F_BUSY_OK);
+				io_u_set(td, io_u, IO_U_F_BUSY_OK);
 				ret = get_next_seq_offset(td, f, ddir, &offset);
 				if (ret)
 					ret = get_next_rand_block(td, f, ddir, &b);
@@ -419,7 +429,7 @@ static int get_next_block(struct thread_data *td, struct io_u *io_u,
 			ret = get_next_seq_offset(td, f, ddir, &offset);
 		}
 	} else {
-		io_u_set(io_u, IO_U_F_BUSY_OK);
+		io_u_set(td, io_u, IO_U_F_BUSY_OK);
 		*is_random = 0;
 
 		if (td->o.rw_seq == RW_SEQ_SEQ) {
@@ -521,8 +531,7 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
 	int ddir = io_u->ddir;
 	unsigned int buflen = 0;
 	unsigned int minbs, maxbs;
-	uint64_t frand_max;
-	unsigned long r;
+	uint64_t frand_max, r;
 
 	assert(ddir_rw(ddir));
 
@@ -551,7 +560,7 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
 			if (buflen < minbs)
 				buflen = minbs;
 		} else {
-			long perc = 0;
+			long long perc = 0;
 			unsigned int i;
 
 			for (i = 0; i < td->o.bssplit_nr[ddir]; i++) {
@@ -559,7 +568,9 @@ static unsigned int __get_next_buflen(struct thread_data *td, struct io_u *io_u,
 
 				buflen = bsp->bs;
 				perc += bsp->perc;
-				if ((r * 100UL <= frand_max * perc) &&
+				if (!perc)
+					break;
+				if ((r / perc <= frand_max / 100ULL) &&
 				    io_u_fits(td, io_u, buflen))
 					break;
 			}
@@ -768,11 +779,11 @@ static void set_rw_ddir(struct thread_data *td, struct io_u *io_u)
 
 	io_u->ddir = io_u->acct_ddir = ddir;
 
-	if (io_u->ddir == DDIR_WRITE && (td->io_ops->flags & FIO_BARRIER) &&
+	if (io_u->ddir == DDIR_WRITE && td_ioengine_flagged(td, FIO_BARRIER) &&
 	    td->o.barrier_blocks &&
 	   !(td->io_issues[DDIR_WRITE] % td->o.barrier_blocks) &&
 	     td->io_issues[DDIR_WRITE])
-		io_u_set(io_u, IO_U_F_BARRIER);
+		io_u_set(td, io_u, IO_U_F_BARRIER);
 }
 
 void put_file_log(struct thread_data *td, struct fio_file *f)
@@ -794,7 +805,7 @@ void put_io_u(struct thread_data *td, struct io_u *io_u)
 		put_file_log(td, io_u->file);
 
 	io_u->file = NULL;
-	io_u_set(io_u, IO_U_F_FREE);
+	io_u_set(td, io_u, IO_U_F_FREE);
 
 	if (io_u->flags & IO_U_F_IN_CUR_DEPTH) {
 		td->cur_depth--;
@@ -807,7 +818,7 @@ void put_io_u(struct thread_data *td, struct io_u *io_u)
 
 void clear_io_u(struct thread_data *td, struct io_u *io_u)
 {
-	io_u_clear(io_u, IO_U_F_FLIGHT);
+	io_u_clear(td, io_u, IO_U_F_FLIGHT);
 	put_io_u(td, io_u);
 }
 
@@ -823,11 +834,11 @@ void requeue_io_u(struct thread_data *td, struct io_u **io_u)
 
 	td_io_u_lock(td);
 
-	io_u_set(__io_u, IO_U_F_FREE);
+	io_u_set(td, __io_u, IO_U_F_FREE);
 	if ((__io_u->flags & IO_U_F_FLIGHT) && ddir_rw(ddir))
 		td->io_issues[ddir]--;
 
-	io_u_clear(__io_u, IO_U_F_FLIGHT);
+	io_u_clear(td, __io_u, IO_U_F_FLIGHT);
 	if (__io_u->flags & IO_U_F_IN_CUR_DEPTH) {
 		td->cur_depth--;
 		assert(!(td->flags & TD_F_CHILD));
@@ -843,7 +854,7 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 {
 	unsigned int is_random;
 
-	if (td->io_ops->flags & FIO_NOIO)
+	if (td_ioengine_flagged(td, FIO_NOIO))
 		goto out;
 
 	set_rw_ddir(td, io_u);
@@ -1457,7 +1468,7 @@ again:
 
 	if (io_u) {
 		assert(io_u->flags & IO_U_F_FREE);
-		io_u_clear(io_u, IO_U_F_FREE | IO_U_F_NO_FILE_PUT |
+		io_u_clear(td, io_u, IO_U_F_FREE | IO_U_F_NO_FILE_PUT |
 				 IO_U_F_TRIMMED | IO_U_F_BARRIER |
 				 IO_U_F_VER_LIST);
 
@@ -1465,7 +1476,7 @@ again:
 		io_u->acct_ddir = -1;
 		td->cur_depth++;
 		assert(!(td->flags & TD_F_CHILD));
-		io_u_set(io_u, IO_U_F_IN_CUR_DEPTH);
+		io_u_set(td, io_u, IO_U_F_IN_CUR_DEPTH);
 		io_u->ipo = NULL;
 	} else if (td_async_processing(td)) {
 		/*
@@ -1500,7 +1511,7 @@ static bool check_get_trim(struct thread_data *td, struct io_u *io_u)
 			get_trim = 1;
 		}
 
-		if (get_trim && !get_next_trim(td, io_u))
+		if (get_trim && get_next_trim(td, io_u))
 			return true;
 	}
 
@@ -1622,7 +1633,7 @@ struct io_u *get_io_u(struct thread_data *td)
 	assert(fio_file_open(f));
 
 	if (ddir_rw(io_u->ddir)) {
-		if (!io_u->buflen && !(td->io_ops->flags & FIO_NOIO)) {
+		if (!io_u->buflen && !td_ioengine_flagged(td, FIO_NOIO)) {
 			dprint(FD_IO, "get_io_u: zero buflen on %p\n", io_u);
 			goto err_put;
 		}
@@ -1803,7 +1814,7 @@ static void io_completed(struct thread_data *td, struct io_u **io_u_ptr,
 	dprint_io_u(io_u, "io complete");
 
 	assert(io_u->flags & IO_U_F_FLIGHT);
-	io_u_clear(io_u, IO_U_F_FLIGHT | IO_U_F_BUSY_OK);
+	io_u_clear(td, io_u, IO_U_F_FLIGHT | IO_U_F_BUSY_OK);
 
 	/*
 	 * Mark IO ok to verify

@@ -179,6 +179,7 @@ static int get_device_numbers(char *file_name, int *maj, int *min)
 		/*
 		 * must be a file, open "." in that path
 		 */
+		tempname[PATH_MAX - 1] = '\0';
 		strncpy(tempname, file_name, PATH_MAX - 1);
 		p = dirname(tempname);
 		if (stat(p, &st)) {
@@ -239,7 +240,7 @@ static void find_add_disk_slaves(struct thread_data *td, char *path,
 		    !strcmp(dirent->d_name, ".."))
 			continue;
 
-		sprintf(temppath, "%s%s%s", slavesdir, FIO_OS_PATH_SEPARATOR, dirent->d_name);
+		sprintf(temppath, "%s/%s", slavesdir, dirent->d_name);
 		/* Can we always assume that the slaves device entries
 		 * are links to the real directories for the slave
 		 * devices?
@@ -266,7 +267,7 @@ static void find_add_disk_slaves(struct thread_data *td, char *path,
 		if (slavedu)
 			continue;
 
-		sprintf(temppath, "%s%s%s", slavesdir, FIO_OS_PATH_SEPARATOR, slavepath);
+		sprintf(temppath, "%s/%s", slavesdir, slavepath);
 		__init_per_file_disk_util(td, majdev, mindev, temppath);
 		slavedu = disk_util_exists(majdev, mindev);
 
@@ -291,10 +292,8 @@ static struct disk_util *disk_util_add(struct thread_data *td, int majdev,
 	dprint(FD_DISKUTIL, "add maj/min %d/%d: %s\n", majdev, mindev, path);
 
 	du = smalloc(sizeof(*du));
-	if (!du) {
-		log_err("fio: smalloc() pool exhausted\n");
+	if (!du)
 		return NULL;
-	}
 
 	memset(du, 0, sizeof(*du));
 	INIT_FLIST_HEAD(&du->list);
@@ -370,7 +369,7 @@ static int find_block_dir(int majdev, int mindev, char *path, int link_ok)
 		if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, ".."))
 			continue;
 
-		sprintf(full_path, "%s%s%s", path, FIO_OS_PATH_SEPARATOR, dir->d_name);
+		sprintf(full_path, "%s/%s", path, dir->d_name);
 
 		if (!strcmp(dir->d_name, "dev")) {
 			if (!check_dev_match(majdev, mindev, full_path)) {
@@ -426,6 +425,7 @@ static struct disk_util *__init_per_file_disk_util(struct thread_data *td,
 			log_err("unknown sysfs layout\n");
 			return NULL;
 		}
+		tmp[PATH_MAX - 1] = '\0';
 		strncpy(tmp, p, PATH_MAX - 1);
 		sprintf(path, "%s", tmp);
 	}
@@ -489,7 +489,7 @@ void init_disk_util(struct thread_data *td)
 	unsigned int i;
 
 	if (!td->o.do_disk_util ||
-	    (td->io_ops->flags & (FIO_DISKLESSIO | FIO_NODISKUTIL)))
+	    td_ioengine_flagged(td, FIO_DISKLESSIO | FIO_NODISKUTIL))
 		return;
 
 	for_each_file(td, f, i)

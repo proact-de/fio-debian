@@ -110,12 +110,8 @@ static void *helper_thread_main(void *data)
 			msec_to_next_event = DISK_UTIL_MSEC;
 			if (since_du >= DISK_UTIL_MSEC)
 				msec_to_next_event -= (since_du - DISK_UTIL_MSEC);
-		} else {
-			if (since_du >= DISK_UTIL_MSEC)
-				msec_to_next_event = DISK_UTIL_MSEC - (DISK_UTIL_MSEC - since_du);
-			else
-				msec_to_next_event = DISK_UTIL_MSEC;
-		}
+		} else
+			msec_to_next_event = DISK_UTIL_MSEC - since_du;
 
 		if (hd->do_stat) {
 			hd->do_stat = 0;
@@ -148,8 +144,11 @@ int helper_thread_create(struct fio_mutex *startup_mutex, struct sk_out *sk_out)
 	setup_disk_util();
 
 	hd->sk_out = sk_out;
-	pthread_cond_init(&hd->cond, NULL);
-	pthread_mutex_init(&hd->lock, NULL);
+
+	ret = mutex_cond_init_pshared(&hd->lock, &hd->cond);
+	if (ret)
+		return 1;
+
 	hd->startup_mutex = startup_mutex;
 
 	ret = pthread_create(&hd->thread, NULL, helper_thread_main, hd);

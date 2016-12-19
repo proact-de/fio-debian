@@ -18,12 +18,21 @@ struct io_stat {
 	fio_fp64_t S;
 };
 
+struct io_hist {
+	uint64_t samples;
+	unsigned long hist_last;
+	struct flist_head list;
+};
+
 /*
  * A single data sample
  */
 struct io_sample {
 	uint64_t time;
-	uint64_t val;
+	union {
+		uint64_t val;
+		struct io_u_plat_entry *plat_entry;
+	};
 	uint32_t __ddir;
 	uint32_t bs;
 };
@@ -39,6 +48,7 @@ enum {
 	IO_LOG_TYPE_SLAT,
 	IO_LOG_TYPE_BW,
 	IO_LOG_TYPE_IOPS,
+	IO_LOG_TYPE_HIST,
 };
 
 #define DEF_LOG_ENTRIES		1024
@@ -103,6 +113,15 @@ struct io_log {
 	unsigned long avg_msec;
 	unsigned long avg_last;
 
+	/*
+	 * Windowed latency histograms, for keeping track of when we need to
+	 * save a copy of the histogram every approximately hist_msec
+	 * milliseconds.
+	 */
+	struct io_hist hist_window[DDIR_RWDIR_CNT];
+	unsigned long hist_msec;
+	unsigned int hist_coarseness;
+
 	pthread_mutex_t chunk_lock;
 	unsigned int chunk_seq;
 	struct flist_head chunk_list;
@@ -132,6 +151,11 @@ static inline size_t __log_entry_sz(int log_offset)
 static inline size_t log_entry_sz(struct io_log *log)
 {
 	return __log_entry_sz(log->log_offset);
+}
+
+static inline size_t log_sample_sz(struct io_log *log, struct io_logs *cur_log)
+{
+	return cur_log->nr_samples * log_entry_sz(log);
 }
 
 static inline struct io_sample *__get_sample(void *samples, int log_offset,
@@ -218,6 +242,8 @@ extern int iolog_file_inflate(const char *);
 struct log_params {
 	struct thread_data *td;
 	unsigned long avg_msec;
+	unsigned long hist_msec;
+	int hist_coarseness;
 	int log_type;
 	int log_offset;
 	int log_gz;
@@ -230,10 +256,18 @@ static inline bool per_unit_log(struct io_log *log)
 	return log && !log->avg_msec;
 }
 
+static inline bool inline_log(struct io_log *log)
+{
+	return log->log_type == IO_LOG_TYPE_LAT ||
+		log->log_type == IO_LOG_TYPE_CLAT ||
+		log->log_type == IO_LOG_TYPE_SLAT;
+}
+
 extern void finalize_logs(struct thread_data *td, bool);
 extern void setup_log(struct io_log **, struct log_params *, const char *);
-extern void flush_log(struct io_log *, int);
+extern void flush_log(struct io_log *, bool);
 extern void flush_samples(FILE *, void *, uint64_t);
+extern unsigned long hist_sum(int, int, unsigned int *, unsigned int *);
 extern void free_log(struct io_log *);
 extern void fio_writeout_logs(bool);
 extern void td_writeout_logs(struct thread_data *, bool);

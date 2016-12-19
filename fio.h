@@ -126,11 +126,10 @@ struct zone_split_index {
  * This describes a single thread/process executing a fio job.
  */
 struct thread_data {
-	struct thread_options o;
 	struct flist_head opt_list;
 	unsigned long flags;
+	struct thread_options o;
 	void *eo;
-	char verror[FIO_VERROR_SIZE];
 	pthread_t thread;
 	unsigned int thread_number;
 	unsigned int subjob_number;
@@ -141,6 +140,7 @@ struct thread_data {
 
 	struct io_log *slat_log;
 	struct io_log *clat_log;
+	struct io_log *clat_hist_log;
 	struct io_log *lat_log;
 	struct io_log *bw_log;
 	struct io_log *iops_log;
@@ -227,6 +227,12 @@ struct thread_data {
 	struct ioengine_ops *io_ops;
 
 	/*
+	 * IO engine private data and dlhandle.
+	 */
+	void *io_ops_data;
+	void *io_ops_dlhandle;
+
+	/*
 	 * Queue depth of io_u's that fio MIGHT do
 	 */
 	unsigned int cur_depth;
@@ -305,6 +311,7 @@ struct thread_data {
 
 	struct timeval start;	/* start of this loop */
 	struct timeval epoch;	/* time job was started */
+	unsigned long long unix_epoch; /* Time job was started, unix epoch based. */
 	struct timeval last_issue;
 	long time_offset;
 	struct timeval tv_cache;
@@ -387,6 +394,8 @@ struct thread_data {
 	void *prof_data;
 
 	void *pinned_mem;
+
+	char verror[FIO_VERROR_SIZE];
 };
 
 /*
@@ -443,7 +452,6 @@ extern int read_only;
 extern int eta_print;
 extern int eta_new_line;
 extern unsigned long done_secs;
-extern char *job_section;
 extern int fio_gtod_offload;
 extern int fio_gtod_cpu;
 extern enum fio_cs fio_clock_source;
@@ -468,7 +476,7 @@ static inline void fio_ro_check(const struct thread_data *td, struct io_u *io_u)
 	assert(!(io_u->ddir == DDIR_WRITE && !td_write(td)));
 }
 
-#define REAL_MAX_JOBS		2048
+#define REAL_MAX_JOBS		4096
 
 static inline int should_fsync(struct thread_data *td)
 {
@@ -502,10 +510,11 @@ extern void fio_options_dup_and_init(struct option *);
 extern void fio_options_mem_dupe(struct thread_data *);
 extern void options_mem_dupe(void *data, struct fio_option *options);
 extern void td_fill_rand_seeds(struct thread_data *);
+extern void td_fill_verify_state_seed(struct thread_data *);
 extern void add_job_opts(const char **, int);
 extern char *num2str(uint64_t, int, int, int, int);
 extern int ioengine_load(struct thread_data *);
-extern int parse_dryrun(void);
+extern bool parse_dryrun(void);
 extern int fio_running_or_pending_io_threads(void);
 extern int fio_set_fd_nonblocking(int, const char *);
 extern void sig_show_status(int sig);
@@ -547,7 +556,28 @@ enum {
 	TD_EXITED,
 	TD_REAPED,
 	TD_LAST,
+	TD_NR,
 };
+
+#define TD_ENG_FLAG_SHIFT	16
+#define TD_ENG_FLAG_MASK	((1U << 16) - 1)
+
+static inline enum fio_ioengine_flags td_ioengine_flags(struct thread_data *td)
+{
+	return (enum fio_ioengine_flags)
+		((td->flags >> TD_ENG_FLAG_SHIFT) & TD_ENG_FLAG_MASK);
+}
+
+static inline void td_set_ioengine_flags(struct thread_data *td)
+{
+	td->flags |= (td->io_ops->flags << TD_ENG_FLAG_SHIFT);
+}
+
+static inline bool td_ioengine_flagged(struct thread_data *td,
+				       enum fio_ioengine_flags flags)
+{
+	return ((td->flags >> TD_ENG_FLAG_SHIFT) & flags) != 0;
+}
 
 extern void td_set_runstate(struct thread_data *, int);
 extern int td_bump_runstate(struct thread_data *, int);
@@ -558,7 +588,7 @@ extern const char *runstate_to_name(int runstate);
  * Allow 60 seconds for a job to quit on its own, otherwise reap with
  * a vengeance.
  */
-#define FIO_REAP_TIMEOUT	60
+#define FIO_REAP_TIMEOUT	300
 
 #define TERMINATE_ALL		(-1U)
 extern void fio_terminate_threads(unsigned int);
@@ -615,17 +645,17 @@ extern void lat_target_reset(struct thread_data *);
 	}	\
 } while (0)
 
-static inline int fio_fill_issue_time(struct thread_data *td)
+static inline bool fio_fill_issue_time(struct thread_data *td)
 {
 	if (td->o.read_iolog_file ||
 	    !td->o.disable_clat || !td->o.disable_slat || !td->o.disable_bw)
-		return 1;
+		return true;
 
-	return 0;
+	return false;
 }
 
-static inline int __should_check_rate(struct thread_data *td,
-				      enum fio_ddir ddir)
+static inline bool __should_check_rate(struct thread_data *td,
+				       enum fio_ddir ddir)
 {
 	struct thread_options *o = &td->o;
 
@@ -634,23 +664,21 @@ static inline int __should_check_rate(struct thread_data *td,
 	 */
 	if (o->rate[ddir] || o->ratemin[ddir] || o->rate_iops[ddir] ||
 	    o->rate_iops_min[ddir])
-		return 1;
+		return true;
 
-	return 0;
+	return false;
 }
 
-static inline int should_check_rate(struct thread_data *td)
+static inline bool should_check_rate(struct thread_data *td)
 {
-	int ret = 0;
+	if (td->bytes_done[DDIR_READ] && __should_check_rate(td, DDIR_READ))
+		return true;
+	if (td->bytes_done[DDIR_WRITE] && __should_check_rate(td, DDIR_WRITE))
+		return true;
+	if (td->bytes_done[DDIR_TRIM] && __should_check_rate(td, DDIR_TRIM))
+		return true;
 
-	if (td->bytes_done[DDIR_READ])
-		ret |= __should_check_rate(td, DDIR_READ);
-	if (td->bytes_done[DDIR_WRITE])
-		ret |= __should_check_rate(td, DDIR_WRITE);
-	if (td->bytes_done[DDIR_TRIM])
-		ret |= __should_check_rate(td, DDIR_TRIM);
-
-	return ret;
+	return false;
 }
 
 static inline unsigned int td_max_bs(struct thread_data *td)
@@ -669,7 +697,7 @@ static inline unsigned int td_min_bs(struct thread_data *td)
 	return min(td->o.min_bs[DDIR_TRIM], min_bs);
 }
 
-static inline int td_async_processing(struct thread_data *td)
+static inline bool td_async_processing(struct thread_data *td)
 {
 	return (td->flags & TD_F_NEED_LOCK) != 0;
 }
@@ -694,6 +722,24 @@ static inline void td_io_u_free_notify(struct thread_data *td)
 {
 	if (td_async_processing(td))
 		pthread_cond_signal(&td->free_cond);
+}
+
+static inline void td_flags_clear(struct thread_data *td, unsigned int *flags,
+				  unsigned int value)
+{
+	if (!td_async_processing(td))
+		*flags &= ~value;
+	else
+		__sync_fetch_and_and(flags, ~value);
+}
+
+static inline void td_flags_set(struct thread_data *td, unsigned int *flags,
+				unsigned int value)
+{
+	if (!td_async_processing(td))
+		*flags |= value;
+	else
+		__sync_fetch_and_or(flags, value);
 }
 
 extern const char *fio_get_arch_string(int);

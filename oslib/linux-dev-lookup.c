@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "../os/os.h"
+#include "oslib/linux-dev-lookup.h"
 
 int blktrace_lookup_device(const char *redirect, char *path, unsigned int maj,
 			   unsigned int min)
@@ -25,7 +26,7 @@ int blktrace_lookup_device(const char *redirect, char *path, unsigned int maj,
 		if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, ".."))
 			continue;
 
-		sprintf(full_path, "%s%s%s", path, FIO_OS_PATH_SEPARATOR, dir->d_name);
+		sprintf(full_path, "%s/%s", path, dir->d_name);
 		if (lstat(full_path, &st) == -1) {
 			perror("lstat");
 			break;

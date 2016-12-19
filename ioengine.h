@@ -138,7 +138,7 @@ enum {
 
 struct ioengine_ops {
 	struct flist_head list;
-	char name[16];
+	const char *name;
 	int version;
 	int flags;
 	int (*setup)(struct thread_data *);
@@ -163,8 +163,6 @@ struct ioengine_ops {
 	void (*io_u_free)(struct thread_data *, struct io_u *);
 	int option_struct_size;
 	struct fio_option *options;
-	void *data;
-	void *dlhandle;
 };
 
 enum fio_ioengine_flags {
@@ -259,14 +257,9 @@ static inline enum fio_ddir acct_ddir(struct io_u *io_u)
 	return io_u->ddir;
 }
 
-static inline void io_u_clear(struct io_u *io_u, unsigned int flags)
-{
-	__sync_fetch_and_and(&io_u->flags, ~flags);
-}
-
-static inline void io_u_set(struct io_u *io_u, unsigned int flags)
-{
-	__sync_fetch_and_or(&io_u->flags, flags);
-}
+#define io_u_clear(td, io_u, val)	\
+	td_flags_clear((td), &(io_u->flags), (val))
+#define io_u_set(td, io_u, val)		\
+	td_flags_set((td), &(io_u)->flags, (val))
 
 #endif
