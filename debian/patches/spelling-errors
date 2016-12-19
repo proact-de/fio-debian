@@ -1,3 +1,6 @@
+Description: Fix some spelling errors in fio binary, fio manpage and HOWTO.
+Author: Martin Steigerwald <martin.steigerwald@teamix.de>
+
 --- a/HOWTO
 +++ b/HOWTO
 @@ -676,13 +676,13 @@
