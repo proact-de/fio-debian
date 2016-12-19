@@ -119,17 +119,18 @@ static struct ioengine_ops *dlopen_ioengine(struct thread_data *td,
 		return NULL;
 	}
 
-	ops->dlhandle = dlhandle;
+	td->io_ops_dlhandle = dlhandle;
 	return ops;
 }
 
 struct ioengine_ops *load_ioengine(struct thread_data *td, const char *name)
 {
-	struct ioengine_ops *ops, *ret;
-	char engine[16];
+	struct ioengine_ops *ops;
+	char engine[64];
 
 	dprint(FD_IO, "load ioengine %s\n", name);
 
+	engine[sizeof(engine) - 1] = '\0';
 	strncpy(engine, name, sizeof(engine) - 1);
 
 	/*
@@ -153,11 +154,7 @@ struct ioengine_ops *load_ioengine(struct thread_data *td, const char *name)
 	if (check_engine_ops(ops))
 		return NULL;
 
-	ret = malloc(sizeof(*ret));
-	memcpy(ret, ops, sizeof(*ret));
-	ret->data = NULL;
-
-	return ret;
+	return ops;
 }
 
 /*
@@ -173,10 +170,9 @@ void free_ioengine(struct thread_data *td)
 		td->eo = NULL;
 	}
 
-	if (td->io_ops->dlhandle)
-		dlclose(td->io_ops->dlhandle);
+	if (td->io_ops_dlhandle)
+		dlclose(td->io_ops_dlhandle);
 
-	free(td->io_ops);
 	td->io_ops = NULL;
 }
 
@@ -186,7 +182,7 @@ void close_ioengine(struct thread_data *td)
 
 	if (td->io_ops->cleanup) {
 		td->io_ops->cleanup(td);
-		td->io_ops->data = NULL;
+		td->io_ops_data = NULL;
 	}
 
 	free_ioengine(td);
@@ -264,7 +260,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 	fio_ro_check(td, io_u);
 
 	assert((io_u->flags & IO_U_F_FLIGHT) == 0);
-	io_u_set(io_u, IO_U_F_FLIGHT);
+	io_u_set(td, io_u, IO_U_F_FLIGHT);
 
 	assert(fio_file_open(io_u->file));
 
@@ -276,7 +272,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 	io_u->error = 0;
 	io_u->resid = 0;
 
-	if (td->io_ops->flags & FIO_SYNCIO) {
+	if (td_ioengine_flagged(td, FIO_SYNCIO)) {
 		if (fio_fill_issue_time(td))
 			fio_gettime(&io_u->issue_time, NULL);
 
@@ -350,7 +346,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 		}
 	}
 
-	if ((td->io_ops->flags & FIO_SYNCIO) == 0) {
+	if (!td_ioengine_flagged(td, FIO_SYNCIO)) {
 		if (fio_fill_issue_time(td))
 			fio_gettime(&io_u->issue_time, NULL);
 
@@ -379,7 +375,7 @@ int td_io_init(struct thread_data *td)
 			td->error = ret;
 	}
 
-	if (!ret && (td->io_ops->flags & FIO_NOIO))
+	if (!ret && td_ioengine_flagged(td, FIO_NOIO))
 		td->flags |= TD_F_NOIO;
 
 	return ret;
@@ -445,7 +441,7 @@ int td_io_open_file(struct thread_data *td, struct fio_file *f)
 		}
 	}
 
-	if (td->io_ops->flags & FIO_DISKLESSIO)
+	if (td_ioengine_flagged(td, FIO_DISKLESSIO))
 		goto done;
 
 	if (td->o.invalidate_cache && file_invalidate_cache(td, f))
@@ -525,8 +521,15 @@ int td_io_unlink_file(struct thread_data *td, struct fio_file *f)
 {
 	if (td->io_ops->unlink_file)
 		return td->io_ops->unlink_file(td, f);
-	else
-		return unlink(f->file_name);
+	else {
+		int ret;
+
+		ret = unlink(f->file_name);
+		if (ret < 0)
+			return errno;
+
+		return 0;
+	}
 }
 
 int td_io_get_file_size(struct thread_data *td, struct fio_file *f)

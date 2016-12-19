@@ -41,13 +41,14 @@ void fill_buffer_pattern(struct thread_data *td, void *p, unsigned int len)
 	(void)cpy_pattern(td->o.buffer_pattern, td->o.buffer_pattern_bytes, p, len);
 }
 
-void __fill_buffer(struct thread_options *o, unsigned long seed, void *p,
-		   unsigned int len)
+static void __fill_buffer(struct thread_options *o, unsigned long seed, void *p,
+			  unsigned int len)
 {
 	__fill_random_buf_percentage(seed, p, o->compress_percentage, len, len, o->buffer_pattern, o->buffer_pattern_bytes);
 }
 
-unsigned long fill_buffer(struct thread_data *td, void *p, unsigned int len)
+static unsigned long fill_buffer(struct thread_data *td, void *p,
+				 unsigned int len)
 {
 	struct frand_state *fs = &td->verify_state;
 	struct thread_options *o = &td->o;
@@ -651,7 +652,7 @@ int verify_io_u_async(struct thread_data *td, struct io_u **io_u_ptr)
 
 	if (io_u->flags & IO_U_F_IN_CUR_DEPTH) {
 		td->cur_depth--;
-		io_u_clear(io_u, IO_U_F_IN_CUR_DEPTH);
+		io_u_clear(td, io_u, IO_U_F_IN_CUR_DEPTH);
 	}
 	flist_add_tail(&io_u->verify_list, &td->verify_list);
 	*io_u_ptr = NULL;
@@ -802,7 +803,7 @@ int verify_io_u(struct thread_data *td, struct io_u **io_u_ptr)
 	 * If the IO engine is faking IO (like null), then just pretend
 	 * we verified everything.
 	 */
-	if (td->io_ops->flags & FIO_FAKEIO)
+	if (td_ioengine_flagged(td, FIO_FAKEIO))
 		return 0;
 
 	if (io_u->flags & IO_U_F_TRIMMED) {
@@ -1168,10 +1169,10 @@ int get_next_verify(struct thread_data *td, struct io_u *io_u)
 		io_u->buflen = ipo->len;
 		io_u->numberio = ipo->numberio;
 		io_u->file = ipo->file;
-		io_u_set(io_u, IO_U_F_VER_LIST);
+		io_u_set(td, io_u, IO_U_F_VER_LIST);
 
 		if (ipo->flags & IP_F_TRIMMED)
-			io_u_set(io_u, IO_U_F_TRIMMED);
+			io_u_set(td, io_u, IO_U_F_TRIMMED);
 
 		if (!fio_file_open(io_u->file)) {
 			int r = td_io_open_file(td, io_u->file);
@@ -1255,7 +1256,7 @@ static void *verify_async_thread(void *data)
 			io_u = flist_first_entry(&list, struct io_u, verify_list);
 			flist_del_init(&io_u->verify_list);
 
-			io_u_set(io_u, IO_U_F_NO_FILE_PUT);
+			io_u_set(td, io_u, IO_U_F_NO_FILE_PUT);
 			ret = verify_io_u(td, &io_u);
 
 			put_io_u(td, io_u);
@@ -1290,7 +1291,7 @@ int verify_async_init(struct thread_data *td)
 	pthread_attr_t attr;
 
 	pthread_attr_init(&attr);
-	pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN);
+	pthread_attr_setstacksize(&attr, 2 * PTHREAD_STACK_MIN);
 
 	td->verify_thread_exit = 0;
 

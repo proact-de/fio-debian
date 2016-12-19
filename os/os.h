@@ -84,13 +84,17 @@ typedef struct aiocb os_aiocb_t;
 #endif
 
 #ifndef FIO_HAVE_CPU_AFFINITY
-#define fio_getaffinity(pid, mask)	do { } while (0)
 #define fio_cpu_clear(mask, cpu)	do { } while (0)
 typedef unsigned long os_cpu_mask_t;
 
 static inline int fio_setaffinity(int pid, os_cpu_mask_t cpumask)
 {
 	return 0;
+}
+
+static inline int fio_getaffinity(int pid, os_cpu_mask_t *cpumask)
+{
+	return -1;
 }
 
 static inline int fio_cpuset_exit(os_cpu_mask_t *mask)
@@ -167,7 +171,7 @@ extern int fio_cpus_split(os_cpu_mask_t *mask, unsigned int cpu);
 #endif
 
 #ifndef FIO_MAX_JOBS
-#define FIO_MAX_JOBS		2048
+#define FIO_MAX_JOBS		4096
 #endif
 
 #ifndef CONFIG_SOCKLEN_T

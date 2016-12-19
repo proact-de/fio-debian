@@ -52,14 +52,18 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 	 */
 	if (td_read(td) ||
 	   (td_write(td) && td->o.overwrite && !td->o.file_append) ||
-	    (td_write(td) && td->io_ops->flags & FIO_NOEXTEND))
+	    (td_write(td) && td_ioengine_flagged(td, FIO_NOEXTEND)))
 		new_layout = 1;
 	if (td_write(td) && !td->o.overwrite && !td->o.file_append)
 		unlink_file = 1;
 
 	if (unlink_file || new_layout) {
+		int ret;
+
 		dprint(FD_FILE, "layout unlink %s\n", f->file_name);
-		if ((td_io_unlink_file(td, f) < 0) && (errno != ENOENT)) {
+
+		ret = td_io_unlink_file(td, f);
+		if (ret != 0 && ret != ENOENT) {
 			td_verror(td, errno, "unlink");
 			return 1;
 		}
@@ -213,7 +217,7 @@ static int pre_read_file(struct thread_data *td, struct fio_file *f)
 	unsigned int bs;
 	char *b;
 
-	if (td->io_ops->flags & FIO_PIPEIO)
+	if (td_ioengine_flagged(td, FIO_PIPEIO))
 		return 0;
 
 	if (!fio_file_open(f)) {
@@ -329,7 +333,7 @@ static int char_size(struct thread_data *td, struct fio_file *f)
 	int r;
 
 	if (td->io_ops->open_file(td, f)) {
-		log_err("fio: failed opening blockdev %s for size check\n",
+		log_err("fio: failed opening chardev %s for size check\n",
 			f->file_name);
 		return 1;
 	}
@@ -761,16 +765,12 @@ static unsigned long long get_fs_free_counts(struct thread_data *td)
 uint64_t get_start_offset(struct thread_data *td, struct fio_file *f)
 {
 	struct thread_options *o = &td->o;
-	uint64_t offset;
 
 	if (o->file_append && f->filetype == FIO_TYPE_FILE)
 		return f->real_file_size;
 
-	offset = td->o.start_offset + td->subjob_number * td->o.offset_increment;
-	if (offset % td_max_bs(td))
-		offset -= (offset % td_max_bs(td));
-
-	return offset;
+	return td->o.start_offset +
+		td->subjob_number * td->o.offset_increment;
 }
 
 /*
@@ -827,7 +827,7 @@ int setup_files(struct thread_data *td)
 	 * device/file sizes are zero and no size given, punt
 	 */
 	if ((!total_size || total_size == -1ULL) && !o->size &&
-	    !(td->io_ops->flags & FIO_NOIO) && !o->fill_device &&
+	    !td_ioengine_flagged(td, FIO_NOIO) && !o->fill_device &&
 	    !(o->nr_files && (o->file_size_low || o->file_size_high))) {
 		log_err("%s: you need to specify size=\n", o->name);
 		td_verror(td, EINVAL, "total_file_size");
@@ -903,7 +903,7 @@ int setup_files(struct thread_data *td)
 
 		if (f->filetype == FIO_TYPE_FILE &&
 		    (f->io_size + f->file_offset) > f->real_file_size &&
-		    !(td->io_ops->flags & FIO_DISKLESSIO)) {
+		    !td_ioengine_flagged(td, FIO_DISKLESSIO)) {
 			if (!o->create_on_open) {
 				need_extend++;
 				extend_size += (f->io_size + f->file_offset);
@@ -1225,10 +1225,12 @@ static void get_file_type(struct fio_file *f)
 	else
 		f->filetype = FIO_TYPE_FILE;
 
+#ifdef WIN32
 	/* \\.\ is the device namespace in Windows, where every file is
 	 * a block device */
 	if (strncmp(f->file_name, "\\\\.\\", 4) == 0)
 		f->filetype = FIO_TYPE_BD;
+#endif
 
 	if (!stat(f->file_name, &sb)) {
 		if (S_ISBLK(sb.st_mode))
@@ -1240,31 +1242,35 @@ static void get_file_type(struct fio_file *f)
 	}
 }
 
-static int __is_already_allocated(const char *fname)
+static bool __is_already_allocated(const char *fname, bool set)
 {
 	struct flist_head *entry;
-	char *filename;
+	bool ret;
 
-	if (flist_empty(&filename_list))
-		return 0;
+	ret = file_bloom_exists(fname, set);
+	if (!ret)
+		return ret;
 
 	flist_for_each(entry, &filename_list) {
-		filename = flist_entry(entry, struct file_name, list)->filename;
+		struct file_name *fn;
 
-		if (strcmp(filename, fname) == 0)
-			return 1;
+		fn = flist_entry(entry, struct file_name, list);
+
+		if (!strcmp(fn->filename, fname))
+			return true;
 	}
 
-	return 0;
+	return false;
 }
 
-static int is_already_allocated(const char *fname)
+static bool is_already_allocated(const char *fname)
 {
-	int ret;
+	bool ret;
 
 	fio_file_hash_lock();
-	ret = __is_already_allocated(fname);
+	ret = __is_already_allocated(fname, false);
 	fio_file_hash_unlock();
+
 	return ret;
 }
 
@@ -1276,7 +1282,7 @@ static void set_already_allocated(const char *fname)
 	fn->filename = strdup(fname);
 
 	fio_file_hash_lock();
-	if (!__is_already_allocated(fname)) {
+	if (!__is_already_allocated(fname, true)) {
 		flist_add_tail(&fn->list, &filename_list);
 		fn = NULL;
 	}
@@ -1287,7 +1293,6 @@ static void set_already_allocated(const char *fname)
 		free(fn);
 	}
 }
-
 
 static void free_already_allocated(void)
 {
@@ -1314,7 +1319,6 @@ static struct fio_file *alloc_new_file(struct thread_data *td)
 
 	f = smalloc(sizeof(*f));
 	if (!f) {
-		log_err("fio: smalloc OOM\n");
 		assert(0);
 		return NULL;
 	}
@@ -1323,6 +1327,26 @@ static struct fio_file *alloc_new_file(struct thread_data *td)
 	f->shadow_fd = -1;
 	fio_file_reset(td, f);
 	return f;
+}
+
+bool exists_and_not_regfile(const char *filename)
+{
+	struct stat sb;
+
+	if (lstat(filename, &sb) == -1)
+		return false;
+
+#ifndef WIN32 /* NOT Windows */
+	if (S_ISREG(sb.st_mode))
+		return false;
+#else
+	/* \\.\ is the device namespace in Windows, where every file
+	 * is a device node */
+	if (S_ISREG(sb.st_mode) && strncmp(filename, "\\\\.\\", 4) != 0)
+		return false;
+#endif
+
+	return true;
 }
 
 int add_file(struct thread_data *td, const char *fname, int numjob, int inc)
@@ -1335,12 +1359,14 @@ int add_file(struct thread_data *td, const char *fname, int numjob, int inc)
 	dprint(FD_FILE, "add file %s\n", fname);
 
 	if (td->o.directory)
-		len = set_name_idx(file_name, PATH_MAX, td->o.directory, numjob);
+		len = set_name_idx(file_name, PATH_MAX, td->o.directory, numjob,
+					td->o.unique_filename);
 
 	sprintf(file_name + len, "%s", fname);
 
 	/* clean cloned siblings using existing files */
-	if (numjob && is_already_allocated(file_name))
+	if (numjob && is_already_allocated(file_name) &&
+	    !exists_and_not_regfile(fname))
 		return 0;
 
 	f = alloc_new_file(td);
@@ -1371,14 +1397,12 @@ int add_file(struct thread_data *td, const char *fname, int numjob, int inc)
 	/*
 	 * init function, io engine may not be loaded yet
 	 */
-	if (td->io_ops && (td->io_ops->flags & FIO_DISKLESSIO))
+	if (td->io_ops && td_ioengine_flagged(td, FIO_DISKLESSIO))
 		f->real_file_size = -1ULL;
 
 	f->file_name = smalloc_strdup(file_name);
-	if (!f->file_name) {
-		log_err("fio: smalloc OOM\n");
+	if (!f->file_name)
 		assert(0);
-	}
 
 	get_file_type(f);
 
@@ -1581,10 +1605,8 @@ void dup_files(struct thread_data *td, struct thread_data *org)
 
 		if (f->file_name) {
 			__f->file_name = smalloc_strdup(f->file_name);
-			if (!__f->file_name) {
-				log_err("fio: smalloc OOM\n");
+			if (!__f->file_name)
 				assert(0);
-			}
 
 			__f->filetype = f->filetype;
 		}
@@ -1640,16 +1662,16 @@ void fio_file_reset(struct thread_data *td, struct fio_file *f)
 		lfsr_reset(&f->lfsr, td->rand_seeds[FIO_RAND_BLOCK_OFF]);
 }
 
-int fio_files_done(struct thread_data *td)
+bool fio_files_done(struct thread_data *td)
 {
 	struct fio_file *f;
 	unsigned int i;
 
 	for_each_file(td, f, i)
 		if (!fio_file_done(f))
-			return 0;
+			return false;
 
-	return 1;
+	return true;
 }
 
 /* free memory used in initialization phase only */

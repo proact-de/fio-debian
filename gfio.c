@@ -459,10 +459,12 @@ static int send_job_file(struct gui_entry *ge)
 
 static void *server_thread(void *arg)
 {
+	fio_server_create_sk_key();
 	is_backend = 1;
 	gfio_server_running = 1;
 	fio_start_server(NULL);
 	gfio_server_running = 0;
+	fio_server_destroy_sk_key();
 	return NULL;
 }
 
@@ -1677,7 +1679,7 @@ static void init_ui(int *argc, char **argv[], struct gui *ui)
 	 * Without it, the update that happens in gfio_update_thread_status
 	 * doesn't really happen in a timely fashion, you need expose events
 	 */
-#if !GTK_CHECK_VERSION(2, 24, 0)
+#if !GLIB_CHECK_VERSION(2, 31, 0)
 	if (!g_thread_supported())
 		g_thread_init(NULL);
 #endif

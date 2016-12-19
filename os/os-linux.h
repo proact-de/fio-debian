@@ -18,6 +18,7 @@
 #include <linux/major.h>
 #include <byteswap.h>
 
+#include "./os-linux-syscall.h"
 #include "binject.h"
 #include "../file.h"
 
@@ -25,6 +26,7 @@
 #define FIO_HAVE_DISK_UTIL
 #define FIO_HAVE_SGIO
 #define FIO_HAVE_IOPRIO
+#define FIO_HAVE_IOPRIO_CLASS
 #define FIO_HAVE_IOSCHED_SWITCH
 #define FIO_HAVE_ODIRECT
 #define FIO_HAVE_HUGETLB
@@ -38,6 +40,7 @@
 #define FIO_HAVE_BINJECT
 #define FIO_HAVE_GETTID
 #define FIO_USE_GENERIC_INIT_RANDOM_STATE
+#define FIO_HAVE_PWRITEV2
 
 #ifdef MAP_HUGETLB
 #define FIO_HAVE_MMAP_HUGE
@@ -94,6 +97,12 @@ enum {
 
 #define IOPRIO_BITS		16
 #define IOPRIO_CLASS_SHIFT	13
+
+#define IOPRIO_MIN_PRIO		0	/* highest priority */
+#define IOPRIO_MAX_PRIO		7	/* lowest priority */
+
+#define IOPRIO_MIN_PRIO_CLASS	0
+#define IOPRIO_MAX_PRIO_CLASS	3
 
 static inline int ioprio_set(int which, int who, int ioprio_class, int ioprio)
 {
@@ -288,5 +297,56 @@ static inline int fio_set_sched_idle(void)
 #endif
 
 #define FIO_HAVE_STREAMID
+
+#ifndef RWF_HIPRI
+#define RWF_HIPRI	0x00000001
+#endif
+#ifndef RWF_DSYNC
+#define RWF_DSYNC	0x00000002
+#endif
+#ifndef RWF_SYNC
+#define RWF_SYNC	0x00000004
+#endif
+
+#ifndef CONFIG_PWRITEV2
+#ifdef __NR_preadv2
+static inline void make_pos_h_l(unsigned long *pos_h, unsigned long *pos_l,
+				off_t offset)
+{
+	*pos_l = offset & 0xffffffff;
+	*pos_h = ((uint64_t) offset) >> 32;
+
+}
+static inline ssize_t preadv2(int fd, const struct iovec *iov, int iovcnt,
+			      off_t offset, unsigned int flags)
+{
+	unsigned long pos_l, pos_h;
+
+	make_pos_h_l(&pos_h, &pos_l, offset);
+	return syscall(__NR_preadv2, fd, iov, iovcnt, pos_l, pos_h, flags);
+}
+static inline ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
+			       off_t offset, unsigned int flags)
+{
+	unsigned long pos_l, pos_h;
+
+	make_pos_h_l(&pos_h, &pos_l, offset);
+	return syscall(__NR_pwritev2, fd, iov, iovcnt, pos_l, pos_h, flags);
+}
+#else
+static inline ssize_t preadv2(int fd, const struct iovec *iov, int iovcnt,
+			      off_t offset, unsigned int flags)
+{
+	errno = ENOSYS;
+	return -1;
+}
+static inline ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
+			       off_t offset, unsigned int flags)
+{
+	errno = ENOSYS;
+	return -1;
+}
+#endif /* __NR_preadv2 */
+#endif /* CONFIG_PWRITEV2 */
 
 #endif

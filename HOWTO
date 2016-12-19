@@ -53,8 +53,8 @@ bottom, it contains the following basic parameters:
 
 	IO engine	How do we issue io? We could be memory mapping the
 			file, we could be using regular read/write, we
-			could be using splice, async io, syslet, or even
-			SG (SCSI generic sg).
+			could be using splice, async io, or even SG
+			(SCSI generic sg).
 
 	IO depth	If the io engine is async, how large a queuing
 			depth do we want to maintain?
@@ -329,18 +329,15 @@ directory=str	Prefix filenames with this directory. Used to place files
 filename=str	Fio normally makes up a filename based on the job name,
 		thread number, and file number. If you want to share
 		files between threads in a job or several jobs, specify
-		a filename for each of them to override the default. If
-		the ioengine used is 'net', the filename is the host, port,
-		and protocol to use in the format of =host,port,protocol.
-		See ioengine=net for more. If the ioengine is file based, you
-		can specify a number of files by separating the names with a
-		':' colon. So if you wanted a job to open /dev/sda and /dev/sdb
-		as the two working files, you would use
-		filename=/dev/sda:/dev/sdb. On Windows, disk devices are
-		accessed as \\.\PhysicalDrive0 for the first device,
-		\\.\PhysicalDrive1 for the second etc. Note: Windows and
-		FreeBSD prevent write access to areas of the disk containing
-		in-use data (e.g. filesystems).
+		a filename for each of them to override the default.
+		If the ioengine is file based, you can specify a number of
+		files by separating the names with a ':' colon. So if you
+		wanted a job to open /dev/sda and /dev/sdb as the two working
+		files, you would use filename=/dev/sda:/dev/sdb. On Windows,
+		disk devices are accessed as \\.\PhysicalDrive0 for the first
+		device, \\.\PhysicalDrive1 for the second etc. Note: Windows
+		and FreeBSD prevent write access to areas of the disk
+		containing in-use data (e.g. filesystems).
 		If the wanted filename does need to include a colon, then
 		escape that with a '\' character. For instance, if the filename
 		is "/dev/dsk/foo@3,0:c", then you would use
@@ -374,6 +371,11 @@ filename_format=str
 		default of $jobname.$jobnum.$filenum will be used if
 		no other format specifier is given.
 
+unique_filename=bool	To avoid collisions between networked clients, fio
+		defaults to prefixing any generated filenames (with a directory
+		specified) with the source of the client connecting. To disable
+		this behavior, set this option to 0.
+
 opendir=str	Tell fio to recursively add any file it can find in this
 		directory and down the file system tree.
 
@@ -403,6 +405,7 @@ rw=str		Type of io pattern. Accepted values are:
 			trimwrite	Mixed trims and writes. Blocks will be
 					trimmed first, then written to.
 
+		Fio defaults to read if the option is not specified.
 		For the mixed io types, the default is to split them 50/50.
 		For certain types of io the result may still be skewed a bit,
 		since the speed may be different. It is possible to specify
@@ -697,11 +700,14 @@ ioengine=str	Defines how the job issues io to the file. The following
 			sync	Basic read(2) or write(2) io. lseek(2) is
 				used to position the io location.
 
-			psync 	Basic pread(2) or pwrite(2) io.
+			psync 	Basic pread(2) or pwrite(2) io. Default on all
+				supported operating systems except for Windows.
 
 			vsync	Basic readv(2) or writev(2) IO.
 
-			psyncv	Basic preadv(2) or pwritev(2) IO.
+			pvsync	Basic preadv(2) or pwritev(2) IO.
+
+			pvsync2	Basic preadv2(2) or pwritev2(2) IO.
 
 			libaio	Linux native asynchronous io. Note that Linux
 				may only support queued behaviour with
@@ -713,6 +719,7 @@ ioengine=str	Defines how the job issues io to the file. The following
 			solarisaio Solaris native asynchronous io.
 
 			windowsaio Windows native asynchronous io.
+				Default on Windows.
 
 			mmap	File is memory mapped and data copied
 				to/from using memcpy(3).
@@ -720,9 +727,6 @@ ioengine=str	Defines how the job issues io to the file. The following
 			splice	splice(2) is used to transfer the data and
 				vmsplice(2) to transfer data from user
 				space to the kernel.
-
-			syslet-rw Use the syslet system calls to make
-				regular read/write async.
 
 			sg	SCSI generic sg v3 io. May either be
 				synchronous using the SG_IO ioctl, or if
@@ -748,12 +752,13 @@ ioengine=str	Defines how the job issues io to the file. The following
 
 			cpuio	Doesn't transfer any data, but burns CPU
 				cycles according to the cpuload= and
-				cpucycle= options. Setting cpuload=85
+				cpuchunks= options. Setting cpuload=85
 				will cause that job to do nothing but burn
 				85% of the CPU. In case of SMP machines,
 				use numjobs=<no_of_cpu> to get desired CPU
 				usage, as the cpuload only loads a single
-				CPU at the desired rate.
+				CPU at the desired rate. A job never finishes
+				unless there is at least one non-cpuio job.
 
 			guasi	The GUASI IO engine is the Generic Userspace
 				Asyncronous Syscall Interface approach
@@ -1061,9 +1066,14 @@ random_generator=str	Fio supports the following engines for generating
 
 nice=int	Run the job with the given nice value. See man nice(2).
 
+     On Windows, values less than -15 set the process class to "High";
+     -1 through -15 set "Above Normal"; 1 through 15 "Below Normal";
+     and above 15 "Idle" priority class.
+
 prio=int	Set the io priority value of this job. Linux limits us to
 		a positive value between 0 and 7, with 0 being the highest.
-		See man ionice(1).
+		See man ionice(1). Refer to an appropriate manpage for
+		other operating systems since meaning of priority may differ.
 
 prioclass=int	Set the io priority class. See man ionice(1).
 
@@ -1169,7 +1179,7 @@ cpus_allowed_policy=str Set the policy of how fio distributes the CPUs
 		one cpu per job. If not enough CPUs are given for the jobs
 		listed, then fio will roundrobin the CPUs in the set.
 
-numa_cpu_nodes=str Set this job running on spcified NUMA nodes' CPUs. The
+numa_cpu_nodes=str Set this job running on specified NUMA nodes' CPUs. The
 		arguments allow comma delimited list of cpu numbers,
 		A-B ranges, or 'all'. Note, to enable numa options support,
 		fio must be built on a system with libnuma-dev(el) installed.
@@ -1219,6 +1229,7 @@ mem=str		Fio can use various types of memory as the io unit buffer.
 		The allowed values are:
 
 			malloc	Use memory from malloc(3) as the buffers.
+				Default memory type.
 
 			shm	Use shared memory as the buffers. Allocated
 				through shmget(2).
@@ -1288,7 +1299,7 @@ iopsavgtime=int	Average the calculated IOPS over the given time. Value
 		through 'write_iops_log', then the minimum of this option and
 		'log_avg_msec' will be used.  Default: 500ms.
 
-create_serialize=bool	If true, serialize the file creating for the jobs.
+create_serialize=bool	If true, serialize the file creation for the jobs.
 			This may be handy to avoid interleaving of data
 			files, which may greatly depend on the filesystem
 			used and even the number of processors in the system.
@@ -1326,6 +1337,8 @@ pre_read=bool	If this is given, files will be pre-read into memory before
 unlink=bool	Unlink the job files when done. Not the default, as repeated
 		runs of that job would then waste time recreating the file
 		set again and again.
+
+unlink_each_loop=bool	Unlink job files after each iteration or loop.
 
 loops=int	Run the specified number of iterations of this job. Used
 		to repeat the same workload a given number of times. Defaults
@@ -1545,10 +1558,10 @@ read_iolog=str	Open an iolog with the specified file name and replay the
 
 replay_no_stall=int When replaying I/O with read_iolog the default behavior
 		is to attempt to respect the time stamps within the log and
-		replay them with the appropriate delay between IOPS.  By
+		replay them with the appropriate delay between IOPS. By
 		setting this variable fio will not respect the timestamps and
 		attempt to replay them as fast as possible while still
-		respecting ordering.  The result is the same I/O pattern to a
+		respecting ordering. The result is the same I/O pattern to a
 		given device, but different timings.
 
 replay_redirect=str While replaying I/O patterns using read_iolog the
@@ -1560,13 +1573,14 @@ replay_redirect=str While replaying I/O patterns using read_iolog the
 		mapping.  Replay_redirect causes all IOPS to be replayed onto
 		the single specified device regardless of the device it was
 		recorded from. i.e. replay_redirect=/dev/sdc would cause all
-		IO in the blktrace to be replayed onto /dev/sdc.  This means
-		multiple devices will be replayed onto a single, if the trace
-		contains multiple devices.  If you want multiple devices to be
-		replayed concurrently to multiple redirected devices you must
-		blkparse your trace into separate traces and replay them with
-		independent fio invocations.  Unfortuantely this also breaks
-		the strict time ordering between multiple device accesses.
+		IO in the blktrace or iolog to be replayed onto /dev/sdc.
+		This means multiple devices will be replayed onto a single
+		device, if the trace contains multiple devices. If you want
+		multiple devices to be replayed concurrently to multiple
+		redirected devices you must blkparse your trace into separate
+		traces and replay them with independent fio invocations.
+		Unfortuantely this also breaks the strict time ordering
+		between multiple device accesses.
 
 replay_align=int	Force alignment of IO offsets and lengths in a trace
 		to this power of 2 value.
@@ -1599,9 +1613,17 @@ write_lat_log=str Same as write_bw_log, except that this option stores io
 		The actual log names will be foo_slat.x.log, foo_clat.x.log,
 		and foo_lat.x.log, where x is the index of the job (1..N,
 		where N is the number of jobs). This helps fio_generate_plot
-		fine the logs automatically. If 'per_job_logs' is false, then
+		find the logs automatically. If 'per_job_logs' is false, then
 		the filename will not include the job index. See 'Log File
 		Formats'.
+
+write_hist_log=str Same as write_lat_log, but writes I/O completion
+		latency histograms. If no filename is given with this option, the
+		default filename of "jobname_clat_hist.x.log" is used, where x is
+		the index of the job (1..N, where N is the number of jobs). Even
+		if the filename is given, fio will still append the type of log.
+		If per_job_logs is false, then the filename will not include the
+		job index. See 'Log File Formats'.
 
 write_iops_log=str Same as write_bw_log, but writes IOPS. If no filename is
 		given with this option, the default filename of
@@ -1617,6 +1639,20 @@ log_avg_msec=int By default, fio will log an entry in the iops, latency,
 		this option makes fio average the each log entry over the
 		specified period of time, reducing the resolution of the log.
 		See log_max_value as well. Defaults to 0, logging all entries.
+
+log_hist_msec=int Same as log_avg_msec, but logs entries for completion
+		latency histograms. Computing latency percentiles from averages of
+		intervals using log_avg_msec is innacurate. Setting this option makes
+		fio log histogram entries over the specified period of time, reducing
+		log sizes for high IOPS devices while retaining percentile accuracy.
+		See log_hist_coarseness as well. Defaults to 0, meaning histogram
+		logging is disabled.
+
+log_hist_coarseness=int Integer ranging from 0 to 6, defining the coarseness
+		of the resolution of the histogram logs enabled with log_hist_msec. For
+		each increment in coarseness, fio outputs half as many bins. Defaults to
+		0, for which histogram logs contain 1216 latency bins. See
+		'Log File Formats'.
 
 log_max_value=bool	If log_avg_msec is set, fio logs the average over that
 		window. If you instead want to log the maximum value, set this
@@ -1649,6 +1685,10 @@ log_store_compressed=bool	If set, fio will store the log files in a
 		compressed format. They can be decompressed with fio, using
 		the --inflate-log command line parameter. The files will be
 		stored with a .fz suffix.
+
+log_unix_epoch=bool	If set, fio will log Unix timestamps to the log
+		files produced by enabling write_type_log for each log type, instead
+		of the default zero-based timestamps.
 
 block_error_percentiles=bool	If set, record errors in trim block-sized
 		units from writes and trims and output a histogram of
@@ -1833,12 +1873,12 @@ that defines them is selected.
 [psyncv2] hipri		Set RWF_HIPRI on IO, indicating to the kernel that
 			it's of higher priority than normal.
 
-[cpu] cpuload=int Attempt to use the specified percentage of CPU cycles.
+[cpuio] cpuload=int Attempt to use the specified percentage of CPU cycles.
 
-[cpu] cpuchunks=int Split the load into cycles of the given time. In
+[cpuio] cpuchunks=int Split the load into cycles of the given time. In
 		microseconds.
 
-[cpu] exit_on_io_done=bool Detect when IO threads are done, then exit.
+[cpuio] exit_on_io_done=bool Detect when IO threads are done, then exit.
 
 [netsplice] hostname=str
 [net] hostname=str The host name or IP address to use for TCP or UDP based IO.
@@ -1920,7 +1960,7 @@ be the starting port number since fio will use a range of ports.
 [mtd] skip_bad=bool	Skip operations against known bad blocks.
 
 [libhdfs] hdfsdirectory	libhdfs will create chunk in this HDFS directory
-[libhdfs] chunck_size	the size of the chunck to use for each file.
+[libhdfs] chunk_size	the size of the chunk to use for each file.
 
 
 6.0 Interpreting the output

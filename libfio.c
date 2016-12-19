@@ -34,6 +34,7 @@
 #include "os/os.h"
 #include "filelock.h"
 #include "helper_thread.h"
+#include "filehash.h"
 
 /*
  * Just expose an empty list, if the OS does not support disk util stats
@@ -47,6 +48,7 @@ unsigned long arch_flags = 0;
 uintptr_t page_mask = 0;
 uintptr_t page_size = 0;
 
+/* see os/os.h */
 static const char *fio_os_strings[os_nr] = {
 	"Invalid",
 	"Linux",
@@ -62,6 +64,7 @@ static const char *fio_os_strings[os_nr] = {
 	"DragonFly",
 };
 
+/* see arch/arch.h */
 static const char *fio_arch_strings[arch_nr] = {
 	"Invalid",
 	"x86-64",
@@ -75,6 +78,8 @@ static const char *fio_arch_strings[arch_nr] = {
 	"arm",
 	"sh",
 	"hppa",
+	"mips",
+	"aarch64",
 	"generic"
 };
 
@@ -130,7 +135,6 @@ void clear_io_state(struct thread_data *td, int all)
 
 void reset_all_stats(struct thread_data *td)
 {
-	struct timeval tv;
 	int i;
 
 	reset_io_counters(td, 1);
@@ -144,11 +148,10 @@ void reset_all_stats(struct thread_data *td)
 		td->rwmix_issues = 0;
 	}
 
-	fio_gettime(&tv, NULL);
-	memcpy(&td->epoch, &tv, sizeof(tv));
-	memcpy(&td->start, &tv, sizeof(tv));
-	memcpy(&td->iops_sample_time, &tv, sizeof(tv));
-	memcpy(&td->bw_sample_time, &tv, sizeof(tv));
+	set_epoch_time(td, td->o.log_unix_epoch);
+	memcpy(&td->start, &td->epoch, sizeof(struct timeval));
+	memcpy(&td->iops_sample_time, &td->epoch, sizeof(struct timeval));
+	memcpy(&td->bw_sample_time, &td->epoch, sizeof(struct timeval));
 
 	lat_target_reset(td);
 	clear_rusage_stat(td);
@@ -274,14 +277,18 @@ int fio_running_or_pending_io_threads(void)
 {
 	struct thread_data *td;
 	int i;
+	int nr_io_threads = 0;
 
 	for_each_td(td, i) {
 		if (td->flags & TD_F_NOIO)
 			continue;
+		nr_io_threads++;
 		if (td->runstate < TD_EXITED)
 			return 1;
 	}
 
+	if (!nr_io_threads)
+		return -1; /* we only had cpuio threads to begin with */
 	return 0;
 }
 
@@ -369,6 +376,8 @@ int initialize_fio(char *envp[])
 		log_err("fio: failed initializing filelock subsys\n");
 		return 1;
 	}
+
+	file_hash_init();
 
 	/*
 	 * We need locale for number printing, if it isn't set then just

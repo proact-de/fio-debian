@@ -346,7 +346,7 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 	unsigned long long offset;
 	unsigned int bytes;
 	int reads, writes, waits, fileno = 0, file_action = 0; /* stupid gcc */
-	char *fname, *act;
+	char *rfname, *fname, *act;
 	char *str, *p;
 	enum fio_ddir rw;
 
@@ -357,7 +357,7 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 	 * for doing verifications.
 	 */
 	str = malloc(4096);
-	fname = malloc(256+16);
+	rfname = fname = malloc(256+16);
 	act = malloc(256+16);
 
 	reads = writes = waits = 0;
@@ -365,8 +365,12 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 		struct io_piece *ipo;
 		int r;
 
-		r = sscanf(p, "%256s %256s %llu %u", fname, act, &offset,
+		r = sscanf(p, "%256s %256s %llu %u", rfname, act, &offset,
 									&bytes);
+
+		if (td->o.replay_redirect)
+			fname = td->o.replay_redirect;
+
 		if (r == 4) {
 			/*
 			 * Check action first
@@ -421,6 +425,8 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 				continue;
 			writes++;
 		} else if (rw == DDIR_WAIT) {
+			if (td->o.no_stall)
+				continue;
 			waits++;
 		} else if (rw == DDIR_INVAL) {
 		} else if (!ddir_sync(rw)) {
@@ -451,7 +457,7 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 
 	free(str);
 	free(act);
-	free(fname);
+	free(rfname);
 
 	if (writes && read_only) {
 		log_err("fio: <%s> skips replay of %d writes due to"
@@ -576,6 +582,9 @@ void setup_log(struct io_log **log, struct log_params *p,
 	       const char *filename)
 {
 	struct io_log *l;
+	int i;
+	struct io_u_plat_entry *entry;
+	struct flist_head *list;
 
 	l = scalloc(1, sizeof(*l));
 	INIT_FLIST_HEAD(&l->io_logs);
@@ -584,8 +593,20 @@ void setup_log(struct io_log **log, struct log_params *p,
 	l->log_gz = p->log_gz;
 	l->log_gz_store = p->log_gz_store;
 	l->avg_msec = p->avg_msec;
+	l->hist_msec = p->hist_msec;
+	l->hist_coarseness = p->hist_coarseness;
 	l->filename = strdup(filename);
 	l->td = p->td;
+
+	/* Initialize histogram lists for each r/w direction,
+	 * with initial io_u_plat of all zeros:
+	 */
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		list = &l->hist_window[i].list;
+		INIT_FLIST_HEAD(list);
+		entry = calloc(1, sizeof(struct io_u_plat_entry));
+		flist_add(&entry->list, list);
+	}
 
 	if (l->td && l->td->o.io_submit_mode != IO_MODE_OFFLOAD) {
 		struct io_logs *p;
@@ -604,7 +625,7 @@ void setup_log(struct io_log **log, struct log_params *p,
 	if (l->log_gz && !p->td)
 		l->log_gz = 0;
 	else if (l->log_gz || l->log_gz_store) {
-		pthread_mutex_init(&l->chunk_lock, NULL);
+		mutex_init_pshared(&l->chunk_lock);
 		p->td->flags |= TD_F_COMPRESS_LOG;
 	}
 
@@ -645,6 +666,7 @@ void free_log(struct io_log *log)
 		cur_log = flist_first_entry(&log->io_logs, struct io_logs, list);
 		flist_del_init(&cur_log->list);
 		free(cur_log->log);
+		sfree(cur_log);
 	}
 
 	if (log->pending) {
@@ -656,6 +678,67 @@ void free_log(struct io_log *log)
 	free(log->pending);
 	free(log->filename);
 	sfree(log);
+}
+
+inline unsigned long hist_sum(int j, int stride, unsigned int *io_u_plat,
+		unsigned int *io_u_plat_last)
+{
+	unsigned long sum;
+	int k;
+
+	if (io_u_plat_last) {
+		for (k = sum = 0; k < stride; k++)
+			sum += io_u_plat[j + k] - io_u_plat_last[j + k];
+	} else {
+		for (k = sum = 0; k < stride; k++)
+			sum += io_u_plat[j + k];
+	}
+
+	return sum;
+}
+
+static void flush_hist_samples(FILE *f, int hist_coarseness, void *samples,
+			       uint64_t sample_size)
+{
+	struct io_sample *s;
+	int log_offset;
+	uint64_t i, j, nr_samples;
+	struct io_u_plat_entry *entry, *entry_before;
+	unsigned int *io_u_plat;
+	unsigned int *io_u_plat_before;
+
+	int stride = 1 << hist_coarseness;
+	
+	if (!sample_size)
+		return;
+
+	s = __get_sample(samples, 0, 0);
+	log_offset = (s->__ddir & LOG_OFFSET_SAMPLE_BIT) != 0;
+
+	nr_samples = sample_size / __log_entry_sz(log_offset);
+
+	for (i = 0; i < nr_samples; i++) {
+		s = __get_sample(samples, log_offset, i);
+
+		entry = (struct io_u_plat_entry *) (uintptr_t) s->val;
+		io_u_plat = entry->io_u_plat;
+
+		entry_before = flist_first_entry(&entry->list, struct io_u_plat_entry, list);
+		io_u_plat_before = entry_before->io_u_plat;
+
+		fprintf(f, "%lu, %u, %u, ", (unsigned long) s->time,
+						io_sample_ddir(s), s->bs);
+		for (j = 0; j < FIO_IO_U_PLAT_NR - stride; j += stride) {
+			fprintf(f, "%lu, ", hist_sum(j, stride, io_u_plat,
+						io_u_plat_before));
+		}
+		fprintf(f, "%lu\n", (unsigned long)
+		        hist_sum(FIO_IO_U_PLAT_NR - stride, stride, io_u_plat,
+					io_u_plat_before));
+
+		flist_del(&entry_before->list);
+		free(entry_before);
+	}
 }
 
 void flush_samples(FILE *f, void *samples, uint64_t sample_size)
@@ -964,7 +1047,7 @@ int iolog_file_inflate(const char *file)
 
 #endif
 
-void flush_log(struct io_log *log, int do_append)
+void flush_log(struct io_log *log, bool do_append)
 {
 	void *buf;
 	FILE *f;
@@ -987,7 +1070,14 @@ void flush_log(struct io_log *log, int do_append)
 
 		cur_log = flist_first_entry(&log->io_logs, struct io_logs, list);
 		flist_del_init(&cur_log->list);
-		flush_samples(f, cur_log->log, cur_log->nr_samples * log_entry_sz(log));
+		
+		if (log->td && log == log->td->clat_hist_log)
+			flush_hist_samples(f, log->hist_coarseness, cur_log->log,
+			                   log_sample_sz(log, cur_log));
+		else
+			flush_samples(f, cur_log->log, log_sample_sz(log, cur_log));
+		
+		sfree(cur_log);
 	}
 
 	fclose(f);
@@ -1069,7 +1159,8 @@ static int gz_work(struct iolog_flush_data *data)
 				data->log->filename);
 	do {
 		if (c)
-			dprint(FD_COMPRESS, "seq=%d, chunk=%lu\n", seq, c->len);
+			dprint(FD_COMPRESS, "seq=%d, chunk=%lu\n", seq,
+				(unsigned long) c->len);
 		c = get_new_chunk(seq);
 		stream.avail_out = GZ_CHUNK;
 		stream.next_out = c->buf;
@@ -1106,7 +1197,7 @@ static int gz_work(struct iolog_flush_data *data)
 	total -= c->len;
 	c->len = GZ_CHUNK - stream.avail_out;
 	total += c->len;
-	dprint(FD_COMPRESS, "seq=%d, chunk=%lu\n", seq, c->len);
+	dprint(FD_COMPRESS, "seq=%d, chunk=%lu\n", seq, (unsigned long) c->len);
 
 	if (ret != Z_STREAM_END) {
 		do {
@@ -1117,7 +1208,8 @@ static int gz_work(struct iolog_flush_data *data)
 			c->len = GZ_CHUNK - stream.avail_out;
 			total += c->len;
 			flist_add_tail(&c->list, &list);
-			dprint(FD_COMPRESS, "seq=%d, chunk=%lu\n", seq, c->len);
+			dprint(FD_COMPRESS, "seq=%d, chunk=%lu\n", seq,
+				(unsigned long) c->len);
 		} while (ret != Z_STREAM_END);
 	}
 
@@ -1226,9 +1318,7 @@ static int iolog_flush(struct io_log *log)
 		data->samples = cur_log->log;
 		data->nr_samples = cur_log->nr_samples;
 
-		cur_log->nr_samples = 0;
-		cur_log->max_samples = 0;
-		cur_log->log = NULL;
+		sfree(cur_log);
 
 		gz_work(data);
 	}
@@ -1353,6 +1443,20 @@ static int write_clat_log(struct thread_data *td, int try, bool unit_log)
 	return ret;
 }
 
+static int write_clat_hist_log(struct thread_data *td, int try, bool unit_log)
+{
+	int ret;
+
+	if (!unit_log)
+		return 0;
+
+	ret = __write_log(td, td->clat_hist_log, try);
+	if (!ret)
+		td->clat_hist_log = NULL;
+
+	return ret;
+}
+
 static int write_lat_log(struct thread_data *td, int try, bool unit_log)
 {
 	int ret;
@@ -1387,8 +1491,9 @@ enum {
 	SLAT_LOG_MASK	= 4,
 	CLAT_LOG_MASK	= 8,
 	IOPS_LOG_MASK	= 16,
+	CLAT_HIST_LOG_MASK = 32,
 
-	ALL_LOG_NR	= 5,
+	ALL_LOG_NR	= 6,
 };
 
 struct log_type {
@@ -1417,6 +1522,10 @@ static struct log_type log_types[] = {
 		.mask	= IOPS_LOG_MASK,
 		.fn	= write_iops_log,
 	},
+	{
+		.mask	= CLAT_HIST_LOG_MASK,
+		.fn	= write_clat_hist_log,
+	}
 };
 
 void td_writeout_logs(struct thread_data *td, bool unit_logs)

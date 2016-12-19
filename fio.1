@@ -30,7 +30,7 @@ dump of the latency buckets.
 Limit run time to \fIruntime\fR seconds.
 .TP
 .B \-\-bandwidth\-log
-Generate per-job bandwidth logs.
+Generate aggregate bandwidth logs.
 .TP
 .B \-\-minimal
 Print statistics in a terse, semicolon-delimited format.
@@ -247,6 +247,11 @@ will be used if no other format specifier is given.
 .RE
 .P
 .TP
+.BI unique_filename \fR=\fPbool
+To avoid collisions between networked clients, fio defaults to prefixing
+any generated filenames (with a directory specified) with the source of
+the client connecting. To disable this behavior, set this option to 0.
+.TP
 .BI lockfile \fR=\fPstr
 Fio defaults to not locking any files before it does IO to them. If a file or
 file descriptor is shared, fio can serialize IO to that file to make the end
@@ -304,6 +309,7 @@ Trim and write mixed workload. Blocks will be trimmed first, then the same
 blocks will be written to.
 .RE
 .P
+Fio defaults to read if the option is not specified.
 For mixed I/O, the default split is 50/50. For certain types of io the result
 may still be skewed a bit, since the speed may be different. It is possible to
 specify a number of IO's to do before getting a new offset, this is done by
@@ -597,6 +603,7 @@ position the I/O location.
 .TP
 .B psync
 Basic \fBpread\fR\|(2) or \fBpwrite\fR\|(2) I/O.
+Default on all supported operating systems except for Windows.
 .TP
 .B vsync
 Basic \fBreadv\fR\|(2) or \fBwritev\fR\|(2) I/O. Will emulate queuing by
@@ -618,7 +625,7 @@ POSIX asynchronous I/O using \fBaio_read\fR\|(3) and \fBaio_write\fR\|(3).
 Solaris native asynchronous I/O.
 .TP
 .B windowsaio
-Windows native asynchronous I/O.
+Windows native asynchronous I/O. Default on Windows.
 .TP
 .B mmap
 File is memory mapped with \fBmmap\fR\|(2) and data copied using
@@ -627,9 +634,6 @@ File is memory mapped with \fBmmap\fR\|(2) and data copied using
 .B splice
 \fBsplice\fR\|(2) is used to transfer the data and \fBvmsplice\fR\|(2) to
 transfer data from user-space to the kernel.
-.TP
-.B syslet-rw
-Use the syslet system calls to make regular read/write asynchronous.
 .TP
 .B sg
 SCSI generic sg v3 I/O. May be either synchronous using the SG_IO ioctl, or if
@@ -652,7 +656,8 @@ and send/receive. This ioengine defines engine specific options.
 .TP
 .B cpuio
 Doesn't transfer any data, but burns CPU cycles according to \fBcpuload\fR and
-\fBcpucycles\fR parameters.
+\fBcpuchunks\fR parameters. A job never finishes unless there is at least one
+non-cpuio job.
 .TP
 .B guasi
 The GUASI I/O engine is the Generic Userspace Asynchronous Syscall Interface
@@ -1147,7 +1152,7 @@ Allocation method for I/O unit buffer.  Allowed values are:
 .RS
 .TP
 .B malloc
-Allocate memory with \fBmalloc\fR\|(3).
+Allocate memory with \fBmalloc\fR\|(3). Default memory type.
 .TP
 .B shm
 Use shared memory buffers allocated through \fBshmget\fR\|(2).
@@ -1240,6 +1245,9 @@ multiple times. Thus it will not work on eg network or splice IO.
 .TP
 .BI unlink \fR=\fPbool
 Unlink job files when done.  Default: false.
+.TP
+.BI unlink_each_loop \fR=\fPbool
+Unlink job files after each iteration or loop.  Default: false.
 .TP
 .BI loops \fR=\fPint
 Specifies the number of iterations (runs of the same workload) of this job.
@@ -1454,13 +1462,13 @@ If set, this generates bw/clat/iops log with per file private filenames. If
 not set, jobs with identical names will share the log filename. Default: true.
 .TP
 .BI write_bw_log \fR=\fPstr
-If given, write a bandwidth log of the jobs in this job file. Can be used to
-store data of the bandwidth of the jobs in their lifetime. The included
-fio_generate_plots script uses gnuplot to turn these text files into nice
-graphs. See \fBwrite_lat_log\fR for behaviour of given filename. For this
-option, the postfix is _bw.x.log, where x is the index of the job (1..N,
-where N is the number of jobs). If \fBper_job_logs\fR is false, then the
-filename will not include the job index. See the \fBLOG FILE FORMATS\fR
+If given, write a bandwidth log for this job. Can be used to store data of the
+bandwidth of the jobs in their lifetime. The included fio_generate_plots script
+uses gnuplot to turn these text files into nice graphs. See \fBwrite_lat_log\fR
+for behaviour of given filename. For this option, the postfix is _bw.x.log,
+where x is the index of the job (1..N, where N is the number of jobs). If
+\fBper_job_logs\fR is false, then the filename will not include the job index.
+See the \fBLOG FILE FORMATS\fR
 section.
 .TP
 .BI write_lat_log \fR=\fPstr
@@ -1470,6 +1478,14 @@ filename is given with this option, the default filename of
 N is the number of jobs). Even if the filename is given, fio will still
 append the type of log. If \fBper_job_logs\fR is false, then the filename will
 not include the job index. See the \fBLOG FILE FORMATS\fR section.
+.TP
+.BI write_hist_log \fR=\fPstr
+Same as \fBwrite_lat_log\fR, but writes I/O completion latency histograms. If
+no filename is given with this option, the default filename of
+"jobname_clat_hist.x.log" is used, where x is the index of the job (1..N, where
+N is the number of jobs). Even if the filename is given, fio will still append
+the type of log. If \fBper_job_logs\fR is false, then the filename will not
+include the job index. See the \fBLOG FILE FORMATS\fR section.
 .TP
 .BI write_iops_log \fR=\fPstr
 Same as \fBwrite_bw_log\fR, but writes IOPS. If no filename is given with this
@@ -1490,6 +1506,20 @@ over the specified period of time, reducing the resolution of the log. See
 If \fBlog_avg_msec\fR is set, fio logs the average over that window. If you
 instead want to log the maximum value, set this option to 1.  Defaults to
 0, meaning that averaged values are logged.
+.TP
+.BI log_hist_msec \fR=\fPint
+Same as \fBlog_avg_msec\fR, but logs entries for completion latency histograms.
+Computing latency percentiles from averages of intervals using \fBlog_avg_msec\fR
+is innacurate. Setting this option makes fio log histogram entries over the
+specified period of time, reducing log sizes for high IOPS devices while
+retaining percentile accuracy. See \fBlog_hist_coarseness\fR as well. Defaults
+to 0, meaning histogram logging is disabled.
+.TP
+.BI log_hist_coarseness \fR=\fPint
+Integer ranging from 0 to 6, defining the coarseness of the resolution of the
+histogram logs enabled with \fBlog_hist_msec\fR. For each increment in
+coarseness, fio outputs half as many bins. Defaults to 0, for which histogram
+logs contain 1216 latency bins. See the \fBLOG FILE FORMATS\fR section.
 .TP
 .BI log_offset \fR=\fPbool
 If this is set, the iolog options will include the byte offset for the IO
@@ -1515,6 +1545,11 @@ sensitive jobs, and background compression work.
 If set, fio will store the log files in a compressed format. They can be
 decompressed with fio, using the \fB\-\-inflate-log\fR command line parameter.
 The files will be stored with a \fB\.fz\fR suffix.
+.TP
+.BI log_unix_epoch \fR=\fPbool
+If set, fio will log Unix timestamps to the log files produced by enabling
+\fBwrite_type_log\fR for each log type, instead of the default zero-based
+timestamps.
 .TP
 .BI block_error_percentiles \fR=\fPbool
 If set, record errors in trim block-sized units from writes and trims and output
@@ -1690,13 +1725,13 @@ Some parameters are only valid when a specific ioengine is in use. These are
 used identically to normal parameters, with the caveat that when used on the
 command line, they must come after the ioengine.
 .TP
-.BI (cpu)cpuload \fR=\fPint
+.BI (cpuio)cpuload \fR=\fPint
 Attempt to use the specified percentage of CPU cycles.
 .TP
-.BI (cpu)cpuchunks \fR=\fPint
+.BI (cpuio)cpuchunks \fR=\fPint
 Split the load into cycles of the given time. In microseconds.
 .TP
-.BI (cpu)exit_on_io_done \fR=\fPbool
+.BI (cpuio)exit_on_io_done \fR=\fPbool
 Detect when IO threads are done, then exit.
 .TP
 .BI (libaio)userspace_reap
@@ -1707,7 +1742,7 @@ from user-space to reap events. The reaping mode is only
 enabled when polling for a minimum of 0 events (eg when
 iodepth_batch_complete=0).
 .TP
-.BI (psyncv2)hipri
+.BI (pvsync2)hipri
 Set RWF_HIPRI on IO, indicating to the kernel that it's of
 higher priority than normal.
 .TP
@@ -2082,7 +2117,7 @@ This format is not supported in Fio versions => 1.20-rc3.
 .B Trace file format v2
 .RS
 The second version of the trace file format was added in Fio version 1.17.
-It allows to access more then one file per trace and has a bigger set of
+It allows one to access more then one file per trace and has a bigger set of
 possible file actions.
 
 The first line of the trace file has to be:
@@ -2296,6 +2331,13 @@ period of time. Since \fIdata direction\fR and \fIoffset\fR are per-IO values,
 they aren't applicable if windowed logging is enabled. If windowed logging
 is enabled and \fBlog_max_value\fR is set, then fio logs maximum values in
 that window instead of averages.
+
+For histogram logging the logs look like this:
+
+.B time (msec), data direction, block-size, bin 0, bin 1, ..., bin 1215
+
+Where 'bin i' gives the frequency of IO requests with a latency falling in
+the i-th bin. See \fBlog_hist_coarseness\fR for logging fewer bins.
 
 .RE
 

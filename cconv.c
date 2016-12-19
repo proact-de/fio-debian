@@ -39,6 +39,7 @@ static void free_thread_options_to_cpu(struct thread_options *o)
 	free(o->bw_log_file);
 	free(o->lat_log_file);
 	free(o->iops_log_file);
+	free(o->hist_log_file);
 	free(o->replay_redirect);
 	free(o->exec_prerun);
 	free(o->exec_postrun);
@@ -74,6 +75,7 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	string_to_cpu(&o->bw_log_file, top->bw_log_file);
 	string_to_cpu(&o->lat_log_file, top->lat_log_file);
 	string_to_cpu(&o->iops_log_file, top->iops_log_file);
+	string_to_cpu(&o->hist_log_file, top->hist_log_file);
 	string_to_cpu(&o->replay_redirect, top->replay_redirect);
 	string_to_cpu(&o->exec_prerun, top->exec_prerun);
 	string_to_cpu(&o->exec_postrun, top->exec_postrun);
@@ -139,6 +141,7 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 
 	o->ratecycle = le32_to_cpu(top->ratecycle);
 	o->io_submit_mode = le32_to_cpu(top->io_submit_mode);
+	o->unique_filename = le32_to_cpu(top->unique_filename);
 	o->nr_files = le32_to_cpu(top->nr_files);
 	o->open_files = le32_to_cpu(top->open_files);
 	o->file_lock_mode = le32_to_cpu(top->file_lock_mode);
@@ -171,16 +174,20 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->verify_batch = le32_to_cpu(top->verify_batch);
 	o->use_thread = le32_to_cpu(top->use_thread);
 	o->unlink = le32_to_cpu(top->unlink);
+	o->unlink_each_loop = le32_to_cpu(top->unlink_each_loop);
 	o->do_disk_util = le32_to_cpu(top->do_disk_util);
 	o->override_sync = le32_to_cpu(top->override_sync);
 	o->rand_repeatable = le32_to_cpu(top->rand_repeatable);
 	o->allrand_repeatable = le32_to_cpu(top->allrand_repeatable);
 	o->rand_seed = le64_to_cpu(top->rand_seed);
 	o->log_avg_msec = le32_to_cpu(top->log_avg_msec);
+	o->log_hist_msec = le32_to_cpu(top->log_hist_msec);
+	o->log_hist_coarseness = le32_to_cpu(top->log_hist_coarseness);
 	o->log_max = le32_to_cpu(top->log_max);
 	o->log_offset = le32_to_cpu(top->log_offset);
 	o->log_gz = le32_to_cpu(top->log_gz);
 	o->log_gz_store = le32_to_cpu(top->log_gz_store);
+	o->log_unix_epoch = le32_to_cpu(top->log_unix_epoch);
 	o->norandommap = le32_to_cpu(top->norandommap);
 	o->softrandommap = le32_to_cpu(top->softrandommap);
 	o->bs_unaligned = le32_to_cpu(top->bs_unaligned);
@@ -273,6 +280,10 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->replay_align = le32_to_cpu(top->replay_align);
 	o->replay_scale = le32_to_cpu(top->replay_scale);
 	o->per_job_logs = le32_to_cpu(top->per_job_logs);
+	o->write_bw_log = le32_to_cpu(top->write_bw_log);
+	o->write_lat_log = le32_to_cpu(top->write_lat_log);
+	o->write_iops_log = le32_to_cpu(top->write_iops_log);
+	o->write_hist_log = le32_to_cpu(top->write_hist_log);
 
 	o->trim_backlog = le64_to_cpu(top->trim_backlog);
 	o->rate_process = le32_to_cpu(top->rate_process);
@@ -308,6 +319,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	string_to_net(top->bw_log_file, o->bw_log_file);
 	string_to_net(top->lat_log_file, o->lat_log_file);
 	string_to_net(top->iops_log_file, o->iops_log_file);
+	string_to_net(top->hist_log_file, o->hist_log_file);
 	string_to_net(top->replay_redirect, o->replay_redirect);
 	string_to_net(top->exec_prerun, o->exec_prerun);
 	string_to_net(top->exec_postrun, o->exec_postrun);
@@ -333,6 +345,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->ratecycle = cpu_to_le32(o->ratecycle);
 	top->io_submit_mode = cpu_to_le32(o->io_submit_mode);
 	top->nr_files = cpu_to_le32(o->nr_files);
+	top->unique_filename = cpu_to_le32(o->unique_filename);
 	top->open_files = cpu_to_le32(o->open_files);
 	top->file_lock_mode = cpu_to_le32(o->file_lock_mode);
 	top->odirect = cpu_to_le32(o->odirect);
@@ -360,6 +373,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->verify_batch = cpu_to_le32(o->verify_batch);
 	top->use_thread = cpu_to_le32(o->use_thread);
 	top->unlink = cpu_to_le32(o->unlink);
+	top->unlink_each_loop = cpu_to_le32(o->unlink_each_loop);
 	top->do_disk_util = cpu_to_le32(o->do_disk_util);
 	top->override_sync = cpu_to_le32(o->override_sync);
 	top->rand_repeatable = cpu_to_le32(o->rand_repeatable);
@@ -370,6 +384,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->log_offset = cpu_to_le32(o->log_offset);
 	top->log_gz = cpu_to_le32(o->log_gz);
 	top->log_gz_store = cpu_to_le32(o->log_gz_store);
+	top->log_unix_epoch = cpu_to_le32(o->log_unix_epoch);
 	top->norandommap = cpu_to_le32(o->norandommap);
 	top->softrandommap = cpu_to_le32(o->softrandommap);
 	top->bs_unaligned = cpu_to_le32(o->bs_unaligned);
@@ -449,6 +464,10 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->replay_align = cpu_to_le32(o->replay_align);
 	top->replay_scale = cpu_to_le32(o->replay_scale);
 	top->per_job_logs = cpu_to_le32(o->per_job_logs);
+	top->write_bw_log = cpu_to_le32(o->write_bw_log);
+	top->write_lat_log = cpu_to_le32(o->write_lat_log);
+	top->write_iops_log = cpu_to_le32(o->write_iops_log);
+	top->write_hist_log = cpu_to_le32(o->write_hist_log);
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
 		top->bs[i] = cpu_to_le32(o->bs[i]);
