@@ -1,3 +1,9 @@
+fio (2.15-1) UNRELEASED; urgency=medium
+
+  * Imported upstream version 2.15.
+
+ -- Martin Steigerwald <martin.steigerwald@teamix.de>  Mon, 19 Dec 2016 16:02:52 +0100
+
 fio (2.10-2) unstable; urgency=medium
 
   * copyright: Added fiologparser.py copyrights as per git blame.
