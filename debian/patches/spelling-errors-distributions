@@ -1,0 +1,39 @@
+--- a/HOWTO
++++ b/HOWTO
+@@ -676,13 +676,13 @@
+ 				the next. Multiple files can still be
+ 				open depending on 'openfiles'.
+ 
+-			zipf	Use a zipfian distribution to decide what file
++			zipf	Use a Zipfian distribution to decide what file
+ 				to access.
+ 
+-			pareto	Use a pareto distribution to decide what file
++			pareto	Use a Pareto distribution to decide what file
+ 				to access.
+ 
+-			gauss	Use a gaussian (normal) distribution to decide
++			gauss	Use a Gaussian (normal) distribution to decide
+ 				what file to access.
+ 
+ 		For random, roundrobin, and sequential, a postfix can be
+@@ -986,7 +986,7 @@
+ 		random		Uniform random distribution
+ 		zipf		Zipf distribution
+ 		pareto		Pareto distribution
+-		gauss		Normal (guassian) distribution
++		gauss		Normal (Gaussian) distribution
+ 		zoned		Zoned random distribution
+ 
+ 		When using a zipf or pareto distribution, an input value
+--- a/options.c
++++ b/options.c
+@@ -2157,7 +2157,7 @@
+ 			  },
+ 			  { .ival = "gauss",
+ 			    .oval = FIO_FSERVICE_GAUSS,
+-			    .help = "Normal (guassian) distribution",
++			    .help = "Normal (Guassian) distribution",
+ 			  },
+ 			  { .ival = "roundrobin",
+ 			    .oval = FIO_FSERVICE_RR,
