@@ -8,6 +8,7 @@ fio (2.15-1) UNRELEASED; urgency=medium
     - reproducible-build: Sort object files for deterministic linking order
       to enable reproducible builds. Thank to Rainer Herrmann for the bug
       report and patch (Closes: #828791).
+  * debian/watch: Check for GPG signature of upstream tarball.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Mon, 19 Dec 2016 16:02:52 +0100
 
