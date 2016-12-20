@@ -1,0 +1,14 @@
+Author: Reiner Herrmann <reiner@reiner-h.de>
+Description: Sort object files for deterministic linking order
+
+--- a/Makefile
++++ b/Makefile
+@@ -181,7 +181,7 @@
+   CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format -static
+ endif
+ 
+-OBJS := $(SOURCE:.c=.o)
++OBJS := $(sort $(SOURCE:.c=.o))
+ 
+ FIO_OBJS = $(OBJS) fio.o
+ 
