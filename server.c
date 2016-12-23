@@ -912,11 +912,11 @@ static int handle_send_eta_cmd(struct fio_net_cmd *cmd)
 		je->files_open		= cpu_to_le32(je->files_open);
 
 		for (i = 0; i < DDIR_RWDIR_CNT; i++) {
-			je->m_rate[i]	= cpu_to_le32(je->m_rate[i]);
-			je->t_rate[i]	= cpu_to_le32(je->t_rate[i]);
+			je->m_rate[i]	= cpu_to_le64(je->m_rate[i]);
+			je->t_rate[i]	= cpu_to_le64(je->t_rate[i]);
 			je->m_iops[i]	= cpu_to_le32(je->m_iops[i]);
 			je->t_iops[i]	= cpu_to_le32(je->t_iops[i]);
-			je->rate[i]	= cpu_to_le32(je->rate[i]);
+			je->rate[i]	= cpu_to_le64(je->rate[i]);
 			je->iops[i]	= cpu_to_le32(je->iops[i]);
 		}
 
@@ -1462,6 +1462,8 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 {
 	struct cmd_ts_pdu p;
 	int i, j;
+	void *ss_buf;
+	uint64_t *ss_iops, *ss_bw;
 
 	dprint(FD_NET, "server sending end stats\n");
 
@@ -1541,13 +1543,41 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 	p.ts.latency_window	= cpu_to_le64(ts->latency_window);
 	p.ts.latency_percentile.u.i = cpu_to_le64(fio_double_to_uint64(ts->latency_percentile.u.f));
 
-	p.ts.nr_block_infos	= le64_to_cpu(ts->nr_block_infos);
+	p.ts.nr_block_infos	= cpu_to_le64(ts->nr_block_infos);
 	for (i = 0; i < p.ts.nr_block_infos; i++)
-		p.ts.block_infos[i] = le32_to_cpu(ts->block_infos[i]);
+		p.ts.block_infos[i] = cpu_to_le32(ts->block_infos[i]);
+
+	p.ts.ss_dur		= cpu_to_le64(ts->ss_dur);
+	p.ts.ss_state		= cpu_to_le32(ts->ss_state);
+	p.ts.ss_head		= cpu_to_le32(ts->ss_head);
+	p.ts.ss_limit.u.i	= cpu_to_le64(fio_double_to_uint64(ts->ss_limit.u.f));
+	p.ts.ss_slope.u.i	= cpu_to_le64(fio_double_to_uint64(ts->ss_slope.u.f));
+	p.ts.ss_deviation.u.i	= cpu_to_le64(fio_double_to_uint64(ts->ss_deviation.u.f));
+	p.ts.ss_criterion.u.i	= cpu_to_le64(fio_double_to_uint64(ts->ss_criterion.u.f));
 
 	convert_gs(&p.rs, rs);
 
-	fio_net_queue_cmd(FIO_NET_CMD_TS, &p, sizeof(p), NULL, SK_F_COPY);
+	dprint(FD_NET, "ts->ss_state = %d\n", ts->ss_state);
+	if (ts->ss_state & __FIO_SS_DATA) {
+		dprint(FD_NET, "server sending steadystate ring buffers\n");
+
+		ss_buf = malloc(sizeof(p) + 2*ts->ss_dur*sizeof(uint64_t));
+
+		memcpy(ss_buf, &p, sizeof(p));
+
+		ss_iops = (uint64_t *) ((struct cmd_ts_pdu *)ss_buf + 1);
+		ss_bw = ss_iops + (int) ts->ss_dur;
+		for (i = 0; i < ts->ss_dur; i++) {
+			ss_iops[i] = cpu_to_le64(ts->ss_iops_data[i]);
+			ss_bw[i] = cpu_to_le64(ts->ss_bw_data[i]);
+		}
+
+		fio_net_queue_cmd(FIO_NET_CMD_TS, ss_buf, sizeof(p) + 2*ts->ss_dur*sizeof(uint64_t), NULL, SK_F_COPY);
+
+		free(ss_buf);
+	}
+	else
+		fio_net_queue_cmd(FIO_NET_CMD_TS, &p, sizeof(p), NULL, SK_F_COPY);
 }
 
 void fio_server_send_gs(struct group_run_stats *rs)
@@ -1730,7 +1760,7 @@ static int __fio_append_iolog_gz_hist(struct sk_entry *first, struct io_log *log
 		/* Do the subtraction on server side so that client doesn't have to
 		 * reconstruct our linked list from packets.
 		 */
-		cur_plat_entry  = s->plat_entry;
+		cur_plat_entry  = s->data.plat_entry;
 		prev_plat_entry = flist_first_entry(&cur_plat_entry->list, struct io_u_plat_entry, list);
 		cur_plat  = cur_plat_entry->io_u_plat;
 		prev_plat = prev_plat_entry->io_u_plat;
@@ -1934,7 +1964,7 @@ int fio_send_iolog(struct thread_data *td, struct io_log *log, const char *name)
 			struct io_sample *s = get_sample(log, cur_log, i);
 
 			s->time		= cpu_to_le64(s->time);
-			s->val		= cpu_to_le64(s->val);
+			s->data.val	= cpu_to_le64(s->data.val);
 			s->__ddir	= cpu_to_le32(s->__ddir);
 			s->bs		= cpu_to_le32(s->bs);
 

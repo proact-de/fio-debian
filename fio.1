@@ -396,9 +396,27 @@ available on Linux. If using ZFS on Solaris this must be set to 'none'
 because ZFS doesn't support it. Default: 'posix'.
 .RE
 .TP
-.BI fadvise_hint \fR=\fPbool
+.BI fadvise_hint \fR=\fPstr
 Use \fBposix_fadvise\fR\|(2) to advise the kernel what I/O patterns
-are likely to be issued. Default: true.
+are likely to be issued. Accepted values are:
+.RS
+.RS
+.TP
+.B 0
+Backwards compatible hint for "no hint".
+.TP
+.B 1
+Backwards compatible hint for "advise with fio workload type". This
+uses \fBFADV_RANDOM\fR for a random workload, and \fBFADV_SEQUENTIAL\fR
+for a sequential workload.
+.TP
+.B sequential
+Advise using \fBFADV_SEQUENTIAL\fR
+.TP
+.B random
+Advise using \fBFADV_RANDOM\fR
+.RE
+.RE
 .TP
 .BI fadvise_stream \fR=\fPint
 Use \fBposix_fadvise\fR\|(2) to advise the kernel what stream ID the
@@ -722,6 +740,9 @@ constraint.
 .TP
 .B pmemblk
 Read and write through the NVML libpmemblk interface.
+.TP
+.B dev-dax
+Read and write through a DAX device exposed from persistent memory.
 .RE
 .P
 .RE
@@ -764,7 +785,7 @@ Example #1:
 \fBiodepth_batch_complete_max\fR=<iodepth>
 .RE
 
-which means that we will retrieve at leat 1 IO and up to the
+which means that we will retrieve at least 1 IO and up to the
 whole submitted queue depth. If none of IO has been completed
 yet, we will wait.
 
@@ -1139,6 +1160,50 @@ logging results, thus minimizing the runtime required for stable results. Note
 that the \fBramp_time\fR is considered lead in time for a job, thus it will
 increase the total runtime if a special timeout or runtime is specified.
 .TP
+.BI steadystate \fR=\fPstr:float "\fR,\fP ss" \fR=\fPstr:float
+Define the criterion and limit for assessing steady state performance. The
+first parameter designates the criterion whereas the second parameter sets the
+threshold. When the criterion falls below the threshold for the specified
+duration, the job will stop. For example, iops_slope:0.1% will direct fio
+to terminate the job when the least squares regression slope falls below 0.1%
+of the mean IOPS. If group_reporting is enabled this will apply to all jobs in
+the group. All assessments are carried out using only data from the rolling
+collection window. Threshold limits can be expressed as a fixed value or as a
+percentage of the mean in the collection window. Below are the available steady
+state assessment criteria.
+.RS
+.RS
+.TP
+.B iops
+Collect IOPS data. Stop the job if all individual IOPS measurements are within
+the specified limit of the mean IOPS (e.g., iops:2 means that all individual
+IOPS values must be within 2 of the mean, whereas iops:0.2% means that all
+individual IOPS values must be within 0.2% of the mean IOPS to terminate the
+job).
+.TP
+.B iops_slope
+Collect IOPS data and calculate the least squares regression slope. Stop the
+job if the slope falls below the specified limit.
+.TP
+.B bw
+Collect bandwidth data. Stop the job if all individual bandwidth measurements
+are within the specified limit of the mean bandwidth.
+.TP
+.B bw_slope
+Collect bandwidth data and calculate the least squares regression slope. Stop
+the job if the slope falls below the specified limit.
+.RE
+.RE
+.TP
+.BI steadystate_duration \fR=\fPtime "\fR,\fP ss_dur" \fR=\fPtime
+A rolling window of this duration will be used to judge whether steady state
+has been reached. Data will be collected once per second. The default is 0
+which disables steady state detection.
+.TP
+.BI steadystate_ramp_time \fR=\fPtime "\fR,\fP ss_ramp" \fR=\fPtime
+Allow the job to run for the specified duration before beginning data collection
+for checking the steady state job termination criterion. The default is 0.
+.TP
 .BI invalidate \fR=\fPbool
 Invalidate buffer-cache for the file prior to starting I/O.  Default: true.
 .TP
@@ -1324,7 +1389,7 @@ fio will fill 1/2/3/4 bytes of the buffer at the time(it can be either a
 decimal or a hex number). The verify_pattern if larger than a 32-bit quantity
 has to be a hex number that starts with either "0x" or "0X". Use with
 \fBverify\fP=str. Also, verify_pattern supports %o format, which means that for
-each block offset will be written and then verifyied back, e.g.:
+each block offset will be written and then verified back, e.g.:
 .RS
 .RS
 \fBverify_pattern\fR=%o
@@ -2325,7 +2390,7 @@ IO is a TRIM
 The \fIoffset\fR is the offset, in bytes, from the start of the file, for that
 particular IO. The logging of the offset can be toggled with \fBlog_offset\fR.
 
-If windowed logging is enabled though \fBlog_avg_msec\fR, then fio doesn't log
+If windowed logging is enabled through \fBlog_avg_msec\fR, then fio doesn't log
 individual IOs. Instead of logs the average values over the specified
 period of time. Since \fIdata direction\fR and \fIoffset\fR are per-IO values,
 they aren't applicable if windowed logging is enabled. If windowed logging

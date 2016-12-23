@@ -298,6 +298,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 		td->io_issues[ddir]--;
 		td->io_issue_bytes[ddir] -= buflen;
 		td->rate_io_issue_bytes[ddir] -= buflen;
+		io_u_clear(td, io_u, IO_U_F_FLIGHT);
 	}
 
 	/*
@@ -447,14 +448,24 @@ int td_io_open_file(struct thread_data *td, struct fio_file *f)
 	if (td->o.invalidate_cache && file_invalidate_cache(td, f))
 		goto err;
 
-	if (td->o.fadvise_hint &&
+	if (td->o.fadvise_hint != F_ADV_NONE &&
 	    (f->filetype == FIO_TYPE_BD || f->filetype == FIO_TYPE_FILE)) {
 		int flags;
 
-		if (td_random(td))
+		if (td->o.fadvise_hint == F_ADV_TYPE) {
+			if (td_random(td))
+				flags = POSIX_FADV_RANDOM;
+			else
+				flags = POSIX_FADV_SEQUENTIAL;
+		} else if (td->o.fadvise_hint == F_ADV_RANDOM)
 			flags = POSIX_FADV_RANDOM;
-		else
+		else if (td->o.fadvise_hint == F_ADV_SEQUENTIAL)
 			flags = POSIX_FADV_SEQUENTIAL;
+		else {
+			log_err("fio: unknown fadvise type %d\n",
+							td->o.fadvise_hint);
+			flags = POSIX_FADV_NORMAL;
+		}
 
 		if (posix_fadvise(f->fd, f->file_offset, f->io_size, flags) < 0) {
 			td_verror(td, errno, "fadvise");
@@ -483,7 +494,12 @@ int td_io_open_file(struct thread_data *td, struct fio_file *f)
 
 		if (ret) {
 			td_verror(td, ret, "fio_set_odirect");
-			log_err("fio: the file system does not seem to support direct IO\n");
+			if (ret == ENOTTY) { /* ENOTTY suggests RAW device or ZFS */
+				log_err("fio: doing directIO to RAW devices or ZFS not supported\n");
+			} else {
+				log_err("fio: the file system does not seem to support direct IO\n");
+			}
+
 			goto err;
 		}
 	}

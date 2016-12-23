@@ -123,7 +123,7 @@ struct group_run_stats {
 #define BLOCK_INFO_STATE(block_info)		\
 	((block_info) >> BLOCK_INFO_STATE_SHIFT)
 #define BLOCK_INFO(state, trim_cycles)	\
-	((trim_cycles) | ((state) << BLOCK_INFO_STATE_SHIFT))
+	((trim_cycles) | ((unsigned int) (state) << BLOCK_INFO_STATE_SHIFT))
 #define BLOCK_INFO_SET_STATE(block_info, state)	\
 	BLOCK_INFO(state, BLOCK_INFO_TRIMS(block_info))
 enum block_info_state {
@@ -198,10 +198,10 @@ struct thread_stat {
 	 */
 	union {
 		uint16_t continue_on_error;
-		uint64_t pad2;
+		uint32_t pad2;
 	};
-	uint64_t total_err_count;
 	uint32_t first_error;
+	uint64_t total_err_count;
 
 	uint64_t nr_block_infos;
 	uint32_t block_infos[MAX_NR_BLOCK_INFOS];
@@ -210,9 +210,29 @@ struct thread_stat {
 	uint32_t unit_base;
 
 	uint32_t latency_depth;
+	uint32_t pad3;
 	uint64_t latency_target;
 	fio_fp64_t latency_percentile;
 	uint64_t latency_window;
+
+	uint64_t ss_dur;
+	uint32_t ss_state;
+	uint32_t ss_head;
+
+	fio_fp64_t ss_limit;
+	fio_fp64_t ss_slope;
+	fio_fp64_t ss_deviation;
+	fio_fp64_t ss_criterion;
+
+	union {
+		uint64_t *ss_iops_data;
+		uint64_t pad4;
+	};
+
+	union {
+		uint64_t *ss_bw_data;
+		uint64_t pad5;
+	};
 } __attribute__((packed));
 
 struct jobs_eta {
@@ -224,9 +244,9 @@ struct jobs_eta {
 
 	uint32_t files_open;
 
-	uint32_t m_rate[DDIR_RWDIR_CNT], t_rate[DDIR_RWDIR_CNT];
+	uint64_t m_rate[DDIR_RWDIR_CNT], t_rate[DDIR_RWDIR_CNT];
 	uint32_t m_iops[DDIR_RWDIR_CNT], t_iops[DDIR_RWDIR_CNT];
-	uint32_t rate[DDIR_RWDIR_CNT];
+	uint64_t rate[DDIR_RWDIR_CNT];
 	uint32_t iops[DDIR_RWDIR_CNT];
 	uint64_t elapsed_sec;
 	uint64_t eta_sec;
@@ -281,7 +301,7 @@ extern void add_clat_sample(struct thread_data *, enum fio_ddir, unsigned long,
 				unsigned int, uint64_t);
 extern void add_slat_sample(struct thread_data *, enum fio_ddir, unsigned long,
 				unsigned int, uint64_t);
-extern void add_agg_sample(unsigned long, enum fio_ddir, unsigned int);
+extern void add_agg_sample(union io_sample_data, enum fio_ddir, unsigned int);
 extern void add_iops_sample(struct thread_data *, struct io_u *,
 				unsigned int);
 extern void add_bw_sample(struct thread_data *, struct io_u *,

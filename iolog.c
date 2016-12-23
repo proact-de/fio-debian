@@ -109,6 +109,11 @@ static int ipo_special(struct thread_data *td, struct io_piece *ipo)
 
 	switch (ipo->file_action) {
 	case FIO_LOG_OPEN_FILE:
+		if (td->o.replay_redirect && fio_file_open(f)) {
+			dprint(FD_FILE, "iolog: ignoring re-open of file %s\n",
+					f->file_name);
+			break;
+		}
 		ret = td_io_open_file(td, f);
 		if (!ret)
 			break;
@@ -396,8 +401,14 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 		} else if (r == 2) {
 			rw = DDIR_INVAL;
 			if (!strcmp(act, "add")) {
-				fileno = add_file(td, fname, 0, 1);
-				file_action = FIO_LOG_ADD_FILE;
+				if (td->o.replay_redirect &&
+				    get_fileno(td, fname) != -1) {
+					dprint(FD_FILE, "iolog: ignoring"
+						" re-add of file %s\n", fname);
+				} else {
+					fileno = add_file(td, fname, 0, 1);
+					file_action = FIO_LOG_ADD_FILE;
+				}
 				continue;
 			} else if (!strcmp(act, "open")) {
 				fileno = get_fileno(td, fname);
@@ -443,7 +454,12 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 		if (rw == DDIR_WAIT) {
 			ipo->delay = offset;
 		} else {
-			ipo->offset = offset;
+			if (td->o.replay_scale)
+				ipo->offset = offset / td->o.replay_scale;
+			else
+				ipo->offset = offset;
+			ipo_bytes_align(td->o.replay_align, ipo);
+
 			ipo->len = bytes;
 			if (rw != DDIR_INVAL && bytes > td->o.max_bs[rw])
 				td->o.max_bs[rw] = bytes;
@@ -720,7 +736,7 @@ static void flush_hist_samples(FILE *f, int hist_coarseness, void *samples,
 	for (i = 0; i < nr_samples; i++) {
 		s = __get_sample(samples, log_offset, i);
 
-		entry = (struct io_u_plat_entry *) (uintptr_t) s->val;
+		entry = s->data.plat_entry;
 		io_u_plat = entry->io_u_plat;
 
 		entry_before = flist_first_entry(&entry->list, struct io_u_plat_entry, list);
@@ -759,16 +775,16 @@ void flush_samples(FILE *f, void *samples, uint64_t sample_size)
 		s = __get_sample(samples, log_offset, i);
 
 		if (!log_offset) {
-			fprintf(f, "%lu, %lu, %u, %u\n",
+			fprintf(f, "%lu, %" PRId64 ", %u, %u\n",
 					(unsigned long) s->time,
-					(unsigned long) s->val,
+					s->data.val,
 					io_sample_ddir(s), s->bs);
 		} else {
 			struct io_sample_offset *so = (void *) s;
 
-			fprintf(f, "%lu, %lu, %u, %u, %llu\n",
+			fprintf(f, "%lu, %" PRId64 ", %u, %u, %llu\n",
 					(unsigned long) s->time,
-					(unsigned long) s->val,
+					s->data.val,
 					io_sample_ddir(s), s->bs,
 					(unsigned long long) so->offset);
 		}

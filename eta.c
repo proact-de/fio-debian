@@ -225,7 +225,11 @@ static unsigned long thread_eta(struct thread_data *td)
 			}
 		}
 
-		eta_sec = (unsigned long) (elapsed * (1.0 / perc)) - elapsed;
+		if (perc == 0.0) {
+			eta_sec = timeout;
+		} else {
+			eta_sec = (unsigned long) (elapsed * (1.0 / perc)) - elapsed;
+		}
 
 		if (td->o.timeout &&
 		    eta_sec > (timeout + done_secs - elapsed))
@@ -235,7 +239,7 @@ static unsigned long thread_eta(struct thread_data *td)
 			|| td->runstate == TD_SETTING_UP
 			|| td->runstate == TD_RAMP
 			|| td->runstate == TD_PRE_READING) {
-		int t_eta = 0, r_eta = 0;
+		int64_t t_eta = 0, r_eta = 0;
 		unsigned long long rate_bytes;
 
 		/*
@@ -247,7 +251,10 @@ static unsigned long thread_eta(struct thread_data *td)
 			uint64_t start_delay = td->o.start_delay;
 			uint64_t ramp_time = td->o.ramp_time;
 
-			t_eta = __timeout + start_delay + ramp_time;
+			t_eta = __timeout + start_delay;
+			if (!td->ramp_time_over) {
+				t_eta += ramp_time;
+			}
 			t_eta /= 1000000ULL;
 
 			if ((td->runstate == TD_RAMP) && in_ramp_time(td)) {
@@ -259,9 +266,16 @@ static unsigned long thread_eta(struct thread_data *td)
 					t_eta -= ramp_left;
 			}
 		}
-		rate_bytes = ddir_rw_sum(td->o.rate);
+		rate_bytes = 0;
+		if (td_read(td))
+			rate_bytes  = td->o.rate[DDIR_READ];
+		if (td_write(td))
+			rate_bytes += td->o.rate[DDIR_WRITE];
+		if (td_trim(td))
+			rate_bytes += td->o.rate[DDIR_TRIM];
+
 		if (rate_bytes) {
-			r_eta = (bytes_total / 1024) / rate_bytes;
+			r_eta = bytes_total / rate_bytes;
 			r_eta += (td->o.start_delay / 1000000ULL);
 		}
 
@@ -285,7 +299,7 @@ static unsigned long thread_eta(struct thread_data *td)
 
 static void calc_rate(int unified_rw_rep, unsigned long mtime,
 		      unsigned long long *io_bytes,
-		      unsigned long long *prev_io_bytes, unsigned int *rate)
+		      unsigned long long *prev_io_bytes, uint64_t *rate)
 {
 	int i;
 
@@ -341,7 +355,7 @@ bool calc_thread_status(struct jobs_eta *je, int force)
 {
 	struct thread_data *td;
 	int i, unified_rw_rep;
-	unsigned long rate_time, disp_time, bw_avg_time, *eta_secs;
+	uint64_t rate_time, disp_time, bw_avg_time, *eta_secs;
 	unsigned long long io_bytes[DDIR_RWDIR_CNT];
 	unsigned long long io_iops[DDIR_RWDIR_CNT];
 	struct timeval now;
@@ -367,8 +381,8 @@ bool calc_thread_status(struct jobs_eta *je, int force)
 	if (!ddir_rw_sum(disp_io_bytes))
 		fill_start_time(&disp_prev_time);
 
-	eta_secs = malloc(thread_number * sizeof(unsigned long));
-	memset(eta_secs, 0, thread_number * sizeof(unsigned long));
+	eta_secs = malloc(thread_number * sizeof(uint64_t));
+	memset(eta_secs, 0, thread_number * sizeof(uint64_t));
 
 	je->elapsed_sec = (mtime_since_genesis() + 999) / 1000;
 
@@ -468,9 +482,9 @@ bool calc_thread_status(struct jobs_eta *je, int force)
 		calc_rate(unified_rw_rep, rate_time, io_bytes, rate_io_bytes,
 				je->rate);
 		memcpy(&rate_prev_time, &now, sizeof(now));
-		add_agg_sample(je->rate[DDIR_READ], DDIR_READ, 0);
-		add_agg_sample(je->rate[DDIR_WRITE], DDIR_WRITE, 0);
-		add_agg_sample(je->rate[DDIR_TRIM], DDIR_TRIM, 0);
+		add_agg_sample(sample_val(je->rate[DDIR_READ]), DDIR_READ, 0);
+		add_agg_sample(sample_val(je->rate[DDIR_WRITE]), DDIR_WRITE, 0);
+		add_agg_sample(sample_val(je->rate[DDIR_TRIM]), DDIR_TRIM, 0);
 	}
 
 	disp_time = mtime_since(&disp_prev_time, &now);
