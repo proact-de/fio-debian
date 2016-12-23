@@ -3,7 +3,7 @@ Description: Sort object files for deterministic linking order
 
 --- a/Makefile
 +++ b/Makefile
-@@ -181,7 +181,7 @@
+@@ -185,7 +185,7 @@
    CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format -static
  endif
  

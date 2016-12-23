@@ -3,7 +3,7 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
 
 --- a/HOWTO
 +++ b/HOWTO
-@@ -676,13 +676,13 @@
+@@ -685,13 +685,13 @@
  				the next. Multiple files can still be
  				open depending on 'openfiles'.
  
@@ -20,16 +20,16 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  				what file to access.
  
  		For random, roundrobin, and sequential, a postfix can be
-@@ -986,7 +986,7 @@
+@@ -998,7 +998,7 @@
  		random		Uniform random distribution
  		zipf		Zipf distribution
  		pareto		Pareto distribution
--		gauss		Normal (guassian) distribution
+-		gauss		Normal (gaussian) distribution
 +		gauss		Normal (Gaussian) distribution
  		zoned		Zoned random distribution
  
  		When using a zipf or pareto distribution, an input value
-@@ -1642,7 +1642,7 @@
+@@ -1696,7 +1696,7 @@
  
  log_hist_msec=int Same as log_avg_msec, but logs entries for completion
  		latency histograms. Computing latency percentiles from averages of
@@ -38,20 +38,26 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  		fio log histogram entries over the specified period of time, reducing
  		log sizes for high IOPS devices while retaining percentile accuracy.
  		See log_hist_coarseness as well. Defaults to 0, meaning histogram
---- a/options.c
-+++ b/options.c
-@@ -2157,7 +2157,7 @@
- 			  },
- 			  { .ival = "gauss",
- 			    .oval = FIO_FSERVICE_GAUSS,
--			    .help = "Normal (guassian) distribution",
-+			    .help = "Normal (Gaussian) distribution",
- 			  },
- 			  { .ival = "roundrobin",
- 			    .oval = FIO_FSERVICE_RR,
 --- a/fio.1
 +++ b/fio.1
-@@ -1510,7 +1510,7 @@
+@@ -592,13 +592,13 @@
+ Do each file in the set sequentially.
+ .TP
+ .B zipf
+-Use a zipfian distribution to decide what file to access.
++Use a Zipfian distribution to decide what file to access.
+ .TP
+ .B pareto
+-Use a pareto distribution to decide what file to access.
++Use a Pareto distribution to decide what file to access.
+ .TP
+ .B gauss
+-Use a gaussian (normal) distribution to decide what file to access.
++Use a Gaussian (normal) distribution to decide what file to access.
+ .RE
+ .P
+ For \fBrandom\fR, \fBroundrobin\fR, and \fBsequential\fR, a postfix can be
+@@ -1575,7 +1575,7 @@
  .BI log_hist_msec \fR=\fPint
  Same as \fBlog_avg_msec\fR, but logs entries for completion latency histograms.
  Computing latency percentiles from averages of intervals using \fBlog_avg_msec\fR
@@ -60,3 +66,14 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  specified period of time, reducing log sizes for high IOPS devices while
  retaining percentile accuracy. See \fBlog_hist_coarseness\fR as well. Defaults
  to 0, meaning histogram logging is disabled.
+--- a/options.c
++++ b/options.c
+@@ -2234,7 +2234,7 @@
+ 			  },
+ 			  { .ival = "gauss",
+ 			    .oval = FIO_FSERVICE_GAUSS,
+-			    .help = "Normal (gaussian) distribution",
++			    .help = "Normal (Gaussian) distribution",
+ 			  },
+ 			  { .ival = "roundrobin",
+ 			    .oval = FIO_FSERVICE_RR,
