@@ -441,11 +441,8 @@ static int wait_for_completions(struct thread_data *td, struct timeval *time)
 	int min_evts = 0;
 	int ret;
 
-	if (td->flags & TD_F_REGROW_LOGS) {
-		ret = io_u_quiesce(td);
-		regrow_logs(td);
-		return ret;
-	}
+	if (td->flags & TD_F_REGROW_LOGS)
+		return io_u_quiesce(td);
 
 	/*
 	 * if the queue is full, we MUST reap at least 1 event
@@ -771,18 +768,18 @@ static bool exceeds_number_ios(struct thread_data *td)
 	return number_ios >= (td->o.number_ios * td->loops);
 }
 
-static bool io_issue_bytes_exceeded(struct thread_data *td)
+static bool io_bytes_exceeded(struct thread_data *td, uint64_t *this_bytes)
 {
 	unsigned long long bytes, limit;
 
 	if (td_rw(td))
-		bytes = td->io_issue_bytes[DDIR_READ] + td->io_issue_bytes[DDIR_WRITE];
+		bytes = this_bytes[DDIR_READ] + this_bytes[DDIR_WRITE];
 	else if (td_write(td))
-		bytes = td->io_issue_bytes[DDIR_WRITE];
+		bytes = this_bytes[DDIR_WRITE];
 	else if (td_read(td))
-		bytes = td->io_issue_bytes[DDIR_READ];
+		bytes = this_bytes[DDIR_READ];
 	else
-		bytes = td->io_issue_bytes[DDIR_TRIM];
+		bytes = this_bytes[DDIR_TRIM];
 
 	if (td->o.io_limit)
 		limit = td->o.io_limit;
@@ -793,26 +790,14 @@ static bool io_issue_bytes_exceeded(struct thread_data *td)
 	return bytes >= limit || exceeds_number_ios(td);
 }
 
+static bool io_issue_bytes_exceeded(struct thread_data *td)
+{
+	return io_bytes_exceeded(td, td->io_issue_bytes);
+}
+
 static bool io_complete_bytes_exceeded(struct thread_data *td)
 {
-	unsigned long long bytes, limit;
-
-	if (td_rw(td))
-		bytes = td->this_io_bytes[DDIR_READ] + td->this_io_bytes[DDIR_WRITE];
-	else if (td_write(td))
-		bytes = td->this_io_bytes[DDIR_WRITE];
-	else if (td_read(td))
-		bytes = td->this_io_bytes[DDIR_READ];
-	else
-		bytes = td->this_io_bytes[DDIR_TRIM];
-
-	if (td->o.io_limit)
-		limit = td->o.io_limit;
-	else
-		limit = td->o.size;
-
-	limit *= td->loops;
-	return bytes >= limit || exceeds_number_ios(td);
+	return io_bytes_exceeded(td, td->this_io_bytes);
 }
 
 /*
@@ -1680,6 +1665,7 @@ static void *thread_main(void *data)
 	fio_getrusage(&td->ru_start);
 	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
+	memcpy(&td->ss.prev_time, &td->epoch, sizeof(td->epoch));
 
 	if (o->ratemin[DDIR_READ] || o->ratemin[DDIR_WRITE] ||
 			o->ratemin[DDIR_TRIM]) {
@@ -1876,8 +1862,8 @@ static void dump_td_info(struct thread_data *td)
 /*
  * Run over the job map and reap the threads that have exited, if any.
  */
-static void reap_threads(unsigned int *nr_running, unsigned int *t_rate,
-			 unsigned int *m_rate)
+static void reap_threads(unsigned int *nr_running, uint64_t *t_rate,
+			 uint64_t *m_rate)
 {
 	struct thread_data *td;
 	unsigned int cputhreads, realthreads, pending;
@@ -2115,7 +2101,8 @@ static bool waitee_running(struct thread_data *me)
 static void run_threads(struct sk_out *sk_out)
 {
 	struct thread_data *td;
-	unsigned int i, todo, nr_running, m_rate, t_rate, nr_started;
+	unsigned int i, todo, nr_running, nr_started;
+	uint64_t m_rate, t_rate;
 	uint64_t spent;
 
 	if (fio_gtod_offload && fio_start_gtod_thread())
@@ -2429,6 +2416,12 @@ int fio_backend(struct sk_out *sk_out)
 	}
 
 	for_each_td(td, i) {
+		if (td->ss.dur) {
+			if (td->ss.iops_data != NULL) {
+				free(td->ss.iops_data);
+				free(td->ss.bw_data);
+			}
+		}
 		fio_options_free(td);
 		if (td->rusage_sem) {
 			fio_mutex_remove(td->rusage_sem);

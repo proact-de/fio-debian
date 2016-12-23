@@ -41,6 +41,7 @@
 #include "flow.h"
 #include "io_u_queue.h"
 #include "workqueue.h"
+#include "steadystate.h"
 
 #ifdef CONFIG_SOLARISAIO
 #include <sys/asynch.h>
@@ -107,6 +108,13 @@ enum {
 
 	RATE_PROCESS_LINEAR = 0,
 	RATE_PROCESS_POISSON = 1,
+};
+
+enum {
+	F_ADV_NONE = 0,
+	F_ADV_TYPE,
+	F_ADV_RANDOM,
+	F_ADV_SEQUENTIAL,
 };
 
 /*
@@ -269,10 +277,10 @@ struct thread_data {
 	 * Rate state
 	 */
 	uint64_t rate_bps[DDIR_RWDIR_CNT];
-	unsigned long rate_next_io_time[DDIR_RWDIR_CNT];
+	uint64_t rate_next_io_time[DDIR_RWDIR_CNT];
 	unsigned long rate_bytes[DDIR_RWDIR_CNT];
 	unsigned long rate_blocks[DDIR_RWDIR_CNT];
-	unsigned long rate_io_issue_bytes[DDIR_RWDIR_CNT];
+	unsigned long long rate_io_issue_bytes[DDIR_RWDIR_CNT];
 	struct timeval lastrate[DDIR_RWDIR_CNT];
 	int64_t last_usec;
 	struct frand_state poisson_state;
@@ -394,6 +402,8 @@ struct thread_data {
 	void *prof_data;
 
 	void *pinned_mem;
+
+	struct steadystate_data ss;
 
 	char verror[FIO_VERROR_SIZE];
 };

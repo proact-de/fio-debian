@@ -24,15 +24,21 @@ struct io_hist {
 	struct flist_head list;
 };
 
+
+union io_sample_data {
+	uint64_t val;
+	struct io_u_plat_entry *plat_entry;
+};
+
+#define sample_val(value) ((union io_sample_data) { .val = value })
+#define sample_plat(plat) ((union io_sample_data) { .plat_entry = plat })
+
 /*
  * A single data sample
  */
 struct io_sample {
 	uint64_t time;
-	union {
-		uint64_t val;
-		struct io_u_plat_entry *plat_entry;
-	};
+	union io_sample_data data;
 	uint32_t __ddir;
 	uint32_t bs;
 };
@@ -261,6 +267,14 @@ static inline bool inline_log(struct io_log *log)
 	return log->log_type == IO_LOG_TYPE_LAT ||
 		log->log_type == IO_LOG_TYPE_CLAT ||
 		log->log_type == IO_LOG_TYPE_SLAT;
+}
+
+static inline void ipo_bytes_align(unsigned int replay_align, struct io_piece *ipo)
+{
+	if (replay_align)
+		return;
+
+	ipo->offset &= ~(replay_align - (uint64_t)1);
 }
 
 extern void finalize_logs(struct thread_data *td, bool);

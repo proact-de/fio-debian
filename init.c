@@ -25,6 +25,7 @@
 #include "server.h"
 #include "idletime.h"
 #include "filelock.h"
+#include "steadystate.h"
 
 #include "oslib/getopt.h"
 #include "oslib/strcasestr.h"
@@ -822,7 +823,8 @@ static int fixup_options(struct thread_data *td)
 	 * If size is set but less than the min block size, complain
 	 */
 	if (o->size && o->size < td_min_bs(td)) {
-		log_err("fio: size too small, must be larger than the IO size: %llu\n", (unsigned long long) o->size);
+		log_err("fio: size too small, must not be less than minimum block size: %llu < %u\n",
+			(unsigned long long) o->size, td_min_bs(td));
 		ret = 1;
 	}
 
@@ -1562,6 +1564,9 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			log_info("...\n");
 	}
 
+	if (td_steadystate_init(td))
+		goto err;
+
 	/*
 	 * recurse add identical jobs, clear numjobs and stonewall options
 	 * as they don't apply to sub-jobs
@@ -1577,6 +1582,8 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		td_new->o.stonewall = 0;
 		td_new->o.new_group = 0;
 		td_new->subjob_number = numjobs;
+		td_new->o.ss_dur = o->ss_dur * 1000000l;
+		td_new->o.ss_limit = o->ss_limit;
 
 		if (file_alloced) {
 			if (td_new->files) {
@@ -1679,7 +1686,7 @@ static int is_empty_or_comment(char *line)
 /*
  * This is our [ini] type file parser.
  */
-int __parse_jobs_ini(struct thread_data *td,
+static int __parse_jobs_ini(struct thread_data *td,
 		char *file, int is_buf, int stonewall_flag, int type,
 		int nested, char *name, char ***popts, int *aopts, int *nopts)
 {
@@ -2118,6 +2125,14 @@ struct debug_level debug_levels[] = {
 	{ .name = "compress",
 	  .help = "Log compression logging",
 	  .shift = FD_COMPRESS,
+	},
+	{ .name = "steadystate",
+	  .help = "Steady state detection logging",
+	  .shift = FD_STEADYSTATE,
+	},
+	{ .name = "helperthread",
+	  .help = "Helper thread logging",
+	  .shift = FD_HELPERTHREAD,
 	},
 	{ .name = NULL, },
 };

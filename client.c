@@ -946,6 +946,21 @@ static void convert_ts(struct thread_stat *dst, struct thread_stat *src)
 	dst->nr_block_infos	= le64_to_cpu(src->nr_block_infos);
 	for (i = 0; i < dst->nr_block_infos; i++)
 		dst->block_infos[i] = le32_to_cpu(src->block_infos[i]);
+
+	dst->ss_dur		= le64_to_cpu(src->ss_dur);
+	dst->ss_state		= le32_to_cpu(src->ss_state);
+	dst->ss_head		= le32_to_cpu(src->ss_head);
+	dst->ss_limit.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_limit.u.i));
+	dst->ss_slope.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_slope.u.i));
+	dst->ss_deviation.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_deviation.u.i));
+	dst->ss_criterion.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_criterion.u.i));
+
+	if (dst->ss_state & __FIO_SS_DATA) {
+		for (i = 0; i < dst->ss_dur; i++ ) {
+			dst->ss_iops_data[i] = le64_to_cpu(src->ss_iops_data[i]);
+			dst->ss_bw_data[i] = le64_to_cpu(src->ss_bw_data[i]);
+		}
+	}
 }
 
 static void convert_gs(struct group_run_stats *dst, struct group_run_stats *src)
@@ -1135,11 +1150,11 @@ static void convert_jobs_eta(struct jobs_eta *je)
 	je->files_open		= le32_to_cpu(je->files_open);
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
-		je->m_rate[i]	= le32_to_cpu(je->m_rate[i]);
-		je->t_rate[i]	= le32_to_cpu(je->t_rate[i]);
+		je->m_rate[i]	= le64_to_cpu(je->m_rate[i]);
+		je->t_rate[i]	= le64_to_cpu(je->t_rate[i]);
 		je->m_iops[i]	= le32_to_cpu(je->m_iops[i]);
 		je->t_iops[i]	= le32_to_cpu(je->t_iops[i]);
-		je->rate[i]	= le32_to_cpu(je->rate[i]);
+		je->rate[i]	= le64_to_cpu(je->rate[i]);
 		je->iops[i]	= le32_to_cpu(je->iops[i]);
 	}
 
@@ -1276,7 +1291,7 @@ static void client_flush_hist_samples(FILE *f, int hist_coarseness, void *sample
 		s = (struct io_sample *)((char *)__get_sample(samples, log_offset, i) +
 			i * sizeof(struct io_u_plat_entry));
 
-		entry = s->plat_entry;
+		entry = s->data.plat_entry;
 		io_u_plat = entry->io_u_plat;
 
 		fprintf(f, "%lu, %u, %u, ", (unsigned long) s->time,
@@ -1552,7 +1567,7 @@ static struct cmd_iolog_pdu *convert_iolog(struct fio_net_cmd *cmd,
 			s = (struct io_sample *)((void *)s + sizeof(struct io_u_plat_entry) * i);
 
 		s->time		= le64_to_cpu(s->time);
-		s->val		= le64_to_cpu(s->val);
+		s->data.val	= le64_to_cpu(s->data.val);
 		s->__ddir	= le32_to_cpu(s->__ddir);
 		s->bs		= le32_to_cpu(s->bs);
 
@@ -1563,9 +1578,9 @@ static struct cmd_iolog_pdu *convert_iolog(struct fio_net_cmd *cmd,
 		}
 
 		if (ret->log_type == IO_LOG_TYPE_HIST) {
-			s->plat_entry = (struct io_u_plat_entry *)(((void *)s) + sizeof(*s));
-			s->plat_entry->list.next = NULL;
-			s->plat_entry->list.prev = NULL;
+			s->data.plat_entry = (struct io_u_plat_entry *)(((void *)s) + sizeof(*s));
+			s->data.plat_entry->list.next = NULL;
+			s->data.plat_entry->list.prev = NULL;
 		}
 	}
 
@@ -1617,6 +1632,7 @@ int fio_handle_client(struct fio_client *client)
 {
 	struct client_ops *ops = client->ops;
 	struct fio_net_cmd *cmd;
+	int size;
 
 	dprint(FD_NET, "client: handle %s\n", client->hostname);
 
@@ -1648,6 +1664,15 @@ int fio_handle_client(struct fio_client *client)
 		}
 	case FIO_NET_CMD_TS: {
 		struct cmd_ts_pdu *p = (struct cmd_ts_pdu *) cmd->payload;
+
+		dprint(FD_NET, "client: ts->ss_state = %u\n", (unsigned int) le32_to_cpu(p->ts.ss_state));
+		if (le32_to_cpu(p->ts.ss_state) & __FIO_SS_DATA) {
+			dprint(FD_NET, "client: received steadystate ring buffers\n");
+
+			size = le64_to_cpu(p->ts.ss_dur);
+			p->ts.ss_iops_data = (uint64_t *) ((struct cmd_ts_pdu *)cmd->payload + 1);
+			p->ts.ss_bw_data = p->ts.ss_iops_data + size;
+		}
 
 		convert_ts(&p->ts, &p->ts);
 		convert_gs(&p->rs, &p->rs);
