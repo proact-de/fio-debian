@@ -5,7 +5,6 @@ fio (2.17-1) UNRELEASED; urgency=medium
   * debian/copyright: Updated, added some files, all GPL-2.
   * debian/docs: Added fio_latency2csv.py, example systemd fio.service file, and
     logparser histogram scripts from tools/hist.
-  * debian/fio.manpages: Added fiologparser_hist.py.1 manpage.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Mon, 23 Jan 2017 11:10:42 +0100
 

@@ -1,4 +1,3 @@
 fio.1
 tools/fio_generate_plots.1
-tools/hist/fiologparser_hist.py.1
 tools/plot/fio2gnuplot.1
