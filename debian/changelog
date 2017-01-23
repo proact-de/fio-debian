@@ -1,4 +1,4 @@
-fio (2.17-1) UNRELEASED; urgency=medium
+fio (2.17-1) unstable; urgency=medium
 
   * Imported upstream version 2.17.
   * debian/patches: Refreshed.
