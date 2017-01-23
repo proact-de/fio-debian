@@ -3,7 +3,7 @@ HOWTO
 MORAL-LICENSE
 REPORTING-BUGS
 examples/
-hist/
+tools/hist/
 tools/fio_latency2csv.py
 tools/fio.service
 tools/fiologparser.py
