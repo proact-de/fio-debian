@@ -291,6 +291,7 @@ int fio_crctest(const char *type)
 	int i, first = 1;
 	void *buf;
 
+	crc32c_arm64_probe();
 	crc32c_intel_probe();
 
 	if (!type)
@@ -338,9 +339,9 @@ int fio_crctest(const char *type)
 				sprintf(pre, "\t");
 			else
 				sprintf(pre, "\t\t");
-			printf("%s:%s%8.2f MB/sec\n", t[i].name, pre, mb_sec);
+			printf("%s:%s%8.2f MiB/sec\n", t[i].name, pre, mb_sec);
 		} else
-			printf("%s:inf MB/sec\n", t[i].name);
+			printf("%s:inf MiB/sec\n", t[i].name);
 		first = 0;
 	}
 

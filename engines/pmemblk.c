@@ -27,11 +27,11 @@
  *   ioengine=pmemblk
  *
  * Other relevant settings:
+ *   thread=1   REQUIRED
  *   iodepth=1
  *   direct=1
- *   thread=1   REQUIRED
  *   unlink=1
- *   filename=/pmem0/fiotestfile,BSIZE,FSIZEMB
+ *   filename=/mnt/pmem0/fiotestfile,BSIZE,FSIZEMiB
  *
  *   thread must be set to 1 for pmemblk as multiple processes cannot
  *     open the same block pool file.
@@ -39,22 +39,25 @@
  *   iodepth should be set to 1 as pmemblk is always synchronous.
  *   Use numjobs to scale up.
  *
- *   direct=1 is implied as pmemblk is always direct.
+ *   direct=1 is implied as pmemblk is always direct. A warning message
+ *   is printed if this is not specified.
  *
- *   Can set unlink to 1 to remove the block pool file after testing.
+ *   unlink=1 removes the block pool file after testing, and is optional.
+ *
+ *   The pmem device must have a DAX-capable filesystem and be mounted
+ *   with DAX enabled.  filename must point to a file on that filesystem.
+ *
+ *   Example:
+ *     mkfs.xfs /dev/pmem0
+ *     mkdir /mnt/pmem0
+ *     mount -o dax /dev/pmem0 /mnt/pmem0
  *
  *   When specifying the filename, if the block pool file does not already
- *   exist, then the pmemblk engine can create the pool file if you specify
+ *   exist, then the pmemblk engine creates the pool file if you specify
  *   the block and file sizes.  BSIZE is the block size in bytes.
- *   FSIZEMB is the pool file size in MB.
+ *   FSIZEMB is the pool file size in MiB.
  *
  *   See examples/pmemblk.fio for more.
- *
- * libpmemblk.so
- *   By default, the pmemblk engine will let the system find the libpmemblk.so
- *   that it uses.  You can use an alternative libpmemblk by setting the
- *   FIO_PMEMBLK_LIB environment variable to the full path to the desired
- *   libpmemblk.so.
  *
  */
 
@@ -64,68 +67,15 @@
 #include <sys/uio.h>
 #include <errno.h>
 #include <assert.h>
-#include <dlfcn.h>
 #include <string.h>
+#include <libpmem.h>
+#include <libpmemblk.h>
 
 #include "../fio.h"
 
 /*
  * libpmemblk
  */
-struct PMEMblkpool_s;
-typedef struct PMEMblkpool_s PMEMblkpool;
-
-static PMEMblkpool *(*pmemblk_create) (const char *, size_t, size_t, mode_t);
-static PMEMblkpool *(*pmemblk_open) (const char *, size_t);
-static void (*pmemblk_close) (PMEMblkpool *);
-static size_t(*pmemblk_nblock) (PMEMblkpool *);
-static size_t(*pmemblk_bsize) (PMEMblkpool *);
-static int (*pmemblk_read) (PMEMblkpool *, void *, off_t);
-static int (*pmemblk_write) (PMEMblkpool *, const void *, off_t);
-
-int load_libpmemblk(const char *path)
-{
-	void *dl;
-
-	if (!path)
-		path = "libpmemblk.so";
-
-	dl = dlopen(path, RTLD_NOW | RTLD_NODELETE);
-	if (!dl)
-		goto errorout;
-
-	pmemblk_create = dlsym(dl, "pmemblk_create");
-	if (!pmemblk_create)
-		goto errorout;
-	pmemblk_open = dlsym(dl, "pmemblk_open");
-	if (!pmemblk_open)
-		goto errorout;
-	pmemblk_close = dlsym(dl, "pmemblk_close");
-	if (!pmemblk_close)
-		goto errorout;
-	pmemblk_nblock = dlsym(dl, "pmemblk_nblock");
-	if (!pmemblk_nblock)
-		goto errorout;
-	pmemblk_bsize = dlsym(dl, "pmemblk_bsize");
-	if (!pmemblk_bsize)
-		goto errorout;
-	pmemblk_read = dlsym(dl, "pmemblk_read");
-	if (!pmemblk_read)
-		goto errorout;
-	pmemblk_write = dlsym(dl, "pmemblk_write");
-	if (!pmemblk_write)
-		goto errorout;
-
-	return 0;
-
-errorout:
-	log_err("fio: unable to load libpmemblk: %s\n", dlerror());
-	if (dl)
-		dlclose(dl);
-
-	return -1;
-}
-
 typedef struct fio_pmemblk_file *fio_pmemblk_file_t;
 
 struct fio_pmemblk_file {
@@ -187,7 +137,7 @@ static void fio_pmemblk_cache_remove(fio_pmemblk_file_t pmb)
  * level, we allow the block size and file size to be appended
  * to the file name:
  *
- *   path[,bsize,fsizemb]
+ *   path[,bsize,fsizemib]
  *
  * note that we do not use the fio option "filesize" to dictate
  * the file size because we can only give libpmemblk the gross
@@ -197,7 +147,7 @@ static void fio_pmemblk_cache_remove(fio_pmemblk_file_t pmb)
  * the final path without the parameters is returned in ppath.
  * the block size and file size are returned in pbsize and fsize.
  *
- * note that the user should specify the file size in MiB, but
+ * note that the user specifies the file size in MiB, but
  * we return bytes from here.
  */
 static void pmb_parse_path(const char *pathspec, char **ppath, uint64_t *pbsize,
@@ -206,7 +156,7 @@ static void pmb_parse_path(const char *pathspec, char **ppath, uint64_t *pbsize,
 	char *path;
 	char *s;
 	uint64_t bsize;
-	uint64_t fsizemb;
+	uint64_t fsizemib;
 
 	path = strdup(pathspec);
 	if (!path) {
@@ -216,14 +166,14 @@ static void pmb_parse_path(const char *pathspec, char **ppath, uint64_t *pbsize,
 
 	/* extract sizes, if given */
 	s = strrchr(path, ',');
-	if (s && (fsizemb = strtoull(s + 1, NULL, 10))) {
+	if (s && (fsizemib = strtoull(s + 1, NULL, 10))) {
 		*s = 0;
 		s = strrchr(path, ',');
 		if (s && (bsize = strtoull(s + 1, NULL, 10))) {
 			*s = 0;
 			*ppath = path;
 			*pbsize = bsize;
-			*pfsize = fsizemb << 20;
+			*pfsize = fsizemib << 20;
 			return;
 		}
 	}
@@ -250,11 +200,6 @@ static fio_pmemblk_file_t pmb_open(const char *pathspec, int flags)
 
 	pmb = fio_pmemblk_cache_lookup(path);
 	if (!pmb) {
-		/* load libpmemblk if needed */
-		if (!pmemblk_open)
-			if (load_libpmemblk(getenv("FIO_PMEMBLK_LIB")))
-				goto error;
-
 		pmb = malloc(sizeof(*pmb));
 		if (!pmb)
 			goto error;
@@ -267,9 +212,8 @@ static fio_pmemblk_file_t pmb_open(const char *pathspec, int flags)
 			    pmemblk_create(path, bsize, fsize, 0644);
 		}
 		if (!pmb->pmb_pool) {
-			log_err
-			    ("fio: enable to open pmemblk pool file (errno %d)\n",
-			     errno);
+			log_err("pmemblk: unable to open pmemblk pool file %s (%s)\n",
+			     path, strerror(errno));
 			goto error;
 		}
 
@@ -331,14 +275,14 @@ static int pmb_get_flags(struct thread_data *td, uint64_t *pflags)
 	if (!td->o.use_thread) {
 		if (!thread_warned) {
 			thread_warned = 1;
-			log_err("fio: must set thread=1 for pmemblk engine\n");
+			log_err("pmemblk: must set thread=1 for pmemblk engine\n");
 		}
 		return 1;
 	}
 
 	if (!td->o.odirect && !odirect_warned) {
 		odirect_warned = 1;
-		log_info("fio: direct == 0, but pmemblk is always direct\n");
+		log_info("pmemblk: direct == 0, but pmemblk is always direct\n");
 	}
 
 	if (td->o.allow_create)
@@ -410,14 +354,11 @@ static int fio_pmemblk_queue(struct thread_data *td, struct io_u *io_u)
 	unsigned long long off;
 	unsigned long len;
 	void *buf;
-	int (*blkop) (PMEMblkpool *, void *, off_t) = (void *)pmemblk_write;
 
 	fio_ro_check(td, io_u);
 
 	switch (io_u->ddir) {
 	case DDIR_READ:
-		blkop = pmemblk_read;
-		/* fall through */
 	case DDIR_WRITE:
 		off = io_u->offset;
 		len = io_u->xfer_buflen;
@@ -435,7 +376,11 @@ static int fio_pmemblk_queue(struct thread_data *td, struct io_u *io_u)
 		off /= pmb->pmb_bsize;
 		len /= pmb->pmb_bsize;
 		while (0 < len) {
-			if (0 != blkop(pmb->pmb_pool, buf, off)) {
+			if (io_u->ddir == DDIR_READ &&
+			   0 != pmemblk_read(pmb->pmb_pool, buf, off)) {
+				io_u->error = errno;
+				break;
+			} else if (0 != pmemblk_write(pmb->pmb_pool, buf, off)) {
 				io_u->error = errno;
 				break;
 			}
@@ -482,7 +427,7 @@ static int fio_pmemblk_unlink_file(struct thread_data *td, struct fio_file *f)
 	return 0;
 }
 
-struct ioengine_ops ioengine = {
+static struct ioengine_ops ioengine = {
 	.name = "pmemblk",
 	.version = FIO_IOOPS_VERSION,
 	.queue = fio_pmemblk_queue,

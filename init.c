@@ -31,6 +31,7 @@
 #include "oslib/strcasestr.h"
 
 #include "crc/test.h"
+#include "lib/pow2.h"
 
 const char fio_version_string[] = FIO_VERSION;
 
@@ -39,7 +40,6 @@ const char fio_version_string[] = FIO_VERSION;
 static char **ini_file;
 static int max_jobs = FIO_MAX_JOBS;
 static int dump_cmdline;
-static long long def_timeout;
 static int parse_only;
 
 static struct thread_data def_thread;
@@ -91,11 +91,6 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 		.name		= (char *) "output",
 		.has_arg	= required_argument,
 		.val		= 'o' | FIO_CLIENT_FLAG,
-	},
-	{
-		.name		= (char *) "timeout",
-		.has_arg	= required_argument,
-		.val		= 't' | FIO_CLIENT_FLAG,
 	},
 	{
 		.name		= (char *) "latency-log",
@@ -372,14 +367,6 @@ static int setup_thread_area(void)
 	return 0;
 }
 
-static void set_cmd_options(struct thread_data *td)
-{
-	struct thread_options *o = &td->o;
-
-	if (!o->timeout)
-		o->timeout = def_timeout;
-}
-
 static void dump_print_option(struct print_option *p)
 {
 	const char *delim;
@@ -450,10 +437,8 @@ static struct thread_data *get_new_job(int global, struct thread_data *parent,
 {
 	struct thread_data *td;
 
-	if (global) {
-		set_cmd_options(&def_thread);
+	if (global)
 		return &def_thread;
-	}
 	if (setup_thread_area()) {
 		log_err("error: failed to setup shm segment\n");
 		return NULL;
@@ -491,7 +476,6 @@ static struct thread_data *get_new_job(int global, struct thread_data *parent,
 	if (!parent->o.group_reporting || parent == &def_thread)
 		stat_number++;
 
-	set_cmd_options(td);
 	return td;
 }
 
@@ -578,6 +562,17 @@ static unsigned long long get_rand_start_delay(struct thread_data *td)
 
 	delayrange += td->o.start_delay;
 	return delayrange;
+}
+
+/*
+ * <3 Johannes
+ */
+static unsigned int gcd(unsigned int m, unsigned int n)
+{
+	if (!n)
+		return m;
+
+	return gcd(n, m % n);
 }
 
 /*
@@ -755,6 +750,15 @@ static int fixup_options(struct thread_data *td)
 			o->verify_interval = o->min_bs[DDIR_WRITE];
 		else if (td_read(td) && o->verify_interval > o->min_bs[DDIR_READ])
 			o->verify_interval = o->min_bs[DDIR_READ];
+
+		/*
+		 * Verify interval must be a factor or both min and max
+		 * write size
+		 */
+		if (o->verify_interval % o->min_bs[DDIR_WRITE] ||
+		    o->verify_interval % o->max_bs[DDIR_WRITE])
+			o->verify_interval = gcd(o->min_bs[DDIR_WRITE],
+							o->max_bs[DDIR_WRITE]);
 	}
 
 	if (o->pre_read) {
@@ -863,27 +867,6 @@ static int fixup_options(struct thread_data *td)
 	}
 
 	return ret;
-}
-
-/*
- * This function leaks the buffer
- */
-char *fio_uint_to_kmg(unsigned int val)
-{
-	char *buf = malloc(32);
-	char post[] = { 0, 'K', 'M', 'G', 'P', 'E', 0 };
-	char *p = post;
-
-	do {
-		if (val & 1023)
-			break;
-
-		val >>= 10;
-		p++;
-	} while (*p);
-
-	snprintf(buf, 32, "%u%c", val, *p);
-	return buf;
 }
 
 /* External engines are specified by "external:name.o") */
@@ -1528,15 +1511,16 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			if (!td_ioengine_flagged(td, FIO_NOIO)) {
 				char *c1, *c2, *c3, *c4;
 				char *c5 = NULL, *c6 = NULL;
+				int i2p = is_power_of_2(o->kb_base);
 
-				c1 = fio_uint_to_kmg(o->min_bs[DDIR_READ]);
-				c2 = fio_uint_to_kmg(o->max_bs[DDIR_READ]);
-				c3 = fio_uint_to_kmg(o->min_bs[DDIR_WRITE]);
-				c4 = fio_uint_to_kmg(o->max_bs[DDIR_WRITE]);
+				c1 = num2str(o->min_bs[DDIR_READ], 4, 1, i2p, N2S_BYTE);
+				c2 = num2str(o->max_bs[DDIR_READ], 4, 1, i2p, N2S_BYTE);
+				c3 = num2str(o->min_bs[DDIR_WRITE], 4, 1, i2p, N2S_BYTE);
+				c4 = num2str(o->max_bs[DDIR_WRITE], 4, 1, i2p, N2S_BYTE);
 
 				if (!o->bs_is_seq_rand) {
-					c5 = fio_uint_to_kmg(o->min_bs[DDIR_TRIM]);
-					c6 = fio_uint_to_kmg(o->max_bs[DDIR_TRIM]);
+					c5 = num2str(o->min_bs[DDIR_TRIM], 4, 1, i2p, N2S_BYTE);
+					c6 = num2str(o->max_bs[DDIR_TRIM], 4, 1, i2p, N2S_BYTE);
 				}
 
 				log_info("%s: (g=%d): rw=%s, ", td->o.name,
@@ -1544,10 +1528,10 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 							ddir_str(o->td_ddir));
 
 				if (o->bs_is_seq_rand)
-					log_info("bs(seq/rand)=%s-%s/%s-%s, ",
+					log_info("bs=%s-%s,%s-%s, bs_is_seq_rand, ",
 							c1, c2, c3, c4);
 				else
-					log_info("bs=%s-%s/%s-%s/%s-%s, ",
+					log_info("bs=%s-%s,%s-%s,%s-%s, ",
 							c1, c2, c3, c4, c5, c6);
 
 				log_info("ioengine=%s, iodepth=%u\n",
@@ -2003,6 +1987,11 @@ static void show_debug_categories(void)
 #endif
 }
 
+/*
+ * Following options aren't printed by usage().
+ * --append-terse - Equivalent to --output-format=terse, see f6a7df53.
+ * --latency-log - Deprecated option.
+ */
 static void usage(const char *name)
 {
 	printf("%s\n", fio_version_string);
@@ -2011,15 +2000,15 @@ static void usage(const char *name)
 	show_debug_categories();
 	printf("  --parse-only\t\tParse options only, don't start any IO\n");
 	printf("  --output\t\tWrite output to file\n");
-	printf("  --runtime\t\tRuntime in seconds\n");
 	printf("  --bandwidth-log\tGenerate aggregate bandwidth logs\n");
 	printf("  --minimal\t\tMinimal (terse) output\n");
-	printf("  --output-format=x\tOutput format (terse,json,json+,normal)\n");
-	printf("  --terse-version=x\tSet terse version output format to 'x'\n");
+	printf("  --output-format=type\tOutput format (terse,json,json+,normal)\n");
+	printf("  --terse-version=type\tSet terse version output format"
+		" (default 3, or 2 or 4)\n");
 	printf("  --version\t\tPrint version info and exit\n");
 	printf("  --help\t\tPrint this page\n");
 	printf("  --cpuclock-test\tPerform test/validation of CPU clock\n");
-	printf("  --crctest\t\tTest speed of checksum functions\n");
+	printf("  --crctest=type\tTest speed of checksum functions\n");
 	printf("  --cmdhelp=cmd\t\tPrint command help, \"all\" for all of"
 		" them\n");
 	printf("  --enghelp=engine\tPrint ioengine help, or list"
@@ -2035,14 +2024,15 @@ static void usage(const char *name)
 	printf(" 't' period passed\n");
 	printf("  --readonly\t\tTurn on safety read-only checks, preventing"
 		" writes\n");
-	printf("  --section=name\tOnly run specified section in job file\n");
+	printf("  --section=name\tOnly run specified section in job file,"
+		" multiple sections can be specified\n");
 	printf("  --alloc-size=kb\tSet smalloc pool to this size in kb"
-		" (def 1024)\n");
+		" (def 16384)\n");
 	printf("  --warnings-fatal\tFio parser warnings are fatal\n");
 	printf("  --max-jobs=nr\t\tMaximum number of threads/processes to support\n");
 	printf("  --server=args\t\tStart a backend fio server\n");
 	printf("  --daemonize=pidfile\tBackground fio server, write pid to file\n");
-	printf("  --client=hostname\tTalk to remote backend fio server at hostname\n");
+	printf("  --client=hostname\tTalk to remote backend(s) fio server at hostname\n");
 	printf("  --remote-config=file\tTell fio server to load this local job file\n");
 	printf("  --idle-prof=option\tReport cpu idleness on a system or percpu basis\n"
 		"\t\t\t(option=system,percpu) or run unit work\n"
@@ -2324,13 +2314,6 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			smalloc_pool_size = atoi(optarg);
 			smalloc_pool_size <<= 10;
 			sinit();
-			break;
-		case 't':
-			if (check_str_time(optarg, &def_timeout, 1)) {
-				log_err("fio: failed parsing time %s\n", optarg);
-				do_exit++;
-				exit_val = 1;
-			}
 			break;
 		case 'l':
 			log_err("fio: --latency-log is deprecated. Use per-job latency log options.\n");

@@ -393,7 +393,8 @@ static int verify_io_u_pattern(struct verify_header *hdr, struct vcont *vc)
 				(unsigned char)pattern[mod],
 				bits);
 			log_err("fio: bad pattern block offset %u\n", i);
-			dump_verify_buffers(hdr, vc);
+			vc->name = "pattern";
+			log_verify_failure(hdr, vc);
 			return EILSEQ;
 		}
 		mod++;
@@ -1211,6 +1212,7 @@ void fio_verify_init(struct thread_data *td)
 {
 	if (td->o.verify == VERIFY_CRC32C_INTEL ||
 	    td->o.verify == VERIFY_CRC32C) {
+		crc32c_arm64_probe();
 		crc32c_intel_probe();
 	}
 }
