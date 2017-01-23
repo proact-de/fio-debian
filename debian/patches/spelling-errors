@@ -3,7 +3,7 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
 
 --- a/HOWTO
 +++ b/HOWTO
-@@ -685,13 +685,13 @@
+@@ -763,13 +763,13 @@
  				the next. Multiple files can still be
  				open depending on 'openfiles'.
  
@@ -20,7 +20,7 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  				what file to access.
  
  		For random, roundrobin, and sequential, a postfix can be
-@@ -998,7 +998,7 @@
+@@ -1080,7 +1080,7 @@
  		random		Uniform random distribution
  		zipf		Zipf distribution
  		pareto		Pareto distribution
@@ -29,7 +29,7 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  		zoned		Zoned random distribution
  
  		When using a zipf or pareto distribution, an input value
-@@ -1696,7 +1696,7 @@
+@@ -1782,7 +1782,7 @@
  
  log_hist_msec=int Same as log_avg_msec, but logs entries for completion
  		latency histograms. Computing latency percentiles from averages of
@@ -40,7 +40,7 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  		See log_hist_coarseness as well. Defaults to 0, meaning histogram
 --- a/fio.1
 +++ b/fio.1
-@@ -592,13 +592,13 @@
+@@ -664,13 +664,13 @@
  Do each file in the set sequentially.
  .TP
  .B zipf
@@ -57,7 +57,7 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  .RE
  .P
  For \fBrandom\fR, \fBroundrobin\fR, and \fBsequential\fR, a postfix can be
-@@ -1575,7 +1575,7 @@
+@@ -1650,7 +1650,7 @@
  .BI log_hist_msec \fR=\fPint
  Same as \fBlog_avg_msec\fR, but logs entries for completion latency histograms.
  Computing latency percentiles from averages of intervals using \fBlog_avg_msec\fR
@@ -68,7 +68,7 @@ Author: Martin Steigerwald <martin.steigerwald@teamix.de>
  to 0, meaning histogram logging is disabled.
 --- a/options.c
 +++ b/options.c
-@@ -2234,7 +2234,7 @@
+@@ -2235,7 +2235,7 @@
  			  },
  			  { .ival = "gauss",
  			    .oval = FIO_FSERVICE_GAUSS,
