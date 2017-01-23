@@ -51,14 +51,14 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
-#include <dlfcn.h>
 #include <libgen.h>
+#include <libpmem.h>
 
 #include "../fio.h"
 #include "../verify.h"
 
 /*
- * Limits us to 1GB of mapped files in total to model after
+ * Limits us to 1GiB of mapped files in total to model after
  * mmap engine behavior
  */
 #define MMAP_TOTAL_SZ	(1 * 1024 * 1024 * 1024UL)
@@ -68,8 +68,6 @@ struct fio_devdax_data {
 	size_t devdax_sz;
 	off_t devdax_off;
 };
-
-static void * (*pmem_memcpy_persist)(void *dest, const void *src, size_t len);
 
 static int fio_devdax_file(struct thread_data *td, struct fio_file *f,
 			   size_t length, off_t off)
@@ -108,7 +106,7 @@ static int fio_devdax_prep_limited(struct thread_data *td, struct io_u *io_u)
 	struct fio_devdax_data *fdd = FILE_ENG_DATA(f);
 
 	if (io_u->buflen > f->real_file_size) {
-		log_err("fio: bs too big for dev-dax engine\n");
+		log_err("dev-dax: bs too big for dev-dax engine\n");
 		return EIO;
 	}
 
@@ -212,29 +210,11 @@ static int fio_devdax_queue(struct thread_data *td, struct io_u *io_u)
 static int fio_devdax_init(struct thread_data *td)
 {
 	struct thread_options *o = &td->o;
-	const char *path;
-	void *dl;
 
 	if ((o->rw_min_bs & page_mask) &&
 	    (o->fsync_blocks || o->fdatasync_blocks)) {
-		log_err("fio: mmap options dictate a minimum block size of "
-			"%llu bytes\n", (unsigned long long) page_size);
-		return 1;
-	}
-
-	path = getenv("FIO_PMEM_LIB");
-	if (!path)
-		path = "libpmem.so";
-
-	dl = dlopen(path, RTLD_NOW | RTLD_NODELETE);
-	if (!dl) {
-		log_err("fio: unable to open libpmem: %s\n", dlerror());
-		return 1;
-	}
-
-	pmem_memcpy_persist = dlsym(dl, "pmem_memcpy_persist");
-	if (!pmem_memcpy_persist) {
-		log_err("fio: unable to load libpmem: %s\n", dlerror());
+		log_err("dev-dax: mmap options dictate a minimum block size of %llu bytes\n",
+			(unsigned long long) page_size);
 		return 1;
 	}
 
@@ -292,8 +272,8 @@ fio_devdax_get_file_size(struct thread_data *td, struct fio_file *f)
 
 	rc = stat(f->file_name, &st);
 	if (rc < 0) {
-		log_err("%s: failed to stat file %s: %d\n",
-			td->o.name, f->file_name, errno);
+		log_err("%s: failed to stat file %s (%s)\n",
+			td->o.name, f->file_name, strerror(errno));
 		return -errno;
 	}
 
@@ -302,8 +282,8 @@ fio_devdax_get_file_size(struct thread_data *td, struct fio_file *f)
 
 	rpath = realpath(spath, npath);
 	if (!rpath) {
-		log_err("%s: realpath on %s failed: %d\n",
-			td->o.name, spath, errno);
+		log_err("%s: realpath on %s failed (%s)\n",
+			td->o.name, spath, strerror(errno));
 		return -errno;
 	}
 
@@ -318,15 +298,15 @@ fio_devdax_get_file_size(struct thread_data *td, struct fio_file *f)
 
 	sfile = fopen(spath, "r");
 	if (!sfile) {
-		log_err("%s: fopen on %s failed: %d\n",
-			td->o.name, spath, errno);
+		log_err("%s: fopen on %s failed (%s)\n",
+			td->o.name, spath, strerror(errno));
 		return 1;
 	}
 
 	rc = fscanf(sfile, "%lu", &size);
 	if (rc < 0) {
-		log_err("%s: fscanf on %s failed: %d\n",
-			td->o.name, spath, errno);
+		log_err("%s: fscanf on %s failed (%s)\n",
+			td->o.name, spath, strerror(errno));
 		return 1;
 	}
 

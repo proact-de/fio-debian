@@ -1218,7 +1218,7 @@ static int fio_netio_setup_listen_inet(struct thread_data *td, short port)
 			return 1;
 		}
 		if (is_ipv6(o)) {
-			log_err("fio: IPv6 not supported for multicast network IO");
+			log_err("fio: IPv6 not supported for multicast network IO\n");
 			close(fd);
 			return 1;
 		}
@@ -1371,7 +1371,7 @@ static int fio_netio_setup(struct thread_data *td)
 	}
 
 	if (!td->io_ops_data) {
-		nd = malloc(sizeof(*nd));;
+		nd = malloc(sizeof(*nd));
 
 		memset(nd, 0, sizeof(*nd));
 		nd->listenfd = -1;

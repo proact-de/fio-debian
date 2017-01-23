@@ -138,6 +138,7 @@ libhdfs="no"
 pmemblk="no"
 devdax="no"
 disable_lex=""
+disable_pmem="no"
 prefix=/usr/local
 
 # parse options
@@ -173,10 +174,6 @@ for opt do
   ;;
   --enable-libhdfs) libhdfs="yes"
   ;;
-  --enable-pmemblk) pmemblk="yes"
-  ;;
-  --enable-devdax) devdax="yes"
-  ;;
   --disable-lex) disable_lex="yes"
   ;;
   --enable-lex) disable_lex="no"
@@ -184,6 +181,8 @@ for opt do
   --disable-shm) no_shm="yes"
   ;;
   --disable-optimizations) disable_opt="yes"
+  ;;
+  --disable-pmem) disable_pmem="yes"
   ;;
   --help)
     show_help="yes"
@@ -207,9 +206,8 @@ if test "$show_help" = "yes" ; then
   echo "--disable-numa         Disable libnuma even if found"
   echo "--disable-gfapi        Disable gfapi"
   echo "--enable-libhdfs       Enable hdfs support"
-  echo "--enable-pmemblk       Enable NVML libpmemblk support"
-  echo "--enable-devdax        Enable NVM Device Dax support"
   echo "--disable-lex          Disable use of lex/yacc for math"
+  echo "--disable-pmem         Disable pmem based engines even if found"
   echo "--enable-lex           Enable use of lex/yacc for math"
   echo "--disable-shm          Disable SHM support"
   echo "--disable-optimizations Don't enable compiler optimizations"
@@ -283,8 +281,18 @@ CYGWIN*)
   if test -z "$CC" ; then
     if test ! -z "$build_32bit_win" && test "$build_32bit_win" = "yes"; then
       CC="i686-w64-mingw32-gcc"
+      if test -e "../zlib/contrib/vstudio/vc14/x86/ZlibStatReleaseWithoutAsm/zlibstat.lib"; then
+        echo "Building with zlib support"
+        output_sym "CONFIG_ZLIB"
+        echo "LIBS=../zlib/contrib/vstudio/vc14/x86/ZlibStatReleaseWithoutAsm/zlibstat.lib" >> $config_host_mak
+      fi
     else
       CC="x86_64-w64-mingw32-gcc"
+      if test -e "../zlib/contrib/vstudio/vc14/x64/ZlibStatReleaseWithoutAsm/zlibstat.lib"; then
+        echo "Building with zlib support"
+        output_sym "CONFIG_ZLIB"
+        echo "LIBS=../zlib/contrib/vstudio/vc14/x64/ZlibStatReleaseWithoutAsm/zlibstat.lib" >> $config_host_mak
+      fi
     fi
   fi
   output_sym "CONFIG_LITTLE_ENDIAN"
@@ -308,7 +316,8 @@ CYGWIN*)
   output_sym "CONFIG_TLS_THREAD"
   output_sym "CONFIG_IPV6"
   echo "CC=$CC" >> $config_host_mak
-  echo "BUILD_CFLAGS=$CFLAGS -include config-host.h -D_GNU_SOURCE" >> $config_host_mak
+  echo "BUILD_CFLAGS=$CFLAGS -I../zlib -include config-host.h -D_GNU_SOURCE" >> $config_host_mak
+
   exit 0
   ;;
 esac
@@ -344,6 +353,8 @@ elif check_define __s390__ ; then
   fi
 elif check_define __arm__ ; then
   cpu="arm"
+elif check_define __aarch64__ ; then
+  cpu="aarch64"
 elif check_define __hppa__ ; then
   cpu="hppa"
 else
@@ -363,6 +374,9 @@ case "$cpu" in
   ;;
   armv*b|armv*l|arm)
     cpu="arm"
+  ;;
+  aarch64)
+    cpu="arm64"
   ;;
   hppa|parisc|parisc64)
     cpu="hppa"
@@ -1567,12 +1581,59 @@ fi
 echo "MTD                           $mtd"
 
 ##########################################
+# Check whether we have libpmem
+libpmem="no"
+cat > $TMPC << EOF
+#include <libpmem.h>
+int main(int argc, char **argv)
+{
+  int rc;
+  rc = pmem_is_pmem(0, 0);
+  return 0;
+}
+EOF
+if compile_prog "" "-lpmem" "libpmem"; then
+  libpmem="yes"
+  LIBS="-lpmem $LIBS"
+fi
+echo "libpmem                       $libpmem"
+
+##########################################
+# Check whether we have libpmemblk
+# libpmem is a prerequisite
+libpmemblk="no"
+if test "$libpmem" = "yes"; then
+  cat > $TMPC << EOF
+#include <libpmemblk.h>
+int main(int argc, char **argv)
+{
+  PMEMblkpool *pbp;
+  pbp = pmemblk_open("", 0);
+  return 0;
+}
+EOF
+  if compile_prog "" "-lpmemblk" "libpmemblk"; then
+    libpmemblk="yes"
+    LIBS="-lpmemblk $LIBS"
+  fi
+fi
+echo "libpmemblk                    $libpmemblk"
+
+# Choose the ioengines
+if test "$libpmem" = "yes" && test "$disable_pmem" = "no"; then
+  devdax="yes"
+  if test "$libpmemblk" = "yes"; then
+    pmemblk="yes"
+  fi
+fi
+
+##########################################
 # Report whether pmemblk engine is enabled
-echo "NVML libpmemblk engine        $pmemblk"
+echo "NVML pmemblk engine           $pmemblk"
 
 ##########################################
 # Report whether dev-dax engine is enabled
-echo "NVM Device Dax engine        $devdax"
+echo "NVML dev-dax engine           $devdax"
 
 # Check if we have lex/yacc available
 yacc="no"
@@ -1740,6 +1801,24 @@ if compile_prog "" "" "bool"; then
   have_bool="yes"
 fi
 echo "bool                          $have_bool"
+
+##########################################
+# check march=armv8-a+crc+crypto
+march_armv8_a_crc_crypto="no"
+if test "$cpu" = "arm64" ; then
+  cat > $TMPC <<EOF
+int main(void)
+{
+  return 0;
+}
+EOF
+  if compile_prog "-march=armv8-a+crc+crypto" "" ""; then
+    march_armv8_a_crc_crypto="yes"
+    CFLAGS="$CFLAGS -march=armv8-a+crc+crypto -DARCH_HAVE_CRC_CRYPTO"
+  fi
+fi
+echo "march_armv8_a_crc_crypto      $march_armv8_a_crc_crypto"
+
 
 #############################################################################
 

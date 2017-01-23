@@ -21,7 +21,8 @@ If git:// does not work, use the http protocol instead:
 
 	http://git.kernel.dk/fio.git
 
-Snapshots are frequently generated and include the git meta data as well.
+Snapshots are frequently generated and fio-git-*.tar.gz include the git
+meta data as well. Other tarballs are archives of official fio releases.
 Snapshots can download from:
 
 	http://brick.kernel.dk/snaps/
@@ -65,8 +66,12 @@ tool (http://www.opencsw.org/get-it/pkgutil/) and then install fio via
 'pkgutil -i fio'.
 
 Windows:
-Bruce Cran <bruce@cran.org.uk> has fio packages for Windows at
+Rebecca Cran <rebecca+fio@bluestop.org> has fio packages for Windows at
 http://www.bluestop.org/fio/ .
+
+BSDs:
+Packages for BSDs may be available from their binary package repositories.
+Look for a package "fio" using their binary package managers.
 
 
 Mailing list
@@ -93,11 +98,11 @@ and archives for the old list can be found here:
 Building
 --------
 
-Just type 'configure', 'make' and 'make install'.
+Just type './configure', 'make' and 'make install'.
 
-Note that GNU make is required. On BSD it's available from devel/gmake;
-on Solaris it's in the SUNWgmake package. On platforms where GNU make
-isn't the default, type 'gmake' instead of 'make'.
+Note that GNU make is required. On BSDs it's available from devel/gmake
+within ports directory; on Solaris it's in the SUNWgmake package.
+On platforms where GNU make isn't the default, type 'gmake' instead of 'make'.
 
 Configure will print the enabled options. Note that on Linux based
 platforms, the libaio development packages must be installed to use
@@ -148,36 +153,35 @@ $ fio
 	--debug			Enable some debugging options (see below)
 	--parse-only		Parse options only, don't start any IO
 	--output		Write output to file
-	--runtime		Runtime in seconds
 	--bandwidth-log		Generate aggregate bandwidth logs
 	--minimal		Minimal (terse) output
 	--output-format=type	Output format (terse,json,json+,normal)
-	--terse-version=type	Terse version output format (default 3, or 2 or 4).
+	--terse-version=type	Set terse version output format (default 3, or 2 or 4)
 	--version		Print version info and exit
 	--help			Print this page
 	--cpuclock-test		Perform test/validation of CPU clock
-	--crctest[=test]	Test speed of checksum functions
+	--crctest=type		Test speed of checksum functions
 	--cmdhelp=cmd		Print command help, "all" for all of them
 	--enghelp=engine	Print ioengine help, or list available ioengines
 	--enghelp=engine,cmd	Print help for an ioengine cmd
 	--showcmd		Turn a job file into command line options
-	--readonly		Turn on safety read-only checks, preventing
-				writes
 	--eta=when		When ETA estimate should be printed
 				May be "always", "never" or "auto"
 	--eta-newline=time	Force a new line for every 'time' period passed
 	--status-interval=t	Force full status dump every 't' period passed
+	--readonly		Turn on safety read-only checks, preventing writes
 	--section=name		Only run specified section in job file.
 				Multiple sections can be specified.
 	--alloc-size=kb		Set smalloc pool to this size in kb (def 16384)
 	--warnings-fatal	Fio parser warnings are fatal
-	--max-jobs		Maximum number of threads/processes to support
-	--server=args		Start backend server. See Client/Server section.
-	--client=host		Connect to specified backend(s).
-	--remote-config=file	Tell fio server to load this local file
+	--max-jobs=nr		Maximum number of threads/processes to support
+	--server=args		Start a backend fio server. See Client/Server section.
+	--client=hostname	Talk to remote backend(s) fio server at hostname
+	--daemonize=pidfile	Background fio server, write pid to file
+	--remote-config=file	Tell fio server to load this local job file
 	--idle-prof=option	Report cpu idleness on a system or percpu basis
 				(option=system,percpu) or run unit work
-				calibration only (option=calibrate).
+				calibration only (option=calibrate)
 	--inflate-log=log	Inflate and output compressed log
 	--trigger-file=file	Execute trigger cmd when file exists
 	--trigger-timeout=t	Execute trigger af this time
@@ -218,6 +222,8 @@ Currently, additional logging is available for:
 	net		Dump info related to networking connections
 	rate		Dump info related to IO rate switching
 	compress	Dump info related to log compress/decompress
+	steadystate	Dump info related to steady state detection
+	helperthread	Dump info related to helper thread
 	? or help	Show available debug options.
 
 One can specify multiple debug options: e.g. --debug=file,mem will enable
@@ -233,7 +239,7 @@ sections.  The reserved 'global' section is always parsed and used.
 The --alloc-size switch allows one to use a larger pool size for smalloc.
 If running large jobs with randommap enabled, fio can run out of memory.
 Smalloc is an internal allocator for shared structures from a fixed size
-memory pool. The pool size defaults to 16M and can grow to 8 pools.
+memory pool. The pool size defaults to 16MiB and can grow to 8 pools.
 
 NOTE: While running .fio_smalloc.* backing store files are visible in /tmp.
 
@@ -257,7 +263,7 @@ the copyright and license requirements currently apply to examples/ files.
 
 
 Client/server
-------------
+-------------
 
 Normally fio is invoked as a stand-alone application on the machine
 where the IO workload should be generated. However, the frontend and
