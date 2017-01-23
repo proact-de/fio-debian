@@ -5,11 +5,11 @@ Source: http://brick.kernel.dk/snaps/
 
 Files: *
 Copyright: 2005 Jens Axboe <axboe@suse.de>
-           2006-2012 Jens Axboe <axboe@kernel.dk>
+           2006-2017 Jens Axboe <axboe@kernel.dk>
 License: GPL-2
 
 Files: debian/*
-Copyright: 2009-2012 Martin Steigerwald <ms@teamix.de>
+Copyright: 2009-2017 Martin Steigerwald <ms@teamix.de>
 Comment:
  This package was debianized by Martin Steigerwald <ms@teamix.de> on
  Tue, 19 May 2009 15:04:02 +0200.
@@ -91,9 +91,21 @@ Files: crc/xxhash.c crc/xxhash.h
 Copyright: 2012-2014 Yann Collet
 License: BSD-2-clause
 
+Files: engines/dev-dax.c
+Copyright: 2016 Intel Corp
+License: GPL-2
+
 Files: engines/fusion-aw.c
 Copyright: 2013 Fusion-io, Inc.
            Santhosh Kumar Koundinya <skoundinya@fusionio.com>
+License: GPL-2
+
+Files: engines/pmemblk.c
+Copyright: 2016 Hewlett Packard Enterprise Development LP
+License: GPL-2
+
+Files: examples/jesd219.fio
+Copyright: Based on posting from Jeff Furlong <jeff.furlong@hgst.com>
 License: GPL-2
 
 Files: exp/expression-parser.l exp/expression-parser.y exp/test-expression-parser.c
@@ -158,6 +170,10 @@ Copyright: 2001, 2002 Red Hat, Inc.
            2006 KaiGai Kohei <kaigai@ak.jp.nec.com>
 License: GPL-2+
 
+Files: t/read-to-pipe-async.c
+Copyright: 2016 Jens Axboe
+License: GPL-2+
+
 Files: tools/fio_generate_plots.1
 Copyright: Written by Martin Steigerwald <ms@teamix.de>
 License: GPL-2
@@ -165,6 +181,10 @@ License: GPL-2
 Files: tools/fiologparser.py
 Copyright: 2016 Mark Nelson <mnelson@redhat.com>
            2016 Ben England <bengland@redhat.com>
+License: GPL-2
+
+Files: tools/hist/*
+Copyright: Karl Cronburg
 License: GPL-2
 
 Files: tools/genfio tools/plot/fio2gnuplot tools/plot/fio2gnuplot.1 tools/plot/fio2gnuplot.manpage tools/plot/graph2D.gpm tools/plot/graph3D.gpm tools/plot/math.gpm

@@ -2,6 +2,7 @@ fio (2.17-1) UNRELEASED; urgency=medium
 
   * Imported upstream version 2.17.
   * debian/patches: Refreshed.
+  * debian/copyright: Updated, added some files, all GPL-2.
 
  -- Martin Steigerwald <martin.steigerwald@teamix.de>  Mon, 23 Jan 2017 11:10:42 +0100
 
