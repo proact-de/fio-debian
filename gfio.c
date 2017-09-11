@@ -1240,10 +1240,10 @@ static void about_dialog(GtkWidget *w, gpointer data)
 		"program-name", "gfio",
 		"comments", "Gtk2 UI for fio",
 		"license", license_trans,
-		"website", "http://git.kernel.dk/?p=fio.git;a=summary",
+		"website", "http://git.kernel.dk/cgit/fio/",
 		"authors", authors,
 		"version", fio_version_string,
-		"copyright", "© 2012 Jens Axboe <axboe@kernel.dk>",
+		"copyright", "© 2012-2017 Jens Axboe <axboe@kernel.dk>",
 		"logo-icon-name", "fio",
 		/* Must be last: */
 		"wrap-license", TRUE,
@@ -1271,7 +1271,7 @@ static GtkActionEntry menu_items[] = {
 	{ "Quit", GTK_STOCK_QUIT, NULL,   "<Control>Q", NULL, G_CALLBACK(quit_clicked) },
 	{ "About", GTK_STOCK_ABOUT, NULL,  NULL, NULL, G_CALLBACK(about_dialog) },
 };
-static gint nmenu_items = sizeof(menu_items) / sizeof(menu_items[0]);
+static gint nmenu_items = ARRAY_SIZE(menu_items);
 
 static const gchar *ui_string = " \
 	<ui> \

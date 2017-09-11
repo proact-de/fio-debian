@@ -356,10 +356,12 @@ static int setup_thread_area(void)
 		perror("shmat");
 		return 1;
 	}
+	if (shm_attach_to_open_removed())
+		shmctl(shm_id, IPC_RMID, NULL);
 #endif
 
 	memset(threads, 0, max_jobs * sizeof(struct thread_data));
-	fio_debug_jobp = (void *) threads + max_jobs * sizeof(struct thread_data);
+	fio_debug_jobp = (unsigned int *)(threads + max_jobs);
 	*fio_debug_jobp = -1;
 
 	flow_init();
@@ -432,8 +434,8 @@ static void copy_opt_list(struct thread_data *dst, struct thread_data *src)
 /*
  * Return a free job structure.
  */
-static struct thread_data *get_new_job(int global, struct thread_data *parent,
-				       int preserve_eo, const char *jobname)
+static struct thread_data *get_new_job(bool global, struct thread_data *parent,
+				       bool preserve_eo, const char *jobname)
 {
 	struct thread_data *td;
 
@@ -457,6 +459,7 @@ static struct thread_data *get_new_job(int global, struct thread_data *parent,
 		copy_opt_list(td, parent);
 
 	td->io_ops = NULL;
+	td->io_ops_init = 0;
 	if (!preserve_eo)
 		td->eo = NULL;
 
@@ -520,7 +523,7 @@ static int __setup_rate(struct thread_data *td, enum fio_ddir ddir)
 
 	td->rate_next_io_time[ddir] = 0;
 	td->rate_io_issue_bytes[ddir] = 0;
-	td->last_usec = 0;
+	td->last_usec[ddir] = 0;
 	return 0;
 }
 
@@ -584,7 +587,7 @@ static int fixup_options(struct thread_data *td)
 	struct thread_options *o = &td->o;
 	int ret = 0;
 
-#ifndef FIO_HAVE_PSHARED_MUTEX
+#ifndef CONFIG_PSHARED
 	if (!o->use_thread) {
 		log_info("fio: this platform does not support process shared"
 			 " mutexes, forcing use of threads. Use the 'thread'"
@@ -617,7 +620,7 @@ static int fixup_options(struct thread_data *td)
 	/*
 	 * Reads can do overwrites, we always need to pre-create the file
 	 */
-	if (td_read(td) || td_rw(td))
+	if (td_read(td))
 		o->overwrite = 1;
 
 	if (!o->min_bs[DDIR_READ])
@@ -695,6 +698,23 @@ static int fixup_options(struct thread_data *td)
 	if (o->iodepth_batch_complete_min > o->iodepth_batch_complete_max)
 		o->iodepth_batch_complete_max = o->iodepth_batch_complete_min;
 
+	/*
+	 * There's no need to check for in-flight overlapping IOs if the job
+	 * isn't changing data or the maximum iodepth is guaranteed to be 1
+	 */
+	if (o->serialize_overlap && !(td->flags & TD_F_READ_IOLOG) &&
+	    (!(td_write(td) || td_trim(td)) || o->iodepth == 1))
+		o->serialize_overlap = 0;
+	/*
+	 * Currently can't check for overlaps in offload mode
+	 */
+	if (o->serialize_overlap && o->io_submit_mode == IO_MODE_OFFLOAD) {
+		log_err("fio: checking for in-flight overlaps when the "
+			"io_submit_mode is offload is not supported\n");
+		o->serialize_overlap = 0;
+		ret = warnings_fatal;
+	}
+
 	if (o->nr_files > td->files_index)
 		o->nr_files = td->files_index;
 
@@ -762,7 +782,8 @@ static int fixup_options(struct thread_data *td)
 	}
 
 	if (o->pre_read) {
-		o->invalidate_cache = 0;
+		if (o->invalidate_cache)
+			o->invalidate_cache = 0;
 		if (td_ioengine_flagged(td, FIO_PIPEIO)) {
 			log_info("fio: cannot pre-read files with an IO engine"
 				 " that isn't seekable. Pre-read disabled.\n");
@@ -776,6 +797,11 @@ static int fixup_options(struct thread_data *td)
 		else
 			o->unit_base = 8;
 	}
+
+#ifndef FIO_HAVE_ANY_FALLOCATE
+	/* Platform doesn't support any fallocate so force it to none */
+	o->fallocate_mode = FIO_FALLOCATE_NONE;
+#endif
 
 #ifndef CONFIG_FDATASYNC
 	if (o->fdatasync_blocks) {
@@ -905,9 +931,9 @@ void td_fill_verify_state_seed(struct thread_data *td)
 	bool use64;
 
 	if (td->o.random_generator == FIO_RAND_GEN_TAUSWORTHE64)
-		use64 = 1;
+		use64 = true;
 	else
-		use64 = 0;
+		use64 = false;
 
 	init_rand_seed(&td->verify_state, td->rand_seeds[FIO_RAND_VER_OFF],
 		use64);
@@ -917,7 +943,22 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 {
 	int i;
 
-	init_rand_seed(&td->bsrange_state, td->rand_seeds[FIO_RAND_BS_OFF], use64);
+	/*
+	 * trimwrite is special in that we need to generate the same
+	 * offsets to get the "write after trim" effect. If we are
+	 * using bssplit to set buffer length distributions, ensure that
+	 * we seed the trim and write generators identically.
+	 */
+	if (td_trimwrite(td)) {
+		init_rand_seed(&td->bsrange_state[DDIR_READ], td->rand_seeds[FIO_RAND_BS_OFF], use64);
+		init_rand_seed(&td->bsrange_state[DDIR_WRITE], td->rand_seeds[FIO_RAND_BS1_OFF], use64);
+		init_rand_seed(&td->bsrange_state[DDIR_TRIM], td->rand_seeds[FIO_RAND_BS1_OFF], use64);
+	} else {
+		init_rand_seed(&td->bsrange_state[DDIR_READ], td->rand_seeds[FIO_RAND_BS_OFF], use64);
+		init_rand_seed(&td->bsrange_state[DDIR_WRITE], td->rand_seeds[FIO_RAND_BS1_OFF], use64);
+		init_rand_seed(&td->bsrange_state[DDIR_TRIM], td->rand_seeds[FIO_RAND_BS2_OFF], use64);
+	}
+
 	td_fill_verify_state_seed(td);
 	init_rand_seed(&td->rwmix_state, td->rand_seeds[FIO_RAND_MIX_OFF], false);
 
@@ -929,7 +970,9 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 	init_rand_seed(&td->file_size_state, td->rand_seeds[FIO_RAND_FILE_SIZE_OFF], use64);
 	init_rand_seed(&td->trim_state, td->rand_seeds[FIO_RAND_TRIM_OFF], use64);
 	init_rand_seed(&td->delay_state, td->rand_seeds[FIO_RAND_START_DELAY], use64);
-	init_rand_seed(&td->poisson_state, td->rand_seeds[FIO_RAND_POISSON_OFF], 0);
+	init_rand_seed(&td->poisson_state[0], td->rand_seeds[FIO_RAND_POISSON_OFF], 0);
+	init_rand_seed(&td->poisson_state[1], td->rand_seeds[FIO_RAND_POISSON2_OFF], 0);
+	init_rand_seed(&td->poisson_state[2], td->rand_seeds[FIO_RAND_POISSON3_OFF], 0);
 	init_rand_seed(&td->dedupe_state, td->rand_seeds[FIO_DEDUPE_OFF], false);
 	init_rand_seed(&td->zone_state, td->rand_seeds[FIO_RAND_ZONE_OFF], false);
 
@@ -961,9 +1004,9 @@ void td_fill_rand_seeds(struct thread_data *td)
 	}
 
 	if (td->o.random_generator == FIO_RAND_GEN_TAUSWORTHE64)
-		use64 = 1;
+		use64 = true;
 	else
-		use64 = 0;
+		use64 = false;
 
 	td_fill_rand_seeds_internal(td, use64);
 
@@ -979,14 +1022,22 @@ int ioengine_load(struct thread_data *td)
 {
 	const char *engine;
 
-	/*
-	 * Engine has already been loaded.
-	 */
-	if (td->io_ops)
-		return 0;
 	if (!td->o.ioengine) {
 		log_err("fio: internal fault, no IO engine specified\n");
 		return 1;
+	}
+
+	if (td->io_ops) {
+		/* An engine is loaded, but the requested ioengine
+		 * may have changed.
+		 */
+		if (!strcmp(td->io_ops->name, td->o.ioengine)) {
+			/* The right engine is already loaded */
+			return 0;
+		}
+
+		/* Unload the old engine. */
+		free_ioengine(td);
 	}
 
 	engine = get_engine_name(td->o.ioengine);
@@ -1020,7 +1071,7 @@ int ioengine_load(struct thread_data *td)
 		 */
 		if (origeo) {
 			memcpy(td->eo, origeo, td->io_ops->option_struct_size);
-			options_mem_dupe(td->eo, td->io_ops->options);
+			options_mem_dupe(td->io_ops->options, td->eo);
 		} else {
 			memset(td->eo, 0, td->io_ops->option_struct_size);
 			fill_default_options(td->eo, td->io_ops->options);
@@ -1064,6 +1115,9 @@ static void init_flags(struct thread_data *td)
 
 	if (o->verify_async || o->io_submit_mode == IO_MODE_OFFLOAD)
 		td->flags |= TD_F_NEED_LOCK;
+
+	if (o->mem_type == MEM_CUDA_MALLOC)
+		td->flags &= ~TD_F_SCRAMBLE_BUFFERS;
 }
 
 static int setup_random_seeds(struct thread_data *td)
@@ -1071,8 +1125,12 @@ static int setup_random_seeds(struct thread_data *td)
 	unsigned long seed;
 	unsigned int i;
 
-	if (!td->o.rand_repeatable && !fio_option_is_set(&td->o, rand_seed))
-		return init_random_state(td, td->rand_seeds, sizeof(td->rand_seeds));
+	if (!td->o.rand_repeatable && !fio_option_is_set(&td->o, rand_seed)) {
+		int ret = init_random_seeds(td->rand_seeds, sizeof(td->rand_seeds));
+		if (!ret)
+			td_fill_rand_seeds(td);
+		return ret;
+	}
 
 	seed = td->o.rand_seed;
 	for (i = 0; i < 4; i++)
@@ -1114,7 +1172,7 @@ static char *make_filename(char *buf, size_t buf_size,struct thread_options *o,
 
 	if (!o->filename_format || !strlen(o->filename_format)) {
 		sprintf(buf, "%s.%d.%d", jobname, jobnum, filenum);
-		return NULL;
+		return buf;
 	}
 
 	for (f = &fpre_keywords[0]; f->keyword; f++)
@@ -1351,6 +1409,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		td->ts.slat_stat[i].min_val = ULONG_MAX;
 		td->ts.lat_stat[i].min_val = ULONG_MAX;
 		td->ts.bw_stat[i].min_val = ULONG_MAX;
+		td->ts.iops_stat[i].min_val = ULONG_MAX;
 	}
 	td->ddir_seq_nr = o->ddir_seq_nr;
 
@@ -1367,7 +1426,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	prev_group_jobs++;
 
 	if (setup_random_seeds(td)) {
-		td_verror(td, errno, "init_random_state");
+		td_verror(td, errno, "setup_random_seeds");
 		goto err;
 	}
 
@@ -1528,10 +1587,10 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 							ddir_str(o->td_ddir));
 
 				if (o->bs_is_seq_rand)
-					log_info("bs=%s-%s,%s-%s, bs_is_seq_rand, ",
+					log_info("bs=(R) %s-%s, (W) %s-%s, bs_is_seq_rand, ",
 							c1, c2, c3, c4);
 				else
-					log_info("bs=%s-%s,%s-%s,%s-%s, ",
+					log_info("bs=(R) %s-%s, (W) %s-%s, (T) %s-%s, ",
 							c1, c2, c3, c4, c5, c6);
 
 				log_info("ioengine=%s, iodepth=%u\n",
@@ -1557,7 +1616,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	 */
 	numjobs = o->numjobs;
 	while (--numjobs) {
-		struct thread_data *td_new = get_new_job(0, td, 1, jobname);
+		struct thread_data *td_new = get_new_job(false, td, true, jobname);
 
 		if (!td_new)
 			goto err;
@@ -1618,11 +1677,11 @@ void add_job_opts(const char **o, int client_type)
 			sprintf(jobname, "%s", o[i] + 5);
 		}
 		if (in_global && !td_parent)
-			td_parent = get_new_job(1, &def_thread, 0, jobname);
+			td_parent = get_new_job(true, &def_thread, false, jobname);
 		else if (!in_global && !td) {
 			if (!td_parent)
 				td_parent = &def_thread;
-			td = get_new_job(0, td_parent, 0, jobname);
+			td = get_new_job(false, td_parent, false, jobname);
 		}
 		if (in_global)
 			fio_options_parse(td_parent, (char **) &o[i], 1);
@@ -1674,7 +1733,7 @@ static int __parse_jobs_ini(struct thread_data *td,
 		char *file, int is_buf, int stonewall_flag, int type,
 		int nested, char *name, char ***popts, int *aopts, int *nopts)
 {
-	unsigned int global = 0;
+	bool global = false;
 	char *string;
 	FILE *f;
 	char *p;
@@ -1783,7 +1842,7 @@ static int __parse_jobs_ini(struct thread_data *td,
 				first_sect = 0;
 			}
 
-			td = get_new_job(global, &def_thread, 0, name);
+			td = get_new_job(global, &def_thread, false, name);
 			if (!td) {
 				ret = 1;
 				break;
@@ -2008,7 +2067,7 @@ static void usage(const char *name)
 	printf("  --version\t\tPrint version info and exit\n");
 	printf("  --help\t\tPrint this page\n");
 	printf("  --cpuclock-test\tPerform test/validation of CPU clock\n");
-	printf("  --crctest=type\tTest speed of checksum functions\n");
+	printf("  --crctest=[type]\tTest speed of checksum functions\n");
 	printf("  --cmdhelp=cmd\t\tPrint command help, \"all\" for all of"
 		" them\n");
 	printf("  --enghelp=engine\tPrint ioengine help, or list"
@@ -2323,17 +2382,22 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 		case 'b':
 			write_bw_log = 1;
 			break;
-		case 'o':
+		case 'o': {
+			FILE *tmp;
+
 			if (f_out && f_out != stdout)
 				fclose(f_out);
 
-			f_out = fopen(optarg, "w+");
-			if (!f_out) {
-				perror("fopen output");
-				exit(1);
+			tmp = fopen(optarg, "w+");
+			if (!tmp) {
+				log_err("fio: output file open error: %s\n", strerror(errno));
+				exit_val = 1;
+				do_exit++;
+				break;
 			}
-			f_err = f_out;
+			f_err = f_out = tmp;
 			break;
+			}
 		case 'm':
 			output_format = FIO_OUTPUT_TERSE;
 			break;
@@ -2385,8 +2449,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			break;
 		case 'V':
 			terse_version = atoi(optarg);
-			if (!(terse_version == 2 || terse_version == 3 ||
-			     terse_version == 4)) {
+			if (!(terse_version >= 2 && terse_version <= 5)) {
 				log_err("fio: bad terse version format\n");
 				exit_val = 1;
 				do_exit++;
@@ -2467,7 +2530,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 				if (is_section && skip_this_section(val))
 					continue;
 
-				td = get_new_job(global, &def_thread, 1, NULL);
+				td = get_new_job(global, &def_thread, true, NULL);
 				if (!td || ioengine_load(td)) {
 					if (td) {
 						put_job(td);
@@ -2497,7 +2560,6 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			}
 
 			if (!ret && !strcmp(opt, "ioengine")) {
-				free_ioengine(td);
 				if (ioengine_load(td)) {
 					put_job(td);
 					td = NULL;
@@ -2705,7 +2767,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 		if (!ret) {
 			ret = add_job(td, td->o.name ?: "fio", 0, 0, client_type);
 			if (ret)
-				did_arg = 1;
+				exit(1);
 		}
 	}
 
@@ -2717,9 +2779,6 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 	}
 
 out_free:
-	if (pid_file)
-		free(pid_file);
-
 	return ini_idx;
 }
 
@@ -2788,7 +2847,7 @@ int parse_options(int argc, char *argv[])
 		if (did_arg)
 			return 0;
 
-		log_err("No jobs(s) defined\n\n");
+		log_err("No job(s) defined\n\n");
 
 		if (!did_arg) {
 			usage(argv[0]);

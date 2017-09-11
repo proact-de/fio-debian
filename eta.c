@@ -358,12 +358,12 @@ bool calc_thread_status(struct jobs_eta *je, int force)
 	uint64_t rate_time, disp_time, bw_avg_time, *eta_secs;
 	unsigned long long io_bytes[DDIR_RWDIR_CNT];
 	unsigned long long io_iops[DDIR_RWDIR_CNT];
-	struct timeval now;
+	struct timespec now;
 
 	static unsigned long long rate_io_bytes[DDIR_RWDIR_CNT];
 	static unsigned long long disp_io_bytes[DDIR_RWDIR_CNT];
 	static unsigned long long disp_io_iops[DDIR_RWDIR_CNT];
-	static struct timeval rate_prev_time, disp_prev_time;
+	static struct timespec rate_prev_time, disp_prev_time;
 
 	if (!force) {
 		if (!(output_format & FIO_OUTPUT_NORMAL) &&
@@ -440,7 +440,7 @@ bool calc_thread_status(struct jobs_eta *je, int force)
 		if (td->runstate > TD_SETTING_UP) {
 			int ddir;
 
-			for (ddir = DDIR_READ; ddir < DDIR_RWDIR_CNT; ddir++) {
+			for (ddir = 0; ddir < DDIR_RWDIR_CNT; ddir++) {
 				if (unified_rw_rep) {
 					io_bytes[0] += td->io_bytes[ddir];
 					io_iops[0] += td->io_blocks[ddir];
@@ -511,7 +511,7 @@ bool calc_thread_status(struct jobs_eta *je, int force)
 
 void display_thread_status(struct jobs_eta *je)
 {
-	static struct timeval disp_eta_new_line;
+	static struct timespec disp_eta_new_line;
 	static int eta_new_line_init, eta_new_line_pending;
 	static int linelen_last;
 	static int eta_good;
@@ -574,7 +574,7 @@ void display_thread_status(struct jobs_eta *je)
 			sprintf(perc_str, "%3.1f%%", perc);
 		}
 
-		for (ddir = DDIR_READ; ddir < DDIR_RWDIR_CNT; ddir++) {
+		for (ddir = 0; ddir < DDIR_RWDIR_CNT; ddir++) {
 			rate_str[ddir] = num2str(je->rate[ddir], 4,
 						1024, je->is_pow2, je->unit_base);
 			iops_str[ddir] = num2str(je->iops[ddir], 4, 1, 0, N2S_NONE);
@@ -601,7 +601,7 @@ void display_thread_status(struct jobs_eta *je)
 			p += sprintf(p, "%*s", linelen_last - l, "");
 		linelen_last = l;
 
-		for (ddir = DDIR_READ; ddir < DDIR_RWDIR_CNT; ddir++) {
+		for (ddir = 0; ddir < DDIR_RWDIR_CNT; ddir++) {
 			free(rate_str[ddir]);
 			free(iops_str[ddir]);
 		}

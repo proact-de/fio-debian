@@ -36,12 +36,7 @@
 #include "helper_thread.h"
 #include "filehash.h"
 
-/*
- * Just expose an empty list, if the OS does not support disk util stats
- */
-#ifndef FIO_HAVE_DISK_UTIL
 FLIST_HEAD(disk_list);
-#endif
 
 unsigned long arch_flags = 0;
 
@@ -149,10 +144,10 @@ void reset_all_stats(struct thread_data *td)
 	}
 
 	set_epoch_time(td, td->o.log_unix_epoch);
-	memcpy(&td->start, &td->epoch, sizeof(struct timeval));
-	memcpy(&td->iops_sample_time, &td->epoch, sizeof(struct timeval));
-	memcpy(&td->bw_sample_time, &td->epoch, sizeof(struct timeval));
-	memcpy(&td->ss.prev_time, &td->epoch, sizeof(struct timeval));
+	memcpy(&td->start, &td->epoch, sizeof(td->epoch));
+	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
+	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));
+	memcpy(&td->ss.prev_time, &td->epoch, sizeof(td->epoch));
 
 	lat_target_reset(td);
 	clear_rusage_stat(td);
@@ -281,7 +276,7 @@ int fio_running_or_pending_io_threads(void)
 	int nr_io_threads = 0;
 
 	for_each_td(td, i) {
-		if (td->flags & TD_F_NOIO)
+		if (td->io_ops_init && td_ioengine_flagged(td, FIO_NOIO))
 			continue;
 		nr_io_threads++;
 		if (td->runstate < TD_EXITED)
@@ -311,6 +306,13 @@ int fio_set_fd_nonblocking(int fd, const char *who)
 	return flags;
 }
 
+enum {
+	ENDIAN_INVALID_BE = 1,
+	ENDIAN_INVALID_LE,
+	ENDIAN_INVALID_CONFIG,
+	ENDIAN_BROKEN,
+};
+
 static int endian_check(void)
 {
 	union {
@@ -327,16 +329,16 @@ static int endian_check(void)
 
 #if defined(CONFIG_LITTLE_ENDIAN)
 	if (be)
-		return 1;
+		return ENDIAN_INVALID_BE;
 #elif defined(CONFIG_BIG_ENDIAN)
 	if (le)
-		return 1;
+		return ENDIAN_INVALID_LE;
 #else
-	return 1;
+	return ENDIAN_INVALID_CONFIG;
 #endif
 
 	if (!le && !be)
-		return 1;
+		return ENDIAN_BROKEN;
 
 	return 0;
 }
@@ -344,23 +346,45 @@ static int endian_check(void)
 int initialize_fio(char *envp[])
 {
 	long ps;
+	int err;
 
 	/*
 	 * We need these to be properly 64-bit aligned, otherwise we
 	 * can run into problems on archs that fault on unaligned fp
 	 * access (ARM).
 	 */
+	compiletime_assert((offsetof(struct thread_data, ts) % sizeof(void *)) == 0, "ts");
 	compiletime_assert((offsetof(struct thread_stat, percentile_list) % 8) == 0, "stat percentile_list");
 	compiletime_assert((offsetof(struct thread_stat, total_run_time) % 8) == 0, "total_run_time");
 	compiletime_assert((offsetof(struct thread_stat, total_err_count) % 8) == 0, "total_err_count");
 	compiletime_assert((offsetof(struct thread_stat, latency_percentile) % 8) == 0, "stat latency_percentile");
+	compiletime_assert((offsetof(struct thread_data, ts.clat_stat) % 8) == 0, "ts.clat_stat");
 	compiletime_assert((offsetof(struct thread_options_pack, zipf_theta) % 8) == 0, "zipf_theta");
 	compiletime_assert((offsetof(struct thread_options_pack, pareto_h) % 8) == 0, "pareto_h");
 	compiletime_assert((offsetof(struct thread_options_pack, percentile_list) % 8) == 0, "percentile_list");
 	compiletime_assert((offsetof(struct thread_options_pack, latency_percentile) % 8) == 0, "latency_percentile");
+	compiletime_assert((offsetof(struct jobs_eta, m_rate) % 8) == 0, "m_rate");
 
-	if (endian_check()) {
+	err = endian_check();
+	if (err) {
 		log_err("fio: endianness settings appear wrong.\n");
+		switch (err) {
+		case ENDIAN_INVALID_BE:
+			log_err("fio: got big-endian when configured for little\n");
+			break;
+		case ENDIAN_INVALID_LE:
+			log_err("fio: got little-endian when configured for big\n");
+			break;
+		case ENDIAN_INVALID_CONFIG:
+			log_err("fio: not configured to any endianness\n");
+			break;
+		case ENDIAN_BROKEN:
+			log_err("fio: failed to detect endianness\n");
+			break;
+		default:
+			assert(0);
+			break;
+		}
 		log_err("fio: please report this to fio@vger.kernel.org\n");
 		return 1;
 	}

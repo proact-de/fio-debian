@@ -281,7 +281,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 		 */
 		if (td->o.read_iolog_file)
 			memcpy(&td->last_issue, &io_u->issue_time,
-					sizeof(struct timeval));
+					sizeof(io_u->issue_time));
 	}
 
 	if (ddir_rw(ddir)) {
@@ -356,7 +356,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 		 */
 		if (td->o.read_iolog_file)
 			memcpy(&td->last_issue, &io_u->issue_time,
-					sizeof(struct timeval));
+					sizeof(io_u->issue_time));
 	}
 
 	return ret;
@@ -368,16 +368,16 @@ int td_io_init(struct thread_data *td)
 
 	if (td->io_ops->init) {
 		ret = td->io_ops->init(td);
-		if (ret && td->o.iodepth > 1) {
-			log_err("fio: io engine init failed. Perhaps try"
-				" reducing io depth?\n");
-		}
+		if (ret)
+			log_err("fio: io engine %s init failed.%s\n",
+				td->io_ops->name,
+				td->o.iodepth > 1 ?
+				" Perhaps try reducing io depth?" : "");
+		else
+			td->io_ops_init = 1;
 		if (!td->error)
 			td->error = ret;
 	}
-
-	if (!ret && td_ioengine_flagged(td, FIO_NOIO))
-		td->flags |= TD_F_NOIO;
 
 	return ret;
 }
@@ -449,7 +449,7 @@ int td_io_open_file(struct thread_data *td, struct fio_file *f)
 		goto err;
 
 	if (td->o.fadvise_hint != F_ADV_NONE &&
-	    (f->filetype == FIO_TYPE_BD || f->filetype == FIO_TYPE_FILE)) {
+	    (f->filetype == FIO_TYPE_BLOCK || f->filetype == FIO_TYPE_FILE)) {
 		int flags;
 
 		if (td->o.fadvise_hint == F_ADV_TYPE) {
@@ -472,13 +472,24 @@ int td_io_open_file(struct thread_data *td, struct fio_file *f)
 			goto err;
 		}
 	}
-#ifdef FIO_HAVE_STREAMID
-	if (td->o.fadvise_stream &&
-	    (f->filetype == FIO_TYPE_BD || f->filetype == FIO_TYPE_FILE)) {
-		off_t stream = td->o.fadvise_stream;
+#ifdef FIO_HAVE_WRITE_HINT
+	if (fio_option_is_set(&td->o, write_hint) &&
+	    (f->filetype == FIO_TYPE_BLOCK || f->filetype == FIO_TYPE_FILE)) {
+		uint64_t hint = td->o.write_hint;
+		int cmd;
 
-		if (posix_fadvise(f->fd, stream, f->io_size, POSIX_FADV_STREAMID) < 0) {
-			td_verror(td, errno, "fadvise streamid");
+		/*
+		 * For direct IO, we just need/want to set the hint on
+		 * the file descriptor. For buffered IO, we need to set
+		 * it on the inode.
+		 */
+		if (td->o.odirect)
+			cmd = F_SET_FILE_RW_HINT;
+		else
+			cmd = F_SET_RW_HINT;
+
+		if (fcntl(f->fd, cmd, &hint) < 0) {
+			td_verror(td, errno, "fcntl write hint");
 			goto err;
 		}
 	}
@@ -556,77 +567,19 @@ int td_io_get_file_size(struct thread_data *td, struct fio_file *f)
 	return td->io_ops->get_file_size(td, f);
 }
 
-static int do_sync_file_range(const struct thread_data *td,
-			      struct fio_file *f)
-{
-	off64_t offset, nbytes;
-
-	offset = f->first_write;
-	nbytes = f->last_write - f->first_write;
-
-	if (!nbytes)
-		return 0;
-
-	return sync_file_range(f->fd, offset, nbytes, td->o.sync_file_range);
-}
-
-int do_io_u_sync(const struct thread_data *td, struct io_u *io_u)
-{
-	int ret;
-
-	if (io_u->ddir == DDIR_SYNC) {
-		ret = fsync(io_u->file->fd);
-	} else if (io_u->ddir == DDIR_DATASYNC) {
-#ifdef CONFIG_FDATASYNC
-		ret = fdatasync(io_u->file->fd);
-#else
-		ret = io_u->xfer_buflen;
-		io_u->error = EINVAL;
-#endif
-	} else if (io_u->ddir == DDIR_SYNC_FILE_RANGE)
-		ret = do_sync_file_range(td, io_u->file);
-	else {
-		ret = io_u->xfer_buflen;
-		io_u->error = EINVAL;
-	}
-
-	if (ret < 0)
-		io_u->error = errno;
-
-	return ret;
-}
-
-int do_io_u_trim(const struct thread_data *td, struct io_u *io_u)
-{
-#ifndef FIO_HAVE_TRIM
-	io_u->error = EINVAL;
-	return 0;
-#else
-	struct fio_file *f = io_u->file;
-	int ret;
-
-	ret = os_trim(f->fd, io_u->offset, io_u->xfer_buflen);
-	if (!ret)
-		return io_u->xfer_buflen;
-
-	io_u->error = ret;
-	return 0;
-#endif
-}
-
 int fio_show_ioengine_help(const char *engine)
 {
 	struct flist_head *entry;
 	struct thread_data td;
+	struct ioengine_ops *io_ops;
 	char *sep;
 	int ret = 1;
 
 	if (!engine || !*engine) {
 		log_info("Available IO engines:\n");
 		flist_for_each(entry, &engine_list) {
-			td.io_ops = flist_entry(entry, struct ioengine_ops,
-						list);
-			log_info("\t%s\n", td.io_ops->name);
+			io_ops = flist_entry(entry, struct ioengine_ops, list);
+			log_info("\t%s\n", io_ops->name);
 		}
 		return 0;
 	}
@@ -638,16 +591,16 @@ int fio_show_ioengine_help(const char *engine)
 
 	memset(&td, 0, sizeof(td));
 
-	td.io_ops = load_ioengine(&td, engine);
-	if (!td.io_ops) {
+	io_ops = load_ioengine(&td, engine);
+	if (!io_ops) {
 		log_info("IO engine %s not found\n", engine);
 		return 1;
 	}
 
-	if (td.io_ops->options)
-		ret = show_cmd_help(td.io_ops->options, sep);
+	if (io_ops->options)
+		ret = show_cmd_help(io_ops->options, sep);
 	else
-		log_info("IO engine %s has no options\n", td.io_ops->name);
+		log_info("IO engine %s has no options\n", io_ops->name);
 
 	free_ioengine(&td);
 

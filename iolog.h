@@ -4,7 +4,7 @@
 #include "lib/rbtree.h"
 #include "lib/ieee754.h"
 #include "flist.h"
-#include "ioengine.h"
+#include "ioengines.h"
 
 /*
  * Use for maintaining statistics
@@ -131,6 +131,11 @@ struct io_log {
 	pthread_mutex_t chunk_lock;
 	unsigned int chunk_seq;
 	struct flist_head chunk_list;
+
+	pthread_mutex_t deferred_free_lock;
+#define IOLOG_MAX_DEFER	8
+	void *deferred_items[IOLOG_MAX_DEFER];
+	unsigned int deferred;
 };
 
 /*
@@ -259,7 +264,7 @@ struct log_params {
 
 static inline bool per_unit_log(struct io_log *log)
 {
-	return log && !log->avg_msec;
+	return log && (!log->avg_msec || log->log_gz || log->log_gz_store);
 }
 
 static inline bool inline_log(struct io_log *log)
@@ -271,7 +276,7 @@ static inline bool inline_log(struct io_log *log)
 
 static inline void ipo_bytes_align(unsigned int replay_align, struct io_piece *ipo)
 {
-	if (replay_align)
+	if (!replay_align)
 		return;
 
 	ipo->offset &= ~(replay_align - (uint64_t)1);

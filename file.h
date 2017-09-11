@@ -15,7 +15,7 @@
  */
 enum fio_filetype {
 	FIO_TYPE_FILE = 1,		/* plain file */
-	FIO_TYPE_BD,			/* block device */
+	FIO_TYPE_BLOCK,			/* block device */
 	FIO_TYPE_CHAR,			/* character device */
 	FIO_TYPE_PIPE,			/* pipe */
 };
@@ -63,6 +63,7 @@ enum fio_fallocate_mode {
 	FIO_FALLOCATE_NONE	= 1,
 	FIO_FALLOCATE_POSIX	= 2,
 	FIO_FALLOCATE_KEEP_SIZE	= 3,
+	FIO_FALLOCATE_NATIVE	= 4,
 };
 
 /*
@@ -90,6 +91,7 @@ struct fio_file {
 
 	/*
 	 * size of the file, offset into file, and io size from that offset
+	 * (be aware io_size is different from thread_options::io_size)
 	 */
 	uint64_t real_file_size;
 	uint64_t file_offset;
@@ -112,9 +114,12 @@ struct fio_file {
 	unsigned int last_write_idx;
 
 	/*
-	 * For use by the io engine
+	 * For use by the io engine for offset or private data storage
 	 */
-	uint64_t engine_data;
+	union {
+		uint64_t engine_pos;
+		void *engine_data;
+	};
 
 	/*
 	 * if io is protected by a semaphore, this is set
@@ -146,14 +151,8 @@ struct fio_file {
 	struct disk_util *du;
 };
 
-#define FILE_ENG_DATA(f)	((void *) (uintptr_t) (f)->engine_data)
-#define FILE_SET_ENG_DATA(f, data)	\
-	((f)->engine_data = (uintptr_t) (data))
-
-struct file_name {
-	struct flist_head list;
-	char *filename;
-};
+#define FILE_ENG_DATA(f)		((f)->engine_data)
+#define FILE_SET_ENG_DATA(f, data)	((f)->engine_data = (data))
 
 #define FILE_FLAG_FNS(name)						\
 static inline void fio_file_set_##name(struct fio_file *f)		\

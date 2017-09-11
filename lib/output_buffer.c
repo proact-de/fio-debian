@@ -3,7 +3,6 @@
 #include <stdlib.h>
 
 #include "output_buffer.h"
-#include "../log.h"
 #include "../minmax.h"
 
 #define BUF_INC	1024
@@ -18,6 +17,7 @@ void buf_output_init(struct buf_output *out)
 void buf_output_free(struct buf_output *out)
 {
 	free(out->buf);
+	buf_output_init(out);
 }
 
 size_t buf_output_add(struct buf_output *out, const char *buf, size_t len)
@@ -39,17 +39,4 @@ size_t buf_output_add(struct buf_output *out, const char *buf, size_t len)
 	memcpy(&out->buf[out->buflen], buf, len);
 	out->buflen += len;
 	return len;
-}
-
-size_t buf_output_flush(struct buf_output *out)
-{
-	size_t ret = 0;
-
-	if (out->buflen) {
-		ret = log_info_buf(out->buf, out->buflen);
-		memset(out->buf, 0, out->max_buflen);
-		out->buflen = 0;
-	}
-
-	return ret;
 }

@@ -50,17 +50,6 @@ struct sk_entry {
 	struct flist_head next;	/* Other sk_entry's, if linked command */
 };
 
-struct sk_out {
-	unsigned int refs;	/* frees sk_out when it drops to zero.
-				 * protected by below ->lock */
-
-	int sk;			/* socket fd to talk to client */
-	struct fio_mutex lock;	/* protects ref and below list */
-	struct flist_head list;	/* list of pending transmit work */
-	struct fio_mutex wait;	/* wake backend when items added to list */
-	struct fio_mutex xmit;	/* held while sending data */
-};
-
 static char *fio_server_arg;
 static char *bind_sock;
 static struct sockaddr_in saddr_in;
@@ -263,9 +252,10 @@ static int fio_send_data(int sk, const void *p, unsigned int len)
 	return fio_sendv_data(sk, &iov, 1);
 }
 
-static int fio_recv_data(int sk, void *p, unsigned int len, bool wait)
+static int fio_recv_data(int sk, void *buf, unsigned int len, bool wait)
 {
 	int flags;
+	char *p = buf;
 
 	if (wait)
 		flags = MSG_WAITALL;
@@ -388,7 +378,7 @@ struct fio_net_cmd *fio_net_recv_cmd(int sk, bool wait)
 			break;
 
 		/* There's payload, get it */
-		pdu = (void *) cmdret->payload + pdu_offset;
+		pdu = (char *) cmdret->payload + pdu_offset;
 		ret = fio_recv_data(sk, pdu, cmd.pdu_len, wait);
 		if (ret)
 			break;
@@ -449,7 +439,7 @@ static uint64_t alloc_reply(uint64_t tag, uint16_t opcode)
 
 	reply = calloc(1, sizeof(*reply));
 	INIT_FLIST_HEAD(&reply->list);
-	fio_gettime(&reply->tv, NULL);
+	fio_gettime(&reply->ts, NULL);
 	reply->saved_tag = tag;
 	reply->opcode = opcode;
 
@@ -1290,7 +1280,7 @@ static int get_my_addr_str(int sk)
 
 	ret = getsockname(sk, sockaddr_p, &len);
 	if (ret) {
-		log_err("fio: getsockaddr: %s\n", strerror(errno));
+		log_err("fio: getsockname: %s\n", strerror(errno));
 		return -1;
 	}
 
@@ -1485,6 +1475,7 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 		convert_io_stat(&p.ts.slat_stat[i], &ts->slat_stat[i]);
 		convert_io_stat(&p.ts.lat_stat[i], &ts->lat_stat[i]);
 		convert_io_stat(&p.ts.bw_stat[i], &ts->bw_stat[i]);
+		convert_io_stat(&p.ts.iops_stat[i], &ts->iops_stat[i]);
 	}
 
 	p.ts.usr_time		= cpu_to_le64(ts->usr_time);
@@ -1508,10 +1499,12 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 		p.ts.io_u_complete[i]	= cpu_to_le32(ts->io_u_complete[i]);
 	}
 
-	for (i = 0; i < FIO_IO_U_LAT_U_NR; i++) {
+	for (i = 0; i < FIO_IO_U_LAT_N_NR; i++)
+		p.ts.io_u_lat_n[i]	= cpu_to_le32(ts->io_u_lat_n[i]);
+	for (i = 0; i < FIO_IO_U_LAT_U_NR; i++)
 		p.ts.io_u_lat_u[i]	= cpu_to_le32(ts->io_u_lat_u[i]);
+	for (i = 0; i < FIO_IO_U_LAT_M_NR; i++)
 		p.ts.io_u_lat_m[i]	= cpu_to_le32(ts->io_u_lat_m[i]);
-	}
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++)
 		for (j = 0; j < FIO_IO_U_PLAT_NR; j++)
@@ -2279,7 +2272,7 @@ int fio_server_parse_host(const char *host, int ipv6, struct in_addr *inp,
  * For local domain sockets:
  *	*ptr is the filename, *is_sock is 1.
  */
-int fio_server_parse_string(const char *str, char **ptr, int *is_sock,
+int fio_server_parse_string(const char *str, char **ptr, bool *is_sock,
 			    int *port, struct in_addr *inp,
 			    struct in6_addr *inp6, int *ipv6)
 {
@@ -2288,13 +2281,13 @@ int fio_server_parse_string(const char *str, char **ptr, int *is_sock,
 	int lport = 0;
 
 	*ptr = NULL;
-	*is_sock = 0;
+	*is_sock = false;
 	*port = fio_net_port;
 	*ipv6 = 0;
 
 	if (!strncmp(str, "sock:", 5)) {
 		*ptr = strdup(str + 5);
-		*is_sock = 1;
+		*is_sock = true;
 
 		return 0;
 	}
@@ -2373,7 +2366,8 @@ int fio_server_parse_string(const char *str, char **ptr, int *is_sock,
 static int fio_handle_server_arg(void)
 {
 	int port = fio_net_port;
-	int is_sock, ret = 0;
+	bool is_sock;
+	int ret = 0;
 
 	saddr_in.sin_addr.s_addr = htonl(INADDR_ANY);
 

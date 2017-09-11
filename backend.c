@@ -76,9 +76,6 @@ int shm_id = 0;
 int temp_stall_ts;
 unsigned long done_secs = 0;
 
-#define PAGE_ALIGN(buf)	\
-	(char *) (((uintptr_t) (buf) + page_mask) & ~page_mask)
-
 #define JOB_START_TIMEOUT	(5 * 1000)
 
 static void sig_int(int sig)
@@ -139,7 +136,7 @@ static void set_sig_handlers(void)
 /*
  * Check if we are above the minimum rate given.
  */
-static bool __check_min_rate(struct thread_data *td, struct timeval *now,
+static bool __check_min_rate(struct thread_data *td, struct timespec *now,
 			     enum fio_ddir ddir)
 {
 	unsigned long long bytes = 0;
@@ -226,7 +223,7 @@ static bool __check_min_rate(struct thread_data *td, struct timeval *now,
 	return false;
 }
 
-static bool check_min_rate(struct thread_data *td, struct timeval *now)
+static bool check_min_rate(struct thread_data *td, struct timespec *now)
 {
 	bool ret = false;
 
@@ -338,18 +335,18 @@ static int fio_file_fsync(struct thread_data *td, struct fio_file *f)
 	return ret;
 }
 
-static inline void __update_tv_cache(struct thread_data *td)
+static inline void __update_ts_cache(struct thread_data *td)
 {
-	fio_gettime(&td->tv_cache, NULL);
+	fio_gettime(&td->ts_cache, NULL);
 }
 
-static inline void update_tv_cache(struct thread_data *td)
+static inline void update_ts_cache(struct thread_data *td)
 {
-	if ((++td->tv_cache_nr & td->tv_cache_mask) == td->tv_cache_mask)
-		__update_tv_cache(td);
+	if ((++td->ts_cache_nr & td->ts_cache_mask) == td->ts_cache_mask)
+		__update_ts_cache(td);
 }
 
-static inline bool runtime_exceeded(struct thread_data *td, struct timeval *t)
+static inline bool runtime_exceeded(struct thread_data *td, struct timespec *t)
 {
 	if (in_ramp_time(td))
 		return false;
@@ -433,7 +430,7 @@ static void check_update_rusage(struct thread_data *td)
 	}
 }
 
-static int wait_for_completions(struct thread_data *td, struct timeval *time)
+static int wait_for_completions(struct thread_data *td, struct timespec *time)
 {
 	const int full = queue_full(td);
 	int min_evts = 0;
@@ -465,7 +462,7 @@ static int wait_for_completions(struct thread_data *td, struct timeval *time)
 
 int io_queue_event(struct thread_data *td, struct io_u *io_u, int *ret,
 		   enum fio_ddir ddir, uint64_t *bytes_issued, int from_verify,
-		   struct timeval *comp_time)
+		   struct timespec *comp_time)
 {
 	int ret2;
 
@@ -590,6 +587,50 @@ static int unlink_all_files(struct thread_data *td)
 }
 
 /*
+ * Check if io_u will overlap an in-flight IO in the queue
+ */
+static bool in_flight_overlap(struct io_u_queue *q, struct io_u *io_u)
+{
+	bool overlap;
+	struct io_u *check_io_u;
+	unsigned long long x1, x2, y1, y2;
+	int i;
+
+	x1 = io_u->offset;
+	x2 = io_u->offset + io_u->buflen;
+	overlap = false;
+	io_u_qiter(q, check_io_u, i) {
+		if (check_io_u->flags & IO_U_F_FLIGHT) {
+			y1 = check_io_u->offset;
+			y2 = check_io_u->offset + check_io_u->buflen;
+
+			if (x1 < y2 && y1 < x2) {
+				overlap = true;
+				dprint(FD_IO, "in-flight overlap: %llu/%lu, %llu/%lu\n",
+						x1, io_u->buflen,
+						y1, check_io_u->buflen);
+				break;
+			}
+		}
+	}
+
+	return overlap;
+}
+
+static int io_u_submit(struct thread_data *td, struct io_u *io_u)
+{
+	/*
+	 * Check for overlap if the user asked us to, and we have
+	 * at least one IO in flight besides this one.
+	 */
+	if (td->o.serialize_overlap && td->cur_depth > 1 &&
+	    in_flight_overlap(&td->io_u_all, io_u))
+		return FIO_Q_BUSY;
+
+	return td_io_queue(td, io_u);
+}
+
+/*
  * The main verify engine. Runs over the writes we previously submitted,
  * reads the blocks back in, and checks the crc/md5 of the data.
  */
@@ -636,12 +677,12 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 		enum fio_ddir ddir;
 		int full;
 
-		update_tv_cache(td);
+		update_ts_cache(td);
 		check_update_rusage(td);
 
-		if (runtime_exceeded(td, &td->tv_cache)) {
-			__update_tv_cache(td);
-			if (runtime_exceeded(td, &td->tv_cache)) {
+		if (runtime_exceeded(td, &td->ts_cache)) {
+			__update_ts_cache(td);
+			if (runtime_exceeded(td, &td->ts_cache)) {
 				fio_mark_td_terminate(td);
 				break;
 			}
@@ -719,7 +760,7 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 		if (!td->o.disable_slat)
 			fio_gettime(&io_u->start_time, NULL);
 
-		ret = td_io_queue(td, io_u);
+		ret = io_u_submit(td, io_u);
 
 		if (io_queue_event(td, io_u, &ret, ddir, NULL, 1, NULL))
 			break;
@@ -779,8 +820,8 @@ static bool io_bytes_exceeded(struct thread_data *td, uint64_t *this_bytes)
 	else
 		bytes = this_bytes[DDIR_TRIM];
 
-	if (td->o.io_limit)
-		limit = td->o.io_limit;
+	if (td->o.io_size)
+		limit = td->o.io_size;
 	else
 		limit = td->o.size;
 
@@ -814,13 +855,14 @@ static long long usec_for_io(struct thread_data *td, enum fio_ddir ddir)
 		uint64_t val;
 		iops = bps / td->o.bs[ddir];
 		val = (int64_t) (1000000 / iops) *
-				-logf(__rand_0_1(&td->poisson_state));
+				-logf(__rand_0_1(&td->poisson_state[ddir]));
 		if (val) {
-			dprint(FD_RATE, "poisson rate iops=%llu\n",
-					(unsigned long long) 1000000 / val);
+			dprint(FD_RATE, "poisson rate iops=%llu, ddir=%d\n",
+					(unsigned long long) 1000000 / val,
+					ddir);
 		}
-		td->last_usec += val;
-		return td->last_usec;
+		td->last_usec[ddir] += val;
+		return td->last_usec[ddir];
 	} else if (bps) {
 		secs = bytes / bps;
 		remainder = bytes % bps;
@@ -854,11 +896,11 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 
 	total_bytes = td->o.size;
 	/*
-	* Allow random overwrite workloads to write up to io_limit
+	* Allow random overwrite workloads to write up to io_size
 	* before starting verification phase as 'size' doesn't apply.
 	*/
 	if (td_write(td) && td_random(td) && td->o.norandommap)
-		total_bytes = max(total_bytes, (uint64_t) td->o.io_limit);
+		total_bytes = max(total_bytes, (uint64_t) td->o.io_size);
 	/*
 	 * If verify_backlog is enabled, we'll run the verify in this
 	 * handler as well. For that case, we may need up to twice the
@@ -876,7 +918,7 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 	while ((td->o.read_iolog_file && !flist_empty(&td->io_log_list)) ||
 		(!flist_empty(&td->trim_list)) || !io_issue_bytes_exceeded(td) ||
 		td->o.time_based) {
-		struct timeval comp_time;
+		struct timespec comp_time;
 		struct io_u *io_u;
 		int full;
 		enum fio_ddir ddir;
@@ -886,11 +928,11 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 		if (td->terminate || td->done)
 			break;
 
-		update_tv_cache(td);
+		update_ts_cache(td);
 
-		if (runtime_exceeded(td, &td->tv_cache)) {
-			__update_tv_cache(td);
-			if (runtime_exceeded(td, &td->tv_cache)) {
+		if (runtime_exceeded(td, &td->ts_cache)) {
+			__update_ts_cache(td);
+			if (runtime_exceeded(td, &td->ts_cache)) {
 				fio_mark_td_terminate(td);
 				break;
 			}
@@ -985,7 +1027,7 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 				td->rate_next_io_time[ddir] = usec_for_io(td, ddir);
 
 		} else {
-			ret = td_io_queue(td, io_u);
+			ret = io_u_submit(td, io_u);
 
 			if (should_check_rate(td))
 				td->rate_next_io_time[ddir] = usec_for_io(td, ddir);
@@ -1198,7 +1240,7 @@ static int init_io_u(struct thread_data *td)
 
 	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
 	    td_ioengine_flagged(td, FIO_RAWIO))
-		p = PAGE_ALIGN(td->orig_buffer) + td->o.mem_align;
+		p = PTR_ALIGN(td->orig_buffer, page_mask) + td->o.mem_align;
 	else
 		p = td->orig_buffer;
 
@@ -1264,6 +1306,10 @@ static int init_io_u(struct thread_data *td)
 	return 0;
 }
 
+/*
+ * This function is Linux specific.
+ * FIO_HAVE_IOSCHED_SWITCH enabled currently means it's Linux.
+ */
 static int switch_ioscheduler(struct thread_data *td)
 {
 #ifdef FIO_HAVE_IOSCHED_SWITCH
@@ -1274,7 +1320,8 @@ static int switch_ioscheduler(struct thread_data *td)
 	if (td_ioengine_flagged(td, FIO_DISKLESSIO))
 		return 0;
 
-	sprintf(tmp, "%s/queue/scheduler", td->sysfs_root);
+	assert(td->files && td->files[0]);
+	sprintf(tmp, "%s/queue/scheduler", td->files[0]->du->sysfs_root);
 
 	f = fopen(tmp, "r+");
 	if (!f) {
@@ -1353,8 +1400,8 @@ static bool keep_running(struct thread_data *td)
 	if (exceeds_number_ios(td))
 		return false;
 
-	if (td->o.io_limit)
-		limit = td->o.io_limit;
+	if (td->o.io_size)
+		limit = td->o.io_size;
 	else
 		limit = td->o.size;
 
@@ -1362,14 +1409,14 @@ static bool keep_running(struct thread_data *td)
 		uint64_t diff;
 
 		/*
-		 * If the difference is less than the minimum IO size, we
+		 * If the difference is less than the maximum IO size, we
 		 * are done.
 		 */
 		diff = limit - ddir_rw_sum(td->io_bytes);
 		if (diff < td_max_bs(td))
 			return false;
 
-		if (fio_files_done(td) && !td->o.io_limit)
+		if (fio_files_done(td) && !td->o.io_size)
 			return false;
 
 		return true;
@@ -1454,6 +1501,7 @@ static void *thread_main(void *data)
 	struct thread_data *td = fd->td;
 	struct thread_options *o = &td->o;
 	struct sk_out *sk_out = fd->sk_out;
+	uint64_t bytes_done[DDIR_RWDIR_CNT];
 	int deadlock_loop_cnt;
 	int clear_state;
 	int ret;
@@ -1675,12 +1723,14 @@ static void *thread_main(void *data)
 					sizeof(td->bw_sample_time));
 	}
 
+	memset(bytes_done, 0, sizeof(bytes_done));
 	clear_state = 0;
+
 	while (keep_running(td)) {
 		uint64_t verify_bytes;
 
 		fio_gettime(&td->start, NULL);
-		memcpy(&td->tv_cache, &td->start, sizeof(td->start));
+		memcpy(&td->ts_cache, &td->start, sizeof(td->start));
 
 		if (clear_state) {
 			clear_io_state(td, 0);
@@ -1691,11 +1741,9 @@ static void *thread_main(void *data)
 
 		prune_io_piece_log(td);
 
-		if (td->o.verify_only && (td_write(td) || td_rw(td)))
+		if (td->o.verify_only && td_write(td))
 			verify_bytes = do_dry_run(td);
 		else {
-			uint64_t bytes_done[DDIR_RWDIR_CNT];
-
 			do_io(td, bytes_done);
 
 			if (!ddir_rw_sum(bytes_done)) {
@@ -1774,6 +1822,18 @@ static void *thread_main(void *data)
 			break;
 	}
 
+	/*
+	 * If td ended up with no I/O when it should have had,
+	 * then something went wrong unless FIO_NOIO or FIO_DISKLESSIO.
+	 * (Are we not missing other flags that can be ignored ?)
+	 */
+	if ((td->o.size || td->o.io_size) && !ddir_rw_sum(bytes_done) &&
+	    !(td_ioengine_flagged(td, FIO_NOIO) ||
+	      td_ioengine_flagged(td, FIO_DISKLESSIO)))
+		log_err("%s: No I/O performed by %s, "
+			 "perhaps try --debug=io option for details?\n",
+			 td->o.name, td->io_ops->name);
+
 	td_set_runstate(td, TD_FINISHING);
 
 	update_rusage_stat(td);
@@ -1834,9 +1894,6 @@ err:
 	if (o->write_iolog_file)
 		write_iolog_close(td);
 
-	fio_mutex_remove(td->mutex);
-	td->mutex = NULL;
-
 	td_set_runstate(td, TD_EXITED);
 
 	/*
@@ -1847,14 +1904,6 @@ err:
 
 	sk_out_drop();
 	return (void *) (uintptr_t) td->error;
-}
-
-static void dump_td_info(struct thread_data *td)
-{
-	log_err("fio: job '%s' (state=%d) hasn't exited in %lu seconds, it "
-		"appears to be stuck. Doing forceful exit of this job.\n",
-			td->o.name, td->runstate,
-			(unsigned long) time_since_now(&td->terminate_time));
 }
 
 /*
@@ -1941,7 +1990,11 @@ static void reap_threads(unsigned int *nr_running, uint64_t *t_rate,
 		if (td->terminate &&
 		    td->runstate < TD_FSYNCING &&
 		    time_since_now(&td->terminate_time) >= FIO_REAP_TIMEOUT) {
-			dump_td_info(td);
+			log_err("fio: job '%s' (state=%d) hasn't exited in "
+				"%lu seconds, it appears to be stuck. Doing "
+				"forceful exit of this job.\n",
+				td->o.name, td->runstate,
+				(unsigned long) time_since_now(&td->terminate_time));
 			td_set_runstate(td, TD_REAPED);
 			goto reaped;
 		}
@@ -2054,8 +2107,16 @@ static bool check_mount_writes(struct thread_data *td)
 	if (!td_write(td) || td->o.allow_mounted_write)
 		return false;
 
+	/*
+	 * If FIO_HAVE_CHARDEV_SIZE is defined, it's likely that chrdevs
+	 * are mkfs'd and mounted.
+	 */
 	for_each_file(td, f, i) {
-		if (f->filetype != FIO_TYPE_BD)
+#ifdef FIO_HAVE_CHARDEV_SIZE
+		if (f->filetype != FIO_TYPE_BLOCK && f->filetype != FIO_TYPE_CHAR)
+#else
+		if (f->filetype != FIO_TYPE_BLOCK)
+#endif
 			continue;
 		if (device_is_mounted(f->file_name))
 			goto mounted;
@@ -2185,7 +2246,7 @@ reap:
 
 	while (todo) {
 		struct thread_data *map[REAL_MAX_JOBS];
-		struct timeval this_start;
+		struct timespec this_start;
 		int this_jobs = 0, left;
 		struct fork_data *fd;
 
@@ -2425,6 +2486,8 @@ int fio_backend(struct sk_out *sk_out)
 			fio_mutex_remove(td->rusage_sem);
 			td->rusage_sem = NULL;
 		}
+		fio_mutex_remove(td->mutex);
+		td->mutex = NULL;
 	}
 
 	free_disk_util();
