@@ -135,6 +135,7 @@ static unsigned long long get_mult_time(const char *str, int len,
 	const char *p = str;
 	char *c;
 	unsigned long long mult = 1;
+	int i;
 
 	/*
          * Go forward until we hit a non-digit, or +/- sign
@@ -153,7 +154,7 @@ static unsigned long long get_mult_time(const char *str, int len,
 	}
 
 	c = strdup(p);
-	for (int i = 0; i < strlen(c); i++)
+	for (i = 0; i < strlen(c); i++)
 		c[i] = tolower(c[i]);
 
 	if (!strncmp("us", c, 2) || !strncmp("usec", c, 4))
@@ -167,7 +168,7 @@ static unsigned long long get_mult_time(const char *str, int len,
 	else if (!strcmp("h", c))
 		mult = 60 * 60 * 1000000UL;
 	else if (!strcmp("d", c))
-		mult = 24 * 60 * 60 * 1000000UL;
+		mult = 24 * 60 * 60 * 1000000ULL;
 
 	free(c);
 	return mult;
@@ -1319,6 +1320,23 @@ void options_init(struct fio_option *options)
 	}
 }
 
+void options_mem_dupe(struct fio_option *options, void *data)
+{
+	struct fio_option *o;
+	char **ptr;
+
+	dprint(FD_PARSE, "dup options\n");
+
+	for (o = &options[0]; o->name; o++) {
+		if (o->type != FIO_OPT_STR_STORE)
+			continue;
+
+		ptr = td_var(data, o, o->off1);
+		if (*ptr)
+			*ptr = strdup(*ptr);
+	}
+}
+
 void options_free(struct fio_option *options, void *data)
 {
 	struct fio_option *o;
@@ -1327,7 +1345,7 @@ void options_free(struct fio_option *options, void *data)
 	dprint(FD_PARSE, "free options\n");
 
 	for (o = &options[0]; o->name; o++) {
-		if (o->type != FIO_OPT_STR_STORE || !o->off1)
+		if (o->type != FIO_OPT_STR_STORE || !o->off1 || o->no_free)
 			continue;
 
 		ptr = td_var(data, o, o->off1);

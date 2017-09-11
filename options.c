@@ -270,7 +270,8 @@ static int str2error(char *str)
 	return 0;
 }
 
-static int ignore_error_type(struct thread_data *td, int etype, char *str)
+static int ignore_error_type(struct thread_data *td, enum error_type_bit etype,
+				char *str)
 {
 	unsigned int i;
 	int *error;
@@ -282,7 +283,7 @@ static int ignore_error_type(struct thread_data *td, int etype, char *str)
 	}
 
 	td->o.ignore_error_nr[etype] = 4;
-	error = malloc(4 * sizeof(struct bssplit));
+	error = calloc(4, sizeof(int));
 
 	i = 0;
 	while ((fname = strsep(&str, ":")) != NULL) {
@@ -306,8 +307,9 @@ static int ignore_error_type(struct thread_data *td, int etype, char *str)
 				error[i] = -error[i];
 		}
 		if (!error[i]) {
-			log_err("Unknown error %s, please use number value \n",
+			log_err("Unknown error %s, please use number value\n",
 				  fname);
+			td->o.ignore_error_nr[etype] = 0;
 			free(error);
 			return 1;
 		}
@@ -317,8 +319,10 @@ static int ignore_error_type(struct thread_data *td, int etype, char *str)
 		td->o.continue_on_error |= 1 << etype;
 		td->o.ignore_error_nr[etype] = i;
 		td->o.ignore_error[etype] = error;
-	} else
+	} else {
+		td->o.ignore_error_nr[etype] = 0;
 		free(error);
+	}
 
 	return 0;
 
@@ -328,7 +332,8 @@ static int str_ignore_error_cb(void *data, const char *input)
 {
 	struct thread_data *td = cb_data_to_td(data);
 	char *str, *p, *n;
-	int type = 0, ret = 1;
+	int ret = 1;
+	enum error_type_bit type = 0;
 
 	if (parse_dryrun())
 		return 0;
@@ -1233,6 +1238,9 @@ static int str_filename_cb(void *data, const char *input)
 	strip_blank_front(&str);
 	strip_blank_end(str);
 
+	/*
+	 * Ignore what we may already have from nrfiles option.
+	 */
 	if (!td->files_index)
 		td->o.nr_files = 0;
 
@@ -1303,8 +1311,17 @@ static int str_buffer_pattern_cb(void *data, const char *input)
 
 	assert(ret != 0);
 	td->o.buffer_pattern_bytes = ret;
-	if (!td->o.compress_percentage)
+
+	/*
+	 * If this job is doing any reading or has compression set,
+	 * ensure that we refill buffers for writes or we could be
+	 * invalidating the pattern through reads.
+	 */
+	if (!td->o.compress_percentage && !td_read(td))
 		td->o.refill_buffers = 0;
+	else
+		td->o.refill_buffers = 1;
+
 	td->o.scramble_buffers = 0;
 	td->o.zero_buffers = 0;
 
@@ -1364,7 +1381,23 @@ static int str_gtod_reduce_cb(void *data, int *il)
 	td->o.disable_bw = !!val;
 	td->o.clat_percentiles = !val;
 	if (val)
-		td->tv_cache_mask = 63;
+		td->ts_cache_mask = 63;
+
+	return 0;
+}
+
+static int str_offset_cb(void *data, unsigned long long *__val)
+{
+	struct thread_data *td = cb_data_to_td(data);
+	unsigned long long v = *__val;
+
+	if (parse_is_percent(v)) {
+		td->o.start_offset = 0;
+		td->o.start_offset_percent = -1ULL - v;
+		dprint(FD_PARSE, "SET start_offset_percent %d\n",
+					td->o.start_offset_percent);
+	} else
+		td->o.start_offset = v;
 
 	return 0;
 }
@@ -1377,6 +1410,8 @@ static int str_size_cb(void *data, unsigned long long *__val)
 	if (parse_is_percent(v)) {
 		td->o.size = 0;
 		td->o.size_percent = -1ULL - v;
+		dprint(FD_PARSE, "SET size_percent %d\n",
+					td->o.size_percent);
 	} else
 		td->o.size = v;
 
@@ -1847,6 +1882,17 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_IO_BASIC,
 	},
 	{
+		.name	= "serialize_overlap",
+		.lname	= "Serialize overlap",
+		.off1	= offsetof(struct thread_options, serialize_overlap),
+		.type	= FIO_OPT_BOOL,
+		.help	= "Wait for in-flight IOs that collide to complete",
+		.parent	= "iodepth",
+		.def	= "0",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_IO_BASIC,
+	},
+	{
 		.name	= "io_submit_mode",
 		.lname	= "IO submit mode",
 		.type	= FIO_OPT_STR,
@@ -1882,7 +1928,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.alias	= "io_limit",
 		.lname	= "IO Size",
 		.type	= FIO_OPT_STR_VAL,
-		.off1	= offsetof(struct thread_options, io_limit),
+		.off1	= offsetof(struct thread_options, io_size),
 		.help	= "Total size of I/O to be performed",
 		.interval = 1024 * 1024,
 		.category = FIO_OPT_C_IO,
@@ -1926,6 +1972,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.lname	= "IO offset",
 		.alias	= "fileoffset",
 		.type	= FIO_OPT_STR_VAL,
+		.cb	= str_offset_cb,
 		.off1	= offsetof(struct thread_options, start_offset),
 		.help	= "Start IO from this offset",
 		.def	= "0",
@@ -2233,9 +2280,13 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .oval = FIO_FSERVICE_PARETO,
 			    .help = "Pareto randomized",
 			  },
+			  { .ival = "normal",
+			    .oval = FIO_FSERVICE_GAUSS,
+			    .help = "Normal (Gaussian) randomized",
+			  },
 			  { .ival = "gauss",
 			    .oval = FIO_FSERVICE_GAUSS,
-			    .help = "Normal (gaussian) distribution",
+			    .help = "Alias for normal",
 			  },
 			  { .ival = "roundrobin",
 			    .oval = FIO_FSERVICE_RR,
@@ -2249,14 +2300,14 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.parent = "nrfiles",
 		.hide	= 1,
 	},
-#ifdef CONFIG_POSIX_FALLOCATE
+#ifdef FIO_HAVE_ANY_FALLOCATE
 	{
 		.name	= "fallocate",
 		.lname	= "Fallocate",
 		.type	= FIO_OPT_STR,
 		.off1	= offsetof(struct thread_options, fallocate_mode),
 		.help	= "Whether pre-allocation is performed when laying out files",
-		.def	= "posix",
+		.def	= "native",
 		.category = FIO_OPT_C_FILE,
 		.group	= FIO_OPT_G_INVALID,
 		.posval	= {
@@ -2264,10 +2315,16 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .oval = FIO_FALLOCATE_NONE,
 			    .help = "Do not pre-allocate space",
 			  },
+			  { .ival = "native",
+			    .oval = FIO_FALLOCATE_NATIVE,
+			    .help = "Use native pre-allocation if possible",
+			  },
+#ifdef CONFIG_POSIX_FALLOCATE
 			  { .ival = "posix",
 			    .oval = FIO_FALLOCATE_POSIX,
 			    .help = "Use posix_fallocate()",
 			  },
+#endif
 #ifdef CONFIG_LINUX_FALLOCATE
 			  { .ival = "keep",
 			    .oval = FIO_FALLOCATE_KEEP_SIZE,
@@ -2279,20 +2336,22 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .oval = FIO_FALLOCATE_NONE,
 			    .help = "Alias for 'none'",
 			  },
+#ifdef CONFIG_POSIX_FALLOCATE
 			  { .ival = "1",
 			    .oval = FIO_FALLOCATE_POSIX,
 			    .help = "Alias for 'posix'",
 			  },
+#endif
 		},
 	},
-#else	/* CONFIG_POSIX_FALLOCATE */
+#else	/* FIO_HAVE_ANY_FALLOCATE */
 	{
 		.name	= "fallocate",
 		.lname	= "Fallocate",
 		.type	= FIO_OPT_UNSUPPORTED,
 		.help	= "Your platform does not support fallocate",
 	},
-#endif /* CONFIG_POSIX_FALLOCATE */
+#endif /* FIO_HAVE_ANY_FALLOCATE */
 	{
 		.name	= "fadvise_hint",
 		.lname	= "Fadvise hint",
@@ -2321,24 +2380,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.category = FIO_OPT_C_FILE,
 		.group	= FIO_OPT_G_INVALID,
 	},
-#ifdef FIO_HAVE_STREAMID
-	{
-		.name	= "fadvise_stream",
-		.lname	= "Fadvise stream",
-		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct thread_options, fadvise_stream),
-		.help	= "Use fadvise() to set stream ID",
-		.category = FIO_OPT_C_FILE,
-		.group	= FIO_OPT_G_INVALID,
-	},
-#else
-	{
-		.name	= "fadvise_stream",
-		.lname	= "Fadvise stream",
-		.type	= FIO_OPT_UNSUPPORTED,
-		.help	= "Your platform does not support fadvise stream ID",
-	},
-#endif
 	{
 		.name	= "fsync",
 		.lname	= "Fsync",
@@ -2601,6 +2642,12 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .help = "Like mmap, but use huge pages",
 			  },
 #endif
+#ifdef CONFIG_CUDA
+			  { .ival = "cudamalloc",
+			    .oval = MEM_CUDA_MALLOC,
+			    .help = "Allocate GPU device memory for GPUDirect RDMA",
+			  },
+#endif
 		  },
 	},
 	{
@@ -2670,6 +2717,22 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			  { .ival = "sha512",
 			    .oval = VERIFY_SHA512,
 			    .help = "Use sha512 checksums for verification",
+			  },
+			  { .ival = "sha3-224",
+			    .oval = VERIFY_SHA3_224,
+			    .help = "Use sha3-224 checksums for verification",
+			  },
+			  { .ival = "sha3-256",
+			    .oval = VERIFY_SHA3_256,
+			    .help = "Use sha3-256 checksums for verification",
+			  },
+			  { .ival = "sha3-384",
+			    .oval = VERIFY_SHA3_384,
+			    .help = "Use sha3-384 checksums for verification",
+			  },
+			  { .ival = "sha3-512",
+			    .oval = VERIFY_SHA3_512,
+			    .help = "Use sha3-512 checksums for verification",
 			  },
 			  { .ival = "xxhash",
 			    .oval = VERIFY_XXHASH,
@@ -3378,6 +3441,34 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IO_TYPE,
 	},
+#ifdef FIO_HAVE_WRITE_HINT
+	{
+		.name	= "write_hint",
+		.lname	= "Write hint",
+		.type	= FIO_OPT_STR,
+		.off1	= offsetof(struct thread_options, write_hint),
+		.help	= "Set expected write life time",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_INVALID,
+		.posval = {
+			  { .ival = "none",
+			    .oval = RWH_WRITE_LIFE_NONE,
+			  },
+			  { .ival = "short",
+			    .oval = RWH_WRITE_LIFE_SHORT,
+			  },
+			  { .ival = "medium",
+			    .oval = RWH_WRITE_LIFE_MEDIUM,
+			  },
+			  { .ival = "long",
+			    .oval = RWH_WRITE_LIFE_LONG,
+			  },
+			  { .ival = "extreme",
+			    .oval = RWH_WRITE_LIFE_EXTREME,
+			  },
+		},
+	},
+#endif
 	{
 		.name	= "create_serialize",
 		.lname	= "Create serialize",
@@ -3542,6 +3633,18 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.lname	= "NUMA Memory Policy",
 		.type	= FIO_OPT_UNSUPPORTED,
 		.help	= "Build fio with libnuma-dev(el) to enable this option",
+	},
+#endif
+#ifdef CONFIG_CUDA
+	{
+		.name	= "gpu_dev_id",
+		.lname	= "GPU device ID",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct thread_options, gpu_dev_id),
+		.help	= "Set GPU device ID for GPUDirect RDMA",
+		.def    = "0",
+		.category = FIO_OPT_C_GENERAL,
+		.group	= FIO_OPT_G_INVALID,
 	},
 #endif
 	{
@@ -3843,6 +3946,16 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_STR_SET,
 		.off1	= offsetof(struct thread_options, group_reporting),
 		.help	= "Do reporting on a per-group basis",
+		.category = FIO_OPT_C_STAT,
+		.group	= FIO_OPT_G_INVALID,
+	},
+	{
+		.name	= "stats",
+		.lname	= "Stats",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct thread_options, stats),
+		.help	= "Enable collection of stats",
+		.def	= "1",
 		.category = FIO_OPT_C_STAT,
 		.group	= FIO_OPT_G_INVALID,
 	},
@@ -4275,17 +4388,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.def	= "0",
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IO_FLOW,
-	},
-	{
-		.name	= "skip_bad",
-		.lname	= "Skip operations against bad blocks",
-		.type	= FIO_OPT_BOOL,
-		.off1	= offsetof(struct thread_options, skip_bad),
-		.help	= "Skip operations against known bad blocks.",
-		.hide	= 1,
-		.def	= "0",
-		.category = FIO_OPT_C_IO,
-		.group	= FIO_OPT_G_MTD,
 	},
 	{
 		.name   = "steadystate",
@@ -4772,34 +4874,19 @@ int fio_show_option_help(const char *opt)
 	return show_cmd_help(fio_options, opt);
 }
 
-void options_mem_dupe(void *data, struct fio_option *options)
-{
-	struct fio_option *o;
-	char **ptr;
-
-	for (o = &options[0]; o->name; o++) {
-		if (o->type != FIO_OPT_STR_STORE)
-			continue;
-
-		ptr = td_var(data, o, o->off1);
-		if (*ptr)
-			*ptr = strdup(*ptr);
-	}
-}
-
 /*
  * dupe FIO_OPT_STR_STORE options
  */
 void fio_options_mem_dupe(struct thread_data *td)
 {
-	options_mem_dupe(&td->o, fio_options);
+	options_mem_dupe(fio_options, &td->o);
 
 	if (td->eo && td->io_ops) {
 		void *oldeo = td->eo;
 
 		td->eo = malloc(td->io_ops->option_struct_size);
 		memcpy(td->eo, oldeo, td->io_ops->option_struct_size);
-		options_mem_dupe(td->eo, td->io_ops->options);
+		options_mem_dupe(td->io_ops->options, td->eo);
 	}
 }
 

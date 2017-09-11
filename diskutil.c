@@ -3,6 +3,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <dirent.h>
 #include <libgen.h>
 #include <math.h>
@@ -17,8 +18,6 @@ static int last_majdev, last_mindev;
 static struct disk_util *last_du;
 
 static struct fio_mutex *disk_util_mutex;
-
-FLIST_HEAD(disk_list);
 
 static struct disk_util *__init_per_file_disk_util(struct thread_data *td,
 		int majdev, int mindev, char *path);
@@ -37,6 +36,7 @@ static void disk_util_free(struct disk_util *du)
 	}
 
 	fio_mutex_remove(du->lock);
+	free(du->sysfs_root);
 	sfree(du);
 }
 
@@ -85,7 +85,7 @@ static int get_io_ticks(struct disk_util *du, struct disk_util_stat *dus)
 static void update_io_tick_disk(struct disk_util *du)
 {
 	struct disk_util_stat __dus, *dus, *ldus;
-	struct timeval t;
+	struct timespec t;
 
 	if (!du->users)
 		return;
@@ -305,7 +305,7 @@ static struct disk_util *disk_util_add(struct thread_data *td, int majdev,
 		return NULL;
 	}
 	strncpy((char *) du->dus.name, basename(path), FIO_DU_NAME_SZ - 1);
-	du->sysfs_root = path;
+	du->sysfs_root = strdup(path);
 	du->major = majdev;
 	du->minor = mindev;
 	INIT_FLIST_HEAD(&du->slavelist);
@@ -364,7 +364,7 @@ static int find_block_dir(int majdev, int mindev, char *path, int link_ok)
 		return 0;
 
 	while ((dir = readdir(D)) != NULL) {
-		char full_path[256];
+		char full_path[257];
 
 		if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, ".."))
 			continue;
@@ -430,9 +430,6 @@ static struct disk_util *__init_per_file_disk_util(struct thread_data *td,
 		sprintf(path, "%s", tmp);
 	}
 
-	if (td->o.ioscheduler && !td->sysfs_root)
-		td->sysfs_root = strdup(path);
-
 	return disk_util_add(td, majdev, mindev, path);
 }
 
@@ -451,12 +448,8 @@ static struct disk_util *init_per_file_disk_util(struct thread_data *td,
 			mindev);
 
 	du = disk_util_exists(majdev, mindev);
-	if (du) {
-		if (td->o.ioscheduler && !td->sysfs_root)
-			td->sysfs_root = strdup(du->sysfs_root);
-
+	if (du)
 		return du;
-	}
 
 	/*
 	 * for an fs without a device, we will repeatedly stat through

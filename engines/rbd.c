@@ -290,7 +290,7 @@ static void _fio_rbd_finish_aiocb(rbd_completion_t comp, void *data)
 	 */
 	ret = rbd_aio_get_return_value(fri->completion);
 	if (ret < 0) {
-		io_u->error = ret;
+		io_u->error = -ret;
 		io_u->resid = io_u->xfer_buflen;
 	} else
 		io_u->error = 0;
@@ -517,6 +517,7 @@ static int fio_rbd_queue(struct thread_data *td, struct io_u *io_u)
 	} else {
 		dprint(FD_IO, "%s: Warning: unhandled ddir: %d\n", __func__,
 		       io_u->ddir);
+		r = -EINVAL;
 		goto failed_comp;
 	}
 
@@ -524,7 +525,7 @@ static int fio_rbd_queue(struct thread_data *td, struct io_u *io_u)
 failed_comp:
 	rbd_aio_release(fri->completion);
 failed:
-	io_u->error = r;
+	io_u->error = -r;
 	td_verror(td, io_u->error, "xfer");
 	return FIO_Q_COMPLETED;
 }
@@ -566,12 +567,7 @@ static int fio_rbd_setup(struct thread_data *td)
 	rbd_image_info_t info;
 	struct fio_file *f;
 	struct rbd_data *rbd = NULL;
-	int major, minor, extra;
 	int r;
-
-	/* log version of librbd. No cluster connection required. */
-	rbd_version(&major, &minor, &extra);
-	log_info("rbd engine: RBD version: %d.%d.%d\n", major, minor, extra);
 
 	/* allocate engine specific structure to deal with librbd. */
 	r = _fio_setup_rbd_data(td, &rbd);
@@ -602,11 +598,11 @@ static int fio_rbd_setup(struct thread_data *td)
 	r = rbd_stat(rbd->image, &info, sizeof(info));
 	if (r < 0) {
 		log_err("rbd_status failed.\n");
-		goto disconnect;
+		goto cleanup;
 	} else if (info.size == 0) {
 		log_err("image size should be larger than zero.\n");
 		r = -EINVAL;
-		goto disconnect;
+		goto cleanup;
 	}
 
 	dprint(FD_IO, "rbd-engine: image size: %lu\n", info.size);
@@ -623,13 +619,8 @@ static int fio_rbd_setup(struct thread_data *td)
 	f = td->files[0];
 	f->real_file_size = info.size;
 
-	/* disconnect, then we were only connected to determine
-	 * the size of the RBD.
-	 */
 	return 0;
 
-disconnect:
-	_fio_rbd_disconnect(rbd);
 cleanup:
 	fio_rbd_cleanup(td);
 	return r;

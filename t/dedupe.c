@@ -14,7 +14,6 @@
 #include <fcntl.h>
 #include <string.h>
 
-#include "../lib/rbtree.h"
 #include "../flist.h"
 #include "../log.h"
 #include "../mutex.h"
@@ -25,6 +24,7 @@
 #include "../os/os.h"
 #include "../gettime.h"
 #include "../fio_time.h"
+#include "../lib/rbtree.h"
 
 #include "../lib/bloom.h"
 #include "debug.h"
@@ -334,7 +334,7 @@ static void *thread_fn(void *data)
 static void show_progress(struct worker_thread *threads, unsigned long total)
 {
 	unsigned long last_nitems = 0;
-	struct timeval last_tv;
+	struct timespec last_tv;
 
 	fio_gettime(&last_tv, NULL);
 

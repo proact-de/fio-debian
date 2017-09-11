@@ -5,7 +5,7 @@
  *
  */
 #include "fio.h"
-#include "ioengine.h"
+#include "ioengines.h"
 #include "lib/getrusage.h"
 #include "rate-submit.h"
 
@@ -98,7 +98,6 @@ static int io_workqueue_init_worker_fn(struct submit_worker *sw)
 {
 	struct thread_data *parent = sw->wq->td;
 	struct thread_data *td = sw->priv;
-	int fio_unused ret;
 
 	memcpy(&td->o, &parent->o, sizeof(td->o));
 	memcpy(&td->ts, &parent->ts, sizeof(td->ts));

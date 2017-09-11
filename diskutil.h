@@ -46,7 +46,6 @@ struct disk_util {
 	 */
 	struct flist_head slavelist;
 
-	char *name;
 	char *sysfs_root;
 	char path[PATH_MAX];
 	int major, minor;
@@ -65,7 +64,7 @@ struct disk_util {
 	 */
 	struct flist_head slaves;
 
-	struct timeval time;
+	struct timespec time;
 
 	struct fio_mutex *lock;
 	unsigned long users;
@@ -115,6 +114,7 @@ extern int update_io_ticks(void);
 extern void setup_disk_util(void);
 extern void disk_util_prune_entries(void);
 #else
+/* keep this as a function to avoid a warning in handle_du() */
 static inline void print_disk_util(struct disk_util_stat *du,
 				   struct disk_util_agg *agg, int terse,
 				   struct buf_output *out)

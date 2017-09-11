@@ -124,7 +124,7 @@ static int fio_sgio_getevents(struct thread_data *td, unsigned int min,
 	}
 
 	while (left) {
-		void *p;
+		char *p;
 
 		dprint(FD_IO, "sgio_getevents: sd %p: left=%d\n", sd, left);
 
@@ -184,7 +184,7 @@ re_read:
 			if (hdr->info & SG_INFO_CHECK) {
 				struct io_u *io_u;
 				io_u = (struct io_u *)(hdr->usr_ptr);
-				memcpy((void*)&(io_u->hdr), (void*)hdr, sizeof(struct sg_io_hdr));
+				memcpy(&io_u->hdr, hdr, sizeof(struct sg_io_hdr));
 				sd->events[i]->error = EIO;
 			}
 		}
@@ -252,7 +252,7 @@ static int fio_sgio_doio(struct thread_data *td, struct io_u *io_u, int do_sync)
 	struct fio_file *f = io_u->file;
 	int ret;
 
-	if (f->filetype == FIO_TYPE_BD) {
+	if (f->filetype == FIO_TYPE_BLOCK) {
 		ret = fio_sgio_ioctl_doio(td, f, io_u);
 		td->error = io_u->error;
 	} else {
@@ -504,7 +504,7 @@ static int fio_sgio_type_check(struct thread_data *td, struct fio_file *f)
 	unsigned int bs = 0;
 	unsigned long long max_lba = 0;
 
-	if (f->filetype == FIO_TYPE_BD) {
+	if (f->filetype == FIO_TYPE_BLOCK) {
 		if (ioctl(f->fd, BLKSSZGET, &bs) < 0) {
 			td_verror(td, errno, "ioctl");
 			return 1;
@@ -537,7 +537,7 @@ static int fio_sgio_type_check(struct thread_data *td, struct fio_file *f)
 			MAX_10B_LBA, max_lba);
 	}
 
-	if (f->filetype == FIO_TYPE_BD) {
+	if (f->filetype == FIO_TYPE_BLOCK) {
 		td->io_ops->getevents = NULL;
 		td->io_ops->event = NULL;
 	}
@@ -572,17 +572,17 @@ static char *fio_sgio_errdetails(struct io_u *io_u)
 	struct sg_io_hdr *hdr = &io_u->hdr;
 #define MAXERRDETAIL 1024
 #define MAXMSGCHUNK  128
-	char *msg, msgchunk[MAXMSGCHUNK], *ret = NULL;
+	char *msg, msgchunk[MAXMSGCHUNK];
 	int i;
 
 	msg = calloc(1, MAXERRDETAIL);
+	strcpy(msg, "");
 
 	/*
 	 * can't seem to find sg_err.h, so I'll just echo the define values
 	 * so others can search on internet to find clearer clues of meaning.
 	 */
 	if (hdr->info & SG_INFO_CHECK) {
-		ret = msg;
 		if (hdr->host_status) {
 			snprintf(msgchunk, MAXMSGCHUNK, "SG Host Status: 0x%02x; ", hdr->host_status);
 			strlcat(msg, msgchunk, MAXERRDETAIL);
@@ -755,14 +755,14 @@ static char *fio_sgio_errdetails(struct io_u *io_u)
 		if (hdr->resid != 0) {
 			snprintf(msgchunk, MAXMSGCHUNK, "SG Driver: %d bytes out of %d not transferred. ", hdr->resid, hdr->dxfer_len);
 			strlcat(msg, msgchunk, MAXERRDETAIL);
-			ret = msg;
 		}
 	}
 
-	if (!ret)
-		ret = strdup("SG Driver did not report a Host, Driver or Device check");
+	if (!(hdr->info & SG_INFO_CHECK) && !strlen(msg))
+		strncpy(msg, "SG Driver did not report a Host, Driver or Device check",
+			MAXERRDETAIL - 1);
 
-	return ret;
+	return msg;
 }
 
 /*
@@ -789,7 +789,7 @@ static int fio_sgio_get_file_size(struct thread_data *td, struct fio_file *f)
 	if (fio_file_size_known(f))
 		return 0;
 
-	if (f->filetype != FIO_TYPE_BD && f->filetype != FIO_TYPE_CHAR) {
+	if (f->filetype != FIO_TYPE_BLOCK && f->filetype != FIO_TYPE_CHAR) {
 		td_verror(td, EINVAL, "wrong file type");
 		log_err("ioengine sg only works on block or character devices\n");
 		return 1;

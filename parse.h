@@ -78,6 +78,7 @@ struct fio_option {
 	int is_time;			/* time based value */
 	int no_warn_def;
 	int pow2;			/* must be a power-of-2 */
+	int no_free;
 };
 
 extern int parse_option(char *, const char *, struct fio_option *, struct fio_option **, void *, struct flist_head *);
@@ -86,6 +87,7 @@ extern int parse_cmd_option(const char *t, const char *l, struct fio_option *, v
 extern int show_cmd_help(struct fio_option *, const char *);
 extern void fill_default_options(void *, struct fio_option *);
 extern void options_init(struct fio_option *);
+extern void options_mem_dupe(struct fio_option *, void *);
 extern void options_free(struct fio_option *, void *);
 
 extern void strip_blank_front(char **);
@@ -106,8 +108,7 @@ typedef int (fio_opt_str_val_fn)(void *, long long *);
 typedef int (fio_opt_int_fn)(void *, int *);
 
 struct thread_options;
-static inline void *td_var(struct thread_options *to, struct fio_option *o,
-			   unsigned int offset)
+static inline void *td_var(void *to, struct fio_option *o, unsigned int offset)
 {
 	void *ret;
 

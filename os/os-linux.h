@@ -16,11 +16,16 @@
 #include <linux/unistd.h>
 #include <linux/raw.h>
 #include <linux/major.h>
-#include <byteswap.h>
+#include <linux/fs.h>
+#include <scsi/sg.h>
 
 #include "./os-linux-syscall.h"
 #include "binject.h"
 #include "../file.h"
+
+#ifndef __has_builtin         // Optional of course.
+  #define __has_builtin(x) 0  // Compatibility with non-clang compilers.
+#endif
 
 #define FIO_HAVE_CPU_AFFINITY
 #define FIO_HAVE_DISK_UTIL
@@ -32,7 +37,6 @@
 #define FIO_HAVE_HUGETLB
 #define FIO_HAVE_RAWBIND
 #define FIO_HAVE_BLKTRACE
-#define FIO_HAVE_PSHARED_MUTEX
 #define FIO_HAVE_CL_SIZE
 #define FIO_HAVE_CGROUPS
 #define FIO_HAVE_FS_STAT
@@ -41,6 +45,7 @@
 #define FIO_HAVE_GETTID
 #define FIO_USE_GENERIC_INIT_RANDOM_STATE
 #define FIO_HAVE_PWRITEV2
+#define FIO_HAVE_SHM_ATTACH_REMOVED
 
 #ifdef MAP_HUGETLB
 #define FIO_HAVE_MMAP_HUGE
@@ -219,21 +224,19 @@ static inline int fio_lookup_raw(dev_t dev, int *majdev, int *mindev)
 #define FIO_MADV_FREE	MADV_REMOVE
 #endif
 
-#if defined(__builtin_bswap16)
+/* Check for GCC or Clang byte swap intrinsics */
+#if (__has_builtin(__builtin_bswap16) && __has_builtin(__builtin_bswap32) \
+     && __has_builtin(__builtin_bswap64)) || (__GNUC__ > 4 \
+     || (__GNUC__ == 4 && __GNUC_MINOR__ >= 8)) /* fio_swapN */
 #define fio_swap16(x)	__builtin_bswap16(x)
-#else
-#define fio_swap16(x)	__bswap_16(x)
-#endif
-#if defined(__builtin_bswap32)
 #define fio_swap32(x)	__builtin_bswap32(x)
-#else
-#define fio_swap32(x)	__bswap_32(x)
-#endif
-#if defined(__builtin_bswap64)
 #define fio_swap64(x)	__builtin_bswap64(x)
 #else
-#define fio_swap64(x)	__bswap_64(x)
-#endif
+#include <byteswap.h>
+#define fio_swap16(x)	bswap_16(x)
+#define fio_swap32(x)	bswap_32(x)
+#define fio_swap64(x)	bswap_64(x)
+#endif /* fio_swapN */
 
 #define CACHE_LINE_FILE	\
 	"/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size"
@@ -256,6 +259,14 @@ static inline int arch_cache_line_size(void)
 	else
 		return atoi(size);
 }
+
+#ifdef __powerpc64__
+#define FIO_HAVE_CPU_ONLINE_SYSCONF
+static inline unsigned int cpus_online(void)
+{
+        return sysconf(_SC_NPROCESSORS_CONF);
+}
+#endif
 
 static inline unsigned long long get_fs_free_size(const char *path)
 {
@@ -292,11 +303,26 @@ static inline int fio_set_sched_idle(void)
 }
 #endif
 
-#ifndef POSIX_FADV_STREAMID
-#define POSIX_FADV_STREAMID	8
+#ifndef F_GET_RW_HINT
+#ifndef F_LINUX_SPECIFIC_BASE
+#define F_LINUX_SPECIFIC_BASE	1024
+#endif
+#define F_GET_RW_HINT		(F_LINUX_SPECIFIC_BASE + 11)
+#define F_SET_RW_HINT		(F_LINUX_SPECIFIC_BASE + 12)
+#define F_GET_FILE_RW_HINT	(F_LINUX_SPECIFIC_BASE + 13)
+#define F_SET_FILE_RW_HINT	(F_LINUX_SPECIFIC_BASE + 14)
 #endif
 
-#define FIO_HAVE_STREAMID
+#ifndef RWH_WRITE_LIFE_NONE
+#define RWH_WRITE_LIFE_NOT_SET	0
+#define RWH_WRITE_LIFE_NONE	1
+#define RWH_WRITE_LIFE_SHORT	2
+#define RWH_WRITE_LIFE_MEDIUM	3
+#define RWH_WRITE_LIFE_LONG	4
+#define RWH_WRITE_LIFE_EXTREME	5
+#endif
+
+#define FIO_HAVE_WRITE_HINT
 
 #ifndef RWF_HIPRI
 #define RWF_HIPRI	0x00000001
@@ -308,14 +334,26 @@ static inline int fio_set_sched_idle(void)
 #define RWF_SYNC	0x00000004
 #endif
 
+#ifndef RWF_WRITE_LIFE_SHIFT
+#define RWF_WRITE_LIFE_SHIFT		4
+#define RWF_WRITE_LIFE_SHORT		(1 << RWF_WRITE_LIFE_SHIFT)
+#define RWF_WRITE_LIFE_MEDIUM		(2 << RWF_WRITE_LIFE_SHIFT)
+#define RWF_WRITE_LIFE_LONG		(3 << RWF_WRITE_LIFE_SHIFT)
+#define RWF_WRITE_LIFE_EXTREME		(4 << RWF_WRITE_LIFE_SHIFT)
+#endif
+
 #ifndef CONFIG_PWRITEV2
 #ifdef __NR_preadv2
 static inline void make_pos_h_l(unsigned long *pos_h, unsigned long *pos_l,
 				off_t offset)
 {
+#if BITS_PER_LONG == 64
+	*pos_l = offset;
+	*pos_h = 0;
+#else
 	*pos_l = offset & 0xffffffff;
 	*pos_h = ((uint64_t) offset) >> 32;
-
+#endif
 }
 static inline ssize_t preadv2(int fd, const struct iovec *iov, int iovcnt,
 			      off_t offset, unsigned int flags)
@@ -348,5 +386,28 @@ static inline ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
 }
 #endif /* __NR_preadv2 */
 #endif /* CONFIG_PWRITEV2 */
+
+static inline int shm_attach_to_open_removed(void)
+{
+	return 1;
+}
+
+#ifdef CONFIG_LINUX_FALLOCATE
+#define FIO_HAVE_NATIVE_FALLOCATE
+static inline bool fio_fallocate(struct fio_file *f, uint64_t offset,
+				 uint64_t len)
+{
+	int ret;
+	ret = fallocate(f->fd, 0, 0, len);
+	if (ret == 0)
+		return true;
+
+	/* Work around buggy old glibc versions... */
+	if (ret > 0)
+		errno = ret;
+
+	return false;
+}
+#endif
 
 #endif

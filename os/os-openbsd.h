@@ -9,6 +9,8 @@
 #include <sys/ioctl.h>
 #include <sys/dkio.h>
 #include <sys/disklabel.h>
+#include <sys/endian.h>
+#include <sys/utsname.h>
 /* XXX hack to avoid conflicts between rbtree.h and <sys/tree.h> */
 #include <sys/sysctl.h>
 #undef RB_BLACK
@@ -22,8 +24,9 @@
 #define FIO_USE_GENERIC_INIT_RANDOM_STATE
 #define FIO_HAVE_FS_STAT
 #define FIO_HAVE_GETTID
+#define FIO_HAVE_SHM_ATTACH_REMOVED
 
-#undef	FIO_HAVE_CPU_AFFINITY	/* XXX notyet */
+#undef	FIO_HAVE_CPU_AFFINITY	/* doesn't exist */
 
 #define OS_MAP_ANON		MAP_ANON
 
@@ -52,7 +55,7 @@ static inline int blockdev_size(struct fio_file *f, unsigned long long *bytes)
 
 static inline int blockdev_invalidate_cache(struct fio_file *f)
 {
-	return EINVAL;
+	return ENOTSUP;
 }
 
 static inline unsigned long long os_phys_mem(void)
@@ -67,7 +70,7 @@ static inline unsigned long long os_phys_mem(void)
 
 static inline int gettid(void)
 {
-	return (int) pthread_self();
+	return (int)(intptr_t) pthread_self();
 }
 
 static inline unsigned long long get_fs_free_size(const char *path)
@@ -86,5 +89,35 @@ static inline unsigned long long get_fs_free_size(const char *path)
 #ifdef MADV_FREE
 #define FIO_MADV_FREE	MADV_FREE
 #endif
+
+static inline int shm_attach_to_open_removed(void)
+{
+	struct utsname uts;
+	int major, minor;
+
+	if (uname(&uts) == -1)
+		return 0;
+
+	/*
+	 * Return 1 if >= OpenBSD 5.1 according to 97900ebf,
+	 * assuming both major/minor versions are < 10.
+	 */
+	if (uts.release[0] > '9' || uts.release[0] < '0')
+		return 0;
+	if (uts.release[1] != '.')
+		return 0;
+	if (uts.release[2] > '9' || uts.release[2] < '0')
+		return 0;
+
+	major = uts.release[0] - '0';
+	minor = uts.release[2] - '0';
+
+	if (major > 5)
+		return 1;
+	if (major == 5 && minor >= 1)
+		return 1;
+
+	return 0;
+}
 
 #endif

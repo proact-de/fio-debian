@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <sys/uio.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/vfs.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -20,6 +21,10 @@
 #include "binject.h"
 #include "../file.h"
 
+#ifndef __has_builtin         // Optional of course.
+  #define __has_builtin(x) 0  // Compatibility with non-clang compilers.
+#endif
+
 #define FIO_HAVE_DISK_UTIL
 #define FIO_HAVE_IOSCHED_SWITCH
 #define FIO_HAVE_IOPRIO
@@ -27,8 +32,8 @@
 #define FIO_HAVE_ODIRECT
 #define FIO_HAVE_HUGETLB
 #define FIO_HAVE_BLKTRACE
-#define FIO_HAVE_PSHARED_MUTEX
 #define FIO_HAVE_CL_SIZE
+#define FIO_HAVE_CGROUPS
 #define FIO_HAVE_FS_STAT
 #define FIO_HAVE_TRIM
 #define FIO_HAVE_GETTID
@@ -54,22 +59,19 @@
 #define MAP_HUGETLB 0x40000 /* arch specific */
 #endif
 
-
+#ifndef CONFIG_NO_SHM
 /*
- * The Android NDK doesn't currently export <sys/shm.h>, so define the
- * necessary stuff here.
+ * Bionic doesn't support SysV shared memeory, so implement it using ashmem
  */
-
-#include <linux/shm.h>
-#define SHM_HUGETLB    04000
-
 #include <stdio.h>
 #include <linux/ashmem.h>
-#include <sys/mman.h>
+#include <linux/shm.h>
+#define shmid_ds shmid64_ds
+#define SHM_HUGETLB    04000
 
 #define ASHMEM_DEVICE	"/dev/ashmem"
 
-static inline int shmctl (int __shmid, int __cmd, struct shmid_ds *__buf)
+static inline int shmctl(int __shmid, int __cmd, struct shmid_ds *__buf)
 {
 	int ret=0;
 	if (__cmd == IPC_RMID)
@@ -82,47 +84,50 @@ static inline int shmctl (int __shmid, int __cmd, struct shmid_ds *__buf)
 	return ret;
 }
 
-static inline int shmget (key_t __key, size_t __size, int __shmflg)
+static inline int shmget(key_t __key, size_t __size, int __shmflg)
 {
 	int fd,ret;
-	char key[11];
-	
+	char keybuf[11];
+
 	fd = open(ASHMEM_DEVICE, O_RDWR);
 	if (fd < 0)
 		return fd;
 
-	sprintf(key,"%d",__key);
-	ret = ioctl(fd, ASHMEM_SET_NAME, key);
+	sprintf(keybuf,"%d",__key);
+	ret = ioctl(fd, ASHMEM_SET_NAME, keybuf);
 	if (ret < 0)
 		goto error;
 
-	ret = ioctl(fd, ASHMEM_SET_SIZE, __size);
+	/* Stores size in first 8 bytes, allocate extra space */
+	ret = ioctl(fd, ASHMEM_SET_SIZE, __size + sizeof(uint64_t));
 	if (ret < 0)
 		goto error;
 
 	return fd;
-	
+
 error:
 	close(fd);
 	return ret;
 }
 
-static inline void *shmat (int __shmid, const void *__shmaddr, int __shmflg)
+static inline void *shmat(int __shmid, const void *__shmaddr, int __shmflg)
 {
-	size_t *ptr, size = ioctl(__shmid, ASHMEM_GET_SIZE, NULL);
-	ptr = mmap(NULL, size + sizeof(size_t), PROT_READ | PROT_WRITE, MAP_SHARED, __shmid, 0);
-	*ptr = size;    //save size at beginning of buffer, for use with munmap
-	return &ptr[1];
+	size_t size = ioctl(__shmid, ASHMEM_GET_SIZE, NULL);
+	/* Needs to be 8-byte aligned to prevent SIGBUS on 32-bit ARM */
+	uint64_t *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, __shmid, 0);
+	/* Save size at beginning of buffer, for use with munmap */
+	*ptr = size;
+	return ptr + 1;
 }
 
 static inline int shmdt (const void *__shmaddr)
 {
-	size_t *ptr, size;
-	ptr = (size_t *)__shmaddr;
-	ptr--;
-	size = *ptr;    //find mmap size which we stored at the beginning of the buffer
-	return munmap((void *)ptr, size + sizeof(size_t));
+	/* Find mmap size which we stored at the beginning of the buffer */
+	uint64_t *ptr = (uint64_t *)__shmaddr - 1;
+	size_t size = *ptr;
+	return munmap(ptr, size);
 }
+#endif
 
 #define SPLICE_DEF_SIZE	(64*1024)
 
@@ -220,9 +225,19 @@ static inline long os_random_long(os_random_state_t *rs)
 #define FIO_O_NOATIME	0
 #endif
 
-#define fio_swap16(x)	__bswap_16(x)
-#define fio_swap32(x)	__bswap_32(x)
-#define fio_swap64(x)	__bswap_64(x)
+/* Check for GCC or Clang byte swap intrinsics */
+#if (__has_builtin(__builtin_bswap16) && __has_builtin(__builtin_bswap32) \
+     && __has_builtin(__builtin_bswap64)) || (__GNUC__ > 4 \
+     || (__GNUC__ == 4 && __GNUC_MINOR__ >= 8)) /* fio_swapN */
+#define fio_swap16(x)	__builtin_bswap16(x)
+#define fio_swap32(x)	__builtin_bswap32(x)
+#define fio_swap64(x)	__builtin_bswap64(x)
+#else
+#include <byteswap.h>
+#define fio_swap16(x)	bswap_16(x)
+#define fio_swap32(x)	bswap_32(x)
+#define fio_swap64(x)	bswap_64(x)
+#endif /* fio_swapN */
 
 #define CACHE_LINE_FILE	\
 	"/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size"
