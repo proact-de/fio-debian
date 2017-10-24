@@ -146,8 +146,6 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 		flags |= O_CREAT;
 	if (new_layout)
 		flags |= O_TRUNC;
-	if (td->o.odirect)
-		flags |= OS_O_DIRECT;
 
 #ifdef WIN32
 	flags |= _O_BINARY;
@@ -1844,4 +1842,33 @@ bool fio_files_done(struct thread_data *td)
 void filesetup_mem_free(void)
 {
 	free_already_allocated();
+}
+
+/*
+ * This function is for platforms which support direct I/O but not O_DIRECT.
+ */
+int fio_set_directio(struct thread_data *td, struct fio_file *f)
+{
+#ifdef FIO_OS_DIRECTIO
+	int ret = fio_set_odirect(f);
+
+	if (ret) {
+		td_verror(td, ret, "fio_set_directio");
+#if defined(__sun__)
+		if (ret == ENOTTY) { /* ENOTTY suggests RAW device or ZFS */
+			log_err("fio: doing directIO to RAW devices or ZFS not supported\n");
+		} else {
+			log_err("fio: the file system does not seem to support direct IO\n");
+		}
+#else
+		log_err("fio: the file system does not seem to support direct IO\n");
+#endif
+		return -1;
+	}
+
+	return 0;
+#else
+	log_err("fio: direct IO is not supported on this host operating system\n");
+	return -1;
+#endif
 }

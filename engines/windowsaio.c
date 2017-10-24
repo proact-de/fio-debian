@@ -35,17 +35,7 @@ struct thread_ctx {
 	struct windowsaio_data *wd;
 };
 
-static BOOL timeout_expired(DWORD start_count, DWORD end_count);
-static int fio_windowsaio_getevents(struct thread_data *td, unsigned int min,
-				unsigned int max, const struct timespec *t);
-static struct io_u *fio_windowsaio_event(struct thread_data *td, int event);
-static int fio_windowsaio_queue(struct thread_data *td,
-				  struct io_u *io_u);
-static void fio_windowsaio_cleanup(struct thread_data *td);
 static DWORD WINAPI IoCompletionRoutine(LPVOID lpParameter);
-static int fio_windowsaio_init(struct thread_data *td);
-static int fio_windowsaio_open_file(struct thread_data *td, struct fio_file *f);
-static int fio_windowsaio_close_file(struct thread_data fio_unused *td, struct fio_file *f);
 
 static int fio_windowsaio_init(struct thread_data *td)
 {
@@ -152,7 +142,6 @@ static void fio_windowsaio_cleanup(struct thread_data *td)
 	}
 }
 
-
 static int fio_windowsaio_open_file(struct thread_data *td, struct fio_file *f)
 {
 	int rc = 0;
@@ -180,13 +169,26 @@ static int fio_windowsaio_open_file(struct thread_data *td, struct fio_file *f)
 
 	/*
 	 * Inform Windows whether we're going to be doing sequential or
-	 * random io so it can tune the Cache Manager
+	 * random IO so it can tune the Cache Manager
 	 */
-	if (td->o.td_ddir == TD_DDIR_READ  ||
-		td->o.td_ddir == TD_DDIR_WRITE)
-		flags |= FILE_FLAG_SEQUENTIAL_SCAN;
-	else
+	switch (td->o.fadvise_hint) {
+	case F_ADV_TYPE:
+		if (td_random(td))
+			flags |= FILE_FLAG_RANDOM_ACCESS;
+		else
+			flags |= FILE_FLAG_SEQUENTIAL_SCAN;
+		break;
+	case F_ADV_RANDOM:
 		flags |= FILE_FLAG_RANDOM_ACCESS;
+		break;
+	case F_ADV_SEQUENTIAL:
+		flags |= FILE_FLAG_SEQUENTIAL_SCAN;
+		break;
+	case F_ADV_NONE:
+		break;
+	default:
+		log_err("fio: unknown fadvise type %d\n", td->o.fadvise_hint);
+	}
 
 	if (!td_write(td) || read_only)
 		access = GENERIC_READ;

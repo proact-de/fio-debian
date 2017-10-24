@@ -85,9 +85,9 @@ static inline long os_random_long(os_random_state_t *rs)
 
 #define FIO_OS_DIRECTIO
 extern int directio(int, int);
-static inline int fio_set_odirect(int fd)
+static inline int fio_set_odirect(struct fio_file *f)
 {
-	if (directio(fd, DIRECTIO_ON) < 0)
+	if (directio(f->fd, DIRECTIO_ON) < 0)
 		return errno;
 
 	return 0;
@@ -97,7 +97,7 @@ static inline int fio_set_odirect(int fd)
  * pset binding hooks for fio
  */
 #define fio_setaffinity(pid, cpumask)		\
-	pset_bind((cpumask), P_PID, (pid), NULL)
+	pset_bind((cpumask), P_LWPID, (pid), NULL)
 #define fio_getaffinity(pid, ptr)	({ 0; })
 
 #define fio_cpu_clear(mask, cpu)	pset_assign(PS_NONE, (cpu), NULL)

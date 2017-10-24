@@ -8,17 +8,17 @@ static unsigned long ns_granularity;
 
 void timespec_add_msec(struct timespec *ts, unsigned int msec)
 {
-	unsigned long adj_nsec = 1000000 * msec;
+	uint64_t adj_nsec = 1000000ULL * msec;
 
 	ts->tv_nsec += adj_nsec;
 	if (adj_nsec >= 1000000000) {
-		unsigned long adj_sec = adj_nsec / 1000000000UL;
+		uint64_t adj_sec = adj_nsec / 1000000000;
 
-		ts->tv_nsec -=  adj_sec * 1000000000UL;
+		ts->tv_nsec -= adj_sec * 1000000000;
 		ts->tv_sec += adj_sec;
 	}
-	if (ts->tv_nsec >= 1000000000UL){
-		ts->tv_nsec -= 1000000000UL;
+	if (ts->tv_nsec >= 1000000000){
+		ts->tv_nsec -= 1000000000;
 		ts->tv_sec++;
 	}
 }
@@ -97,16 +97,17 @@ bool in_ramp_time(struct thread_data *td)
 	return td->o.ramp_time && !td->ramp_time_over;
 }
 
-static void parent_update_ramp(struct thread_data *td)
+static bool parent_update_ramp(struct thread_data *td)
 {
 	struct thread_data *parent = td->parent;
 
 	if (!parent || parent->ramp_time_over)
-		return;
+		return false;
 
 	reset_all_stats(parent);
-	parent->ramp_time_over = 1;
+	parent->ramp_time_over = true;
 	td_set_runstate(parent, TD_RAMP);
+	return true;
 }
 
 bool ramp_time_over(struct thread_data *td)
@@ -115,10 +116,18 @@ bool ramp_time_over(struct thread_data *td)
 		return true;
 
 	if (utime_since_now(&td->epoch) >= td->o.ramp_time) {
-		td->ramp_time_over = 1;
+		td->ramp_time_over = true;
 		reset_all_stats(td);
 		td_set_runstate(td, TD_RAMP);
-		parent_update_ramp(td);
+
+		/*
+		 * If we have a parent, the parent isn't doing IO. Hence
+		 * the parent never enters do_io(), which will switch us
+		 * from RAMP -> RUNNING. Do this manually here.
+		 */
+		if (parent_update_ramp(td))
+			td_set_runstate(td, TD_RUNNING);
+
 		return true;
 	}
 
