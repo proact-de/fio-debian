@@ -697,8 +697,7 @@ if test "$libverbs" != "yes" ; then
   libverbs="no"
 fi
 cat > $TMPC << EOF
-#include <stdio.h>
-#include <infiniband/arch.h>
+#include <infiniband/verbs.h>
 int main(int argc, char **argv)
 {
   struct ibv_pd *pd = ibv_alloc_pd(NULL);
@@ -1483,12 +1482,16 @@ int main(int argc, char **argv)
 {
   rados_t cluster;
   rados_ioctx_t io_ctx;
+  const char cluster_name[] = "ceph";
+  const char user_name[] = "client.admin";
   const char pool[] = "rbd";
-
   int major, minor, extra;
-  rbd_version(&major, &minor, &extra);
 
+  rbd_version(&major, &minor, &extra);
+  /* The rados_create2 signature required was only introduced in ceph 0.65 */
+  rados_create2(&cluster, cluster_name, user_name, 0);
   rados_ioctx_create(cluster, pool, &io_ctx);
+
   return 0;
 }
 EOF

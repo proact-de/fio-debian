@@ -748,10 +748,27 @@ static int fixup_options(struct thread_data *td)
 		o->size = -1ULL;
 
 	if (o->verify != VERIFY_NONE) {
-		if (td_write(td) && o->do_verify && o->numjobs > 1) {
-			log_info("Multiple writers may overwrite blocks that "
-				"belong to other jobs. This can cause "
+		if (td_write(td) && o->do_verify && o->numjobs > 1 &&
+		    (o->filename ||
+		     !(o->unique_filename &&
+		       strstr(o->filename_format, "$jobname") &&
+		       strstr(o->filename_format, "$jobnum") &&
+		       strstr(o->filename_format, "$filenum")))) {
+			log_info("fio: multiple writers may overwrite blocks "
+				"that belong to other jobs. This can cause "
 				"verification failures.\n");
+			ret = warnings_fatal;
+		}
+
+		/*
+		 * Warn if verification is requested but no verification of any
+		 * kind can be started due to time constraints
+		 */
+		if (td_write(td) && o->do_verify && o->timeout &&
+		    o->time_based && !td_read(td) && !o->verify_backlog) {
+			log_info("fio: verification read phase will never "
+				 "start because write phase uses all of "
+				 "runtime\n");
 			ret = warnings_fatal;
 		}
 
@@ -820,7 +837,7 @@ static int fixup_options(struct thread_data *td)
 	 * Windows doesn't support O_DIRECT or O_SYNC with the _open interface,
 	 * so fail if we're passed those flags
 	 */
-	if (td_ioengine_flagged(td, FIO_SYNCIO) && (td->o.odirect || td->o.sync_io)) {
+	if (td_ioengine_flagged(td, FIO_SYNCIO) && (o->odirect || o->sync_io)) {
 		log_err("fio: Windows does not support direct or non-buffered io with"
 				" the synchronous ioengines. Use the 'windowsaio' ioengine"
 				" with 'direct=1' and 'iodepth=1' instead.\n");
@@ -846,8 +863,8 @@ static int fixup_options(struct thread_data *td)
 	 * Using a non-uniform random distribution excludes usage of
 	 * a random map
 	 */
-	if (td->o.random_distribution != FIO_RAND_DIST_RANDOM)
-		td->o.norandommap = 1;
+	if (o->random_distribution != FIO_RAND_DIST_RANDOM)
+		o->norandommap = 1;
 
 	/*
 	 * If size is set but less than the min block size, complain
@@ -861,16 +878,16 @@ static int fixup_options(struct thread_data *td)
 	/*
 	 * O_ATOMIC implies O_DIRECT
 	 */
-	if (td->o.oatomic)
-		td->o.odirect = 1;
+	if (o->oatomic)
+		o->odirect = 1;
 
 	/*
 	 * If randseed is set, that overrides randrepeat
 	 */
-	if (fio_option_is_set(&td->o, rand_seed))
-		td->o.rand_repeatable = 0;
+	if (fio_option_is_set(o, rand_seed))
+		o->rand_repeatable = 0;
 
-	if (td_ioengine_flagged(td, FIO_NOEXTEND) && td->o.file_append) {
+	if (td_ioengine_flagged(td, FIO_NOEXTEND) && o->file_append) {
 		log_err("fio: can't append/extent with IO engine %s\n", td->io_ops->name);
 		ret = 1;
 	}
@@ -885,28 +902,28 @@ static int fixup_options(struct thread_data *td)
 	if (!td->loops)
 		td->loops = 1;
 
-	if (td->o.block_error_hist && td->o.nr_files != 1) {
+	if (o->block_error_hist && o->nr_files != 1) {
 		log_err("fio: block error histogram only available "
 			"with a single file per job, but %d files "
-			"provided\n", td->o.nr_files);
+			"provided\n", o->nr_files);
+		ret = 1;
+	}
+
+	if (fio_option_is_set(o, clat_percentiles) &&
+	    !fio_option_is_set(o, lat_percentiles)) {
+		o->lat_percentiles = !o->clat_percentiles;
+	} else if (fio_option_is_set(o, lat_percentiles) &&
+		   !fio_option_is_set(o, clat_percentiles)) {
+		o->clat_percentiles = !o->lat_percentiles;
+	} else if (fio_option_is_set(o, lat_percentiles) &&
+		   fio_option_is_set(o, clat_percentiles) &&
+		   o->lat_percentiles && o->clat_percentiles) {
+		log_err("fio: lat_percentiles and clat_percentiles are "
+			"mutually exclusive\n");
 		ret = 1;
 	}
 
 	return ret;
-}
-
-/* External engines are specified by "external:name.o") */
-static const char *get_engine_name(const char *str)
-{
-	char *p = strstr(str, ":");
-
-	if (!p)
-		return str;
-
-	p++;
-	strip_blank_front(&p);
-	strip_blank_end(p);
-	return p;
 }
 
 static void init_rand_file_service(struct thread_data *td)
@@ -1020,8 +1037,6 @@ void td_fill_rand_seeds(struct thread_data *td)
  */
 int ioengine_load(struct thread_data *td)
 {
-	const char *engine;
-
 	if (!td->o.ioengine) {
 		log_err("fio: internal fault, no IO engine specified\n");
 		return 1;
@@ -1040,10 +1055,9 @@ int ioengine_load(struct thread_data *td)
 		free_ioengine(td);
 	}
 
-	engine = get_engine_name(td->o.ioengine);
-	td->io_ops = load_ioengine(td, engine);
+	td->io_ops = load_ioengine(td);
 	if (!td->io_ops) {
-		log_err("fio: failed to load engine %s\n", engine);
+		log_err("fio: failed to load engine\n");
 		return 1;
 	}
 
@@ -1401,6 +1415,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	td->mutex = fio_mutex_init(FIO_MUTEX_LOCKED);
 
 	td->ts.clat_percentiles = o->clat_percentiles;
+	td->ts.lat_percentiles = o->lat_percentiles;
 	td->ts.percentile_precision = o->percentile_precision;
 	memcpy(td->ts.percentile_list, o->percentile_list, sizeof(o->percentile_list));
 
@@ -2100,7 +2115,7 @@ static void usage(const char *name)
 	printf("  --inflate-log=log\tInflate and output compressed log\n");
 #endif
 	printf("  --trigger-file=file\tExecute trigger cmd when file exists\n");
-	printf("  --trigger-timeout=t\tExecute trigger af this time\n");
+	printf("  --trigger-timeout=t\tExecute trigger at this time\n");
 	printf("  --trigger=cmd\t\tSet this command as local trigger\n");
 	printf("  --trigger-remote=cmd\tSet this command as remote trigger\n");
 	printf("  --aux-path=path\tUse this path for fio state generated files\n");

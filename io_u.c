@@ -37,7 +37,7 @@ static bool random_map_free(struct fio_file *f, const uint64_t block)
  */
 static void mark_random_map(struct thread_data *td, struct io_u *io_u)
 {
-	unsigned int min_bs = td->o.rw_min_bs;
+	unsigned int min_bs = td->o.min_bs[io_u->ddir];
 	struct fio_file *f = io_u->file;
 	unsigned int nr_blocks;
 	uint64_t block;
@@ -2188,7 +2188,7 @@ int do_io_u_trim(const struct thread_data *td, struct io_u *io_u)
 	struct fio_file *f = io_u->file;
 	int ret;
 
-	ret = os_trim(f->fd, io_u->offset, io_u->xfer_buflen);
+	ret = os_trim(f, io_u->offset, io_u->xfer_buflen);
 	if (!ret)
 		return io_u->xfer_buflen;
 

@@ -111,9 +111,6 @@ Command line options
 	format.  `json+` is like `json`, except it adds a full dump of the latency
 	buckets.
 
-.. option:: --runtime
-	Limit run time to runtime seconds.
-
 .. option:: --bandwidth-log
 
 	Generate aggregate bandwidth logs.
@@ -185,8 +182,10 @@ Command line options
 
 .. option:: --status-interval=time
 
-	Force full status dump every `time` period passed.  When the unit is
-	omitted, the value is interpreted in seconds.
+	Force a full status dump of cumulative (from job start) values at `time`
+	intervals. This option does *not* provide per-period measurements. So
+	values such as bandwidth are running averages. When the time unit is omitted,
+	`time` is interpreted in seconds.
 
 .. option:: --section=name
 
@@ -950,7 +949,7 @@ I/O type
 .. option:: direct=bool
 
 	If value is true, use non-buffered I/O. This is usually O_DIRECT. Note that
-	ZFS on Solaris doesn't support direct I/O.  On Windows the synchronous
+	OpenBSD and ZFS on Solaris don't support direct I/O.  On Windows the synchronous
 	ioengines don't support direct I/O.  Default: false.
 
 .. option:: atomic=bool
@@ -1794,7 +1793,9 @@ I/O engine
 		**external**
 			Prefix to specify loading an external I/O engine object file. Append
 			the engine filename, e.g. ``ioengine=external:/tmp/foo.o`` to load
-			ioengine :file:`foo.o` in :file:`/tmp`.
+			ioengine :file:`foo.o` in :file:`/tmp`. The path can be either
+			absolute or relative. See :file:`engines/skeleton_external.c` for
+			details of writing an external I/O engine.
 
 
 I/O engine specific parameters
@@ -2861,7 +2862,15 @@ Measurements and reporting
 
 .. option:: clat_percentiles=bool
 
-	Enable the reporting of percentiles of completion latencies.
+	Enable the reporting of percentiles of completion latencies.  This
+	option is mutually exclusive with :option:`lat_percentiles`.
+
+.. option:: lat_percentiles=bool
+
+	Enable the reporting of percentiles of IO latencies. This is similar
+	to :option:`clat_percentiles`, except that this includes the
+	submission latency. This option is mutually exclusive with
+	:option:`clat_percentiles`.
 
 .. option:: percentile_list=float_list
 
@@ -3382,6 +3391,15 @@ minimal output v3, separated by semicolons::
         terse_version_3;fio_version;jobname;groupid;error;read_kb;read_bandwidth;read_iops;read_runtime_ms;read_slat_min;read_slat_max;read_slat_mean;read_slat_dev;read_clat_min;read_clat_max;read_clat_mean;read_clat_dev;read_clat_pct01;read_clat_pct02;read_clat_pct03;read_clat_pct04;read_clat_pct05;read_clat_pct06;read_clat_pct07;read_clat_pct08;read_clat_pct09;read_clat_pct10;read_clat_pct11;read_clat_pct12;read_clat_pct13;read_clat_pct14;read_clat_pct15;read_clat_pct16;read_clat_pct17;read_clat_pct18;read_clat_pct19;read_clat_pct20;read_tlat_min;read_lat_max;read_lat_mean;read_lat_dev;read_bw_min;read_bw_max;read_bw_agg_pct;read_bw_mean;read_bw_dev;write_kb;write_bandwidth;write_iops;write_runtime_ms;write_slat_min;write_slat_max;write_slat_mean;write_slat_dev;write_clat_min;write_clat_max;write_clat_mean;write_clat_dev;write_clat_pct01;write_clat_pct02;write_clat_pct03;write_clat_pct04;write_clat_pct05;write_clat_pct06;write_clat_pct07;write_clat_pct08;write_clat_pct09;write_clat_pct10;write_clat_pct11;write_clat_pct12;write_clat_pct13;write_clat_pct14;write_clat_pct15;write_clat_pct16;write_clat_pct17;write_clat_pct18;write_clat_pct19;write_clat_pct20;write_tlat_min;write_lat_max;write_lat_mean;write_lat_dev;write_bw_min;write_bw_max;write_bw_agg_pct;write_bw_mean;write_bw_dev;cpu_user;cpu_sys;cpu_csw;cpu_mjf;cpu_minf;iodepth_1;iodepth_2;iodepth_4;iodepth_8;iodepth_16;iodepth_32;iodepth_64;lat_2us;lat_4us;lat_10us;lat_20us;lat_50us;lat_100us;lat_250us;lat_500us;lat_750us;lat_1000us;lat_2ms;lat_4ms;lat_10ms;lat_20ms;lat_50ms;lat_100ms;lat_250ms;lat_500ms;lat_750ms;lat_1000ms;lat_2000ms;lat_over_2000ms;disk_name;disk_read_iops;disk_write_iops;disk_read_merges;disk_write_merges;disk_read_ticks;write_ticks;disk_queue_time;disk_util
 
 
+JSON output
+------------
+
+The `json` output format is intended to be both human readable and convenient
+for automated parsing. For the most part its sections mirror those of the
+`normal` output. The `runtime` value is reported in msec and the `bw` value is
+reported in 1024 bytes per second units.
+
+
 JSON+ output
 ------------
 
@@ -3584,7 +3602,7 @@ and IOPS. The logs share a common format, which looks like this:
 on the type of log, it will be one of the following:
 
     **Latency log**
-		Value is latency in usecs
+		Value is latency in nsecs
     **Bandwidth log**
 		Value is in KiB/sec
     **IOPS log**

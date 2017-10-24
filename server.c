@@ -856,7 +856,7 @@ static int handle_probe_cmd(struct fio_net_cmd *cmd)
 #ifdef CONFIG_BIG_ENDIAN
 	probe.bigendian = 1;
 #endif
-	strncpy((char *) probe.fio_version, fio_version_string, sizeof(probe.fio_version));
+	strncpy((char *) probe.fio_version, fio_version_string, sizeof(probe.fio_version) - 1);
 
 	probe.os	= FIO_OS;
 	probe.arch	= FIO_ARCH;
@@ -970,6 +970,7 @@ static int handle_trigger_cmd(struct fio_net_cmd *cmd)
 	} else
 		fio_net_queue_cmd(FIO_NET_CMD_VTRIGGER, rep, sz, NULL, SK_F_FREE | SK_F_INLINE);
 
+	fio_terminate_threads(TERMINATE_ALL);
 	exec_trigger(buf);
 	return 0;
 }
@@ -1483,7 +1484,8 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 	p.ts.ctx		= cpu_to_le64(ts->ctx);
 	p.ts.minf		= cpu_to_le64(ts->minf);
 	p.ts.majf		= cpu_to_le64(ts->majf);
-	p.ts.clat_percentiles	= cpu_to_le64(ts->clat_percentiles);
+	p.ts.clat_percentiles	= cpu_to_le32(ts->clat_percentiles);
+	p.ts.lat_percentiles	= cpu_to_le32(ts->lat_percentiles);
 	p.ts.percentile_precision = cpu_to_le64(ts->percentile_precision);
 
 	for (i = 0; i < FIO_IO_U_LIST_MAX_LEN; i++) {
