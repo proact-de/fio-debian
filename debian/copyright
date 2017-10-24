@@ -64,7 +64,7 @@ Copyright: 2004 Cisco Systems, Inc.
 License: GPL-2+
 
 Files: crc/crc32c-intel.c
-Copyright: Based on a posting to lkml by Austin Zhang <austin.zhang@intel.com>
+Copyright: Based on a posting to LKML by Austin Zhang <austin.zhang@intel.com>
 License: GPL-2+
 
 Files: crc/md5.c
