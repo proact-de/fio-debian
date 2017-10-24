@@ -37,10 +37,6 @@ Files: hash.h
 Copyright: 2002 William Lee Irwin III, IBM
 License: GPL-2+
 
-Files: rate-submit.c
-Copyright: 2015 Jens Axboe <axboe@kernel.dk>
-License: GPL-2
-
 Files: tickmarks.c
 Copyright: adapted from Paul Heckbert's algorithm on p 657-659 o
            Andrew S. Glassner's book, "Graphics Gems"
