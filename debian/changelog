@@ -7,7 +7,8 @@ fio (3.1-1) unstable; urgency=medium
     - Dropped patch spelling-errors. Applied upstream.
     - Changed author in all of my patches to new mail address.
   * control: Bumped standards version to 4.1.1.0.
-    * watch: Changed to pgpsigurlmangle as recommended by policy 4.1.0.0, section 4.11.
+    * watch: Changed to pgpsigurlmangle as recommended by policy 4.1.0.0,
+      section 4.11.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 24 Oct 2017 09:47:45 +0200
 
