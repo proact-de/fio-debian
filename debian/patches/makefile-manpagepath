@@ -1,5 +1,5 @@
 Description: Adapt manpage path to Debian.
-Author: Martin Steigerwald <ms@teamix.de>
+Author: Martin Steigerwald <martin.steigerwald@proact.de>
 
 --- a/Makefile
 +++ b/Makefile

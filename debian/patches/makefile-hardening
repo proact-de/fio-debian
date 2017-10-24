@@ -1,5 +1,5 @@
 Description: Keep hardening build flags.
-Author: Martin Steigerwald <martin.steigerwald@teamix.de>
+Author: Martin Steigerwald <martin.steigerwald@proact.de>
 
 --- a/Makefile
 +++ b/Makefile
