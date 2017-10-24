@@ -104,8 +104,12 @@ Files: engines/pmemblk.c
 Copyright: 2016 Hewlett Packard Enterprise Development LP
 License: GPL-2
 
+Files: examples/gfapi.fio
+Copyright: Originally authored by Castor Fu
+License: GPL-2
+
 Files: examples/jesd219.fio
-Copyright: Based on posting from Jeff Furlong <jeff.furlong@hgst.com>
+Copyright: Based on a posting from Jeff Furlong <jeff.furlong@hgst.com>
 License: GPL-2
 
 Files: exp/expression-parser.l exp/expression-parser.y exp/test-expression-parser.c
