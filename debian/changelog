@@ -1,7 +1,7 @@
 fio (3.1-1) unstable; urgency=medium
 
-  * Imported upstream versions 3.0 and 3.1.
-  * Adapted my mail address to new company name.
+  * Imported upstream versions 3.0 and 3.1 (Closes: #869686).
+  * Adapted my mail address to new company domain.
   * patches:
     - Refreshed.
     - Dropped patch spelling-errors. Applied upstream.
