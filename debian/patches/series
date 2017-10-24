@@ -2,5 +2,4 @@ makefile-manpagepath
 fio2gnuplot-manpage
 configure-no-configlog
 fix-ftbfs-with-libmtd.h
-spelling-errors
 reproducible-build

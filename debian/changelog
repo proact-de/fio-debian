@@ -2,6 +2,9 @@ fio (3.1-1) unstable; urgency=medium
 
   * Imported upstream versions 3.0 and 3.1.
   * Adapted my mail address to new company name.
+  * patches:
+    - Refreshed.
+    - Dropped patch spelling-errors. Applied upstream.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 24 Oct 2017 09:47:45 +0200
 
