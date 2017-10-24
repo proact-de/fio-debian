@@ -1,3 +1,9 @@
+fio (3.1-1) unstable; urgency=medium
+
+  * Imported upstream versions 3.0 and 3.1.
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 24 Oct 2017 09:47:45 +0200
+
 fio (2.17-1) unstable; urgency=medium
 
   * Imported upstream version 2.17.
