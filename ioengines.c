@@ -52,14 +52,12 @@ static bool check_engine_ops(struct ioengine_ops *ops)
 void unregister_ioengine(struct ioengine_ops *ops)
 {
 	dprint(FD_IO, "ioengine %s unregistered\n", ops->name);
-	flist_del(&ops->list);
-	INIT_FLIST_HEAD(&ops->list);
+	flist_del_init(&ops->list);
 }
 
 void register_ioengine(struct ioengine_ops *ops)
 {
 	dprint(FD_IO, "ioengine %s registered\n", ops->name);
-	INIT_FLIST_HEAD(&ops->list);
 	flist_add_tail(&ops->list, &engine_list);
 }
 
@@ -133,8 +131,10 @@ static struct ioengine_ops *__load_ioengine(const char *name)
 	/*
 	 * linux libaio has alias names, so convert to what we want
 	 */
-	if (!strncmp(engine, "linuxaio", 8) || !strncmp(engine, "aio", 3))
+	if (!strncmp(engine, "linuxaio", 8) || !strncmp(engine, "aio", 3)) {
+		dprint(FD_IO, "converting ioengine name: %s -> libaio\n", name);
 		strcpy(engine, "libaio");
+	}
 
 	dprint(FD_IO, "load ioengine %s\n", engine);
 	return find_ioengine(engine);
@@ -194,8 +194,10 @@ void free_ioengine(struct thread_data *td)
 		td->eo = NULL;
 	}
 
-	if (td->io_ops_dlhandle)
+	if (td->io_ops_dlhandle) {
 		dlclose(td->io_ops_dlhandle);
+		td->io_ops_dlhandle = NULL;
+	}
 
 	td->io_ops = NULL;
 }
@@ -222,7 +224,8 @@ int td_io_prep(struct thread_data *td, struct io_u *io_u)
 	if (td->io_ops->prep) {
 		int ret = td->io_ops->prep(td, io_u);
 
-		dprint(FD_IO, "->prep(%p)=%d\n", io_u, ret);
+		dprint(FD_IO, "prep: io_u %p: ret=%d\n", io_u, ret);
+
 		if (ret)
 			unlock_file(td, io_u->file);
 		return ret;
@@ -309,8 +312,10 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 	}
 
 	if (ddir_rw(ddir)) {
-		td->io_issues[ddir]++;
-		td->io_issue_bytes[ddir] += buflen;
+		if (!(io_u->flags & IO_U_F_VER_LIST)) {
+			td->io_issues[ddir]++;
+			td->io_issue_bytes[ddir] += buflen;
+		}
 		td->rate_io_issue_bytes[ddir] += buflen;
 	}
 
@@ -352,7 +357,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 	}
 
 	if (ret == FIO_Q_COMPLETED) {
-		if (ddir_rw(io_u->ddir)) {
+		if (ddir_rw(io_u->ddir) || ddir_sync(io_u->ddir)) {
 			io_u_mark_depth(td, 1);
 			td->ts.total_io_u[io_u->ddir]++;
 		}
@@ -361,7 +366,7 @@ int td_io_queue(struct thread_data *td, struct io_u *io_u)
 
 		td->io_u_queued++;
 
-		if (ddir_rw(io_u->ddir))
+		if (ddir_rw(io_u->ddir) || ddir_sync(io_u->ddir))
 			td->ts.total_io_u[io_u->ddir]++;
 
 		if (td->io_u_queued >= td->o.iodepth_batch) {
@@ -436,6 +441,7 @@ int td_io_open_file(struct thread_data *td, struct fio_file *f)
 {
 	assert(!fio_file_open(f));
 	assert(f->fd == -1);
+	assert(td->io_ops->open_file);
 
 	if (td->io_ops->open_file(td, f)) {
 		if (td->error == EINVAL && td->o.odirect)

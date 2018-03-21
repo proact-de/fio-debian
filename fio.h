@@ -72,22 +72,44 @@ enum {
 };
 
 enum {
-	TD_F_VER_BACKLOG	= 1U << 0,
-	TD_F_TRIM_BACKLOG	= 1U << 1,
-	TD_F_READ_IOLOG		= 1U << 2,
-	TD_F_REFILL_BUFFERS	= 1U << 3,
-	TD_F_SCRAMBLE_BUFFERS	= 1U << 4,
-	TD_F_VER_NONE		= 1U << 5,
-	TD_F_PROFILE_OPS	= 1U << 6,
-	TD_F_COMPRESS		= 1U << 7,
-	TD_F_RESERVED		= 1U << 8, /* not used */
-	TD_F_COMPRESS_LOG	= 1U << 9,
-	TD_F_VSTATE_SAVED	= 1U << 10,
-	TD_F_NEED_LOCK		= 1U << 11,
-	TD_F_CHILD		= 1U << 12,
-	TD_F_NO_PROGRESS        = 1U << 13,
-	TD_F_REGROW_LOGS	= 1U << 14,
-	TD_F_MMAP_KEEP		= 1U << 15,
+	__TD_F_VER_BACKLOG	= 0,
+	__TD_F_TRIM_BACKLOG,
+	__TD_F_READ_IOLOG,
+	__TD_F_REFILL_BUFFERS,
+	__TD_F_SCRAMBLE_BUFFERS,
+	__TD_F_VER_NONE,
+	__TD_F_PROFILE_OPS,
+	__TD_F_COMPRESS,
+	__TD_F_COMPRESS_LOG,
+	__TD_F_VSTATE_SAVED,
+	__TD_F_NEED_LOCK,
+	__TD_F_CHILD,
+	__TD_F_NO_PROGRESS,
+	__TD_F_REGROW_LOGS,
+	__TD_F_MMAP_KEEP,
+	__TD_F_DIRS_CREATED,
+	__TD_F_CHECK_RATE,
+	__TD_F_LAST,		/* not a real bit, keep last */
+};
+
+enum {
+	TD_F_VER_BACKLOG	= 1U << __TD_F_VER_BACKLOG,
+	TD_F_TRIM_BACKLOG	= 1U << __TD_F_TRIM_BACKLOG,
+	TD_F_READ_IOLOG		= 1U << __TD_F_READ_IOLOG,
+	TD_F_REFILL_BUFFERS	= 1U << __TD_F_REFILL_BUFFERS,
+	TD_F_SCRAMBLE_BUFFERS	= 1U << __TD_F_SCRAMBLE_BUFFERS,
+	TD_F_VER_NONE		= 1U << __TD_F_VER_NONE,
+	TD_F_PROFILE_OPS	= 1U << __TD_F_PROFILE_OPS,
+	TD_F_COMPRESS		= 1U << __TD_F_COMPRESS,
+	TD_F_COMPRESS_LOG	= 1U << __TD_F_COMPRESS_LOG,
+	TD_F_VSTATE_SAVED	= 1U << __TD_F_VSTATE_SAVED,
+	TD_F_NEED_LOCK		= 1U << __TD_F_NEED_LOCK,
+	TD_F_CHILD		= 1U << __TD_F_CHILD,
+	TD_F_NO_PROGRESS        = 1U << __TD_F_NO_PROGRESS,
+	TD_F_REGROW_LOGS	= 1U << __TD_F_REGROW_LOGS,
+	TD_F_MMAP_KEEP		= 1U << __TD_F_MMAP_KEEP,
+	TD_F_DIRS_CREATED	= 1U << __TD_F_DIRS_CREATED,
+	TD_F_CHECK_RATE		= 1U << __TD_F_CHECK_RATE,
 };
 
 enum {
@@ -138,6 +160,8 @@ void sk_out_drop(void);
 struct zone_split_index {
 	uint8_t size_perc;
 	uint8_t size_perc_prev;
+	uint64_t size;
+	uint64_t size_prev;
 };
 
 /*
@@ -184,7 +208,6 @@ struct thread_data {
 	unsigned int files_index;
 	unsigned int nr_open_files;
 	unsigned int nr_done_files;
-	unsigned int nr_normal_files;
 	union {
 		unsigned int next_file;
 		struct frand_state next_file_state;
@@ -205,9 +228,9 @@ struct thread_data {
 	pid_t pid;
 	char *orig_buffer;
 	size_t orig_buffer_size;
-	volatile int terminate;
 	volatile int runstate;
-	unsigned int last_was_sync;
+	volatile bool terminate;
+	bool last_was_sync;
 	enum fio_ddir last_ddir;
 
 	int mmapfd;
@@ -482,6 +505,7 @@ extern uintptr_t page_mask, page_size;
 extern int read_only;
 extern int eta_print;
 extern int eta_new_line;
+extern unsigned int eta_interval_msec;
 extern unsigned long done_secs;
 extern int fio_gtod_offload;
 extern int fio_gtod_cpu;
@@ -501,6 +525,8 @@ extern long long trigger_timeout;
 extern char *aux_path;
 
 extern struct thread_data *threads;
+
+extern bool eta_time_within_slack(unsigned int time);
 
 static inline void fio_ro_check(const struct thread_data *td, struct io_u *io_u)
 {
@@ -588,14 +614,8 @@ enum {
 	TD_NR,
 };
 
-#define TD_ENG_FLAG_SHIFT	16
-#define TD_ENG_FLAG_MASK	((1U << 16) - 1)
-
-static inline enum fio_ioengine_flags td_ioengine_flags(struct thread_data *td)
-{
-	return (enum fio_ioengine_flags)
-		((td->flags >> TD_ENG_FLAG_SHIFT) & TD_ENG_FLAG_MASK);
-}
+#define TD_ENG_FLAG_SHIFT	17
+#define TD_ENG_FLAG_MASK	((1U << 17) - 1)
 
 static inline void td_set_ioengine_flags(struct thread_data *td)
 {
@@ -684,8 +704,7 @@ static inline bool fio_fill_issue_time(struct thread_data *td)
 	return false;
 }
 
-static inline bool __should_check_rate(struct thread_data *td,
-				       enum fio_ddir ddir)
+static inline bool option_check_rate(struct thread_data *td, enum fio_ddir ddir)
 {
 	struct thread_options *o = &td->o;
 
@@ -699,13 +718,19 @@ static inline bool __should_check_rate(struct thread_data *td,
 	return false;
 }
 
+static inline bool __should_check_rate(struct thread_data *td,
+				       enum fio_ddir ddir)
+{
+	return (td->flags & TD_F_CHECK_RATE) != 0;
+}
+
 static inline bool should_check_rate(struct thread_data *td)
 {
-	if (td->bytes_done[DDIR_READ] && __should_check_rate(td, DDIR_READ))
+	if (__should_check_rate(td, DDIR_READ) && td->bytes_done[DDIR_READ])
 		return true;
-	if (td->bytes_done[DDIR_WRITE] && __should_check_rate(td, DDIR_WRITE))
+	if (__should_check_rate(td, DDIR_WRITE) && td->bytes_done[DDIR_WRITE])
 		return true;
-	if (td->bytes_done[DDIR_TRIM] && __should_check_rate(td, DDIR_TRIM))
+	if (__should_check_rate(td, DDIR_TRIM) && td->bytes_done[DDIR_TRIM])
 		return true;
 
 	return false;
@@ -775,11 +800,6 @@ static inline void td_flags_set(struct thread_data *td, unsigned int *flags,
 extern const char *fio_get_arch_string(int);
 extern const char *fio_get_os_string(int);
 
-#ifdef FIO_INTERNAL
-#define ARRAY_SIZE(x)    (sizeof((x)) / (sizeof((x)[0])))
-#define FIELD_SIZE(s, f) (sizeof(((typeof(s))0)->f))
-#endif
-
 enum {
 	__FIO_OUTPUT_TERSE	= 0,
 	__FIO_OUTPUT_JSON	= 1,
@@ -799,6 +819,7 @@ enum {
 	FIO_RAND_DIST_PARETO,
 	FIO_RAND_DIST_GAUSS,
 	FIO_RAND_DIST_ZONED,
+	FIO_RAND_DIST_ZONED_ABS,
 };
 
 #define FIO_DEF_ZIPF		1.1
