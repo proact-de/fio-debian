@@ -1,6 +1,7 @@
 fio (3.5-1) unstable; urgency=medium
 
   * Imported upstream version 3.5.
+  * changelog, rules: Removed trailing white spaces as lintian suggests.
   * patches:
     - Refreshed.
     - fix-ftbfs-with-libmtd.h: Removed. Implemented upstream.
@@ -85,7 +86,7 @@ fio (2.6-1) unstable; urgency=medium
     unknown type name 'uint8_t'. Thanks Chris. (Closes: #815735)
   * control:
     - Updated to standards version 3.9.7. No changes needed.
-    - Made Vcs-Browser and Vcs-Git URLs secure 
+    - Made Vcs-Browser and Vcs-Git URLs secure.
   - copyright:
     - Adapted path for library files that are now in oslib.
     - fio.1: Fixed license to GPL-2. Don´t know how I came to the
@@ -184,7 +185,7 @@ fio (2.1.1-1) unstable; urgency=low
   * debian/control: Added build dependency zlib1g-dev as fio can use
     zlib to compress client/server communication.
   * Switched to xz compression. Saved almost 37 KiB on binary package.
-  * Updated to Standards-Version to 3.9.4, no changes needed. 
+  * Updated to Standards-Version to 3.9.4, no changes needed.
   * debian/patches/fio_generate_plots-gnuplot:
     Make test for gnuplot work with empty strings (Closes: #700580).
     Thanks to Hervé Werner for providing bug report and fix.
@@ -193,7 +194,7 @@ fio (2.1.1-1) unstable; urgency=low
 
 fio (2.0.8-2) unstable; urgency=low
 
-  * debian/patches/ftbfs-fix-for-mips-architecture: 
+  * debian/patches/ftbfs-fix-for-mips-architecture:
     Fixed build failure on mips and mipsel architectures. Sven Hoexter
     suggested the fix and Jens Axboe confirmed it. Thanks.
 
