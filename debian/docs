@@ -6,6 +6,5 @@ examples/
 tools/hist/fiologparser_hist.py
 tools/hist/fiologparser_hist.py.1
 tools/hist/half-bins.py
-tools/fio_latency2csv.py
 tools/fio.service
 tools/fiologparser.py
