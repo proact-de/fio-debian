@@ -1,4 +1,4 @@
-Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: fio
 Upstream-Contact: Jens Axboe <axboe@kernel.dk>
 Source: http://brick.kernel.dk/snaps/

@@ -8,6 +8,8 @@ fio (3.5-1) unstable; urgency=medium
   * compat: Switched debhelper compat level from 9 to 11 as lintian and
     debhelper manpage recommend.
   * control: Switched Vcs URLs from Alioth to Salsa as I migrated the repo.
+  * copyright: Switched copyright format URL to https as Lintian suggests.
+  * copyright: Switched copyright format URL to https as Lintian suggests.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 21 Mar 2018 10:54:18 +0100
 
