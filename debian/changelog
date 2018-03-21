@@ -1,12 +1,13 @@
 fio (3.5-1) unstable; urgency=medium
 
   * Imported upstream version 3.5.
-  * changelog, rules: Removed trailing white spaces as lintian suggests.
-  * compat: Switch debhelper compat level from 9 to 11 as lintian and
-    debhelper manpage recommend.
   * patches:
     - Refreshed.
     - fix-ftbfs-with-libmtd.h: Removed. Implemented upstream.
+  * changelog, rules: Removed trailing white spaces as lintian suggests.
+  * compat: Switched debhelper compat level from 9 to 11 as lintian and
+    debhelper manpage recommend.
+  * control: Switched Vcs URLs from Alioth to Salsa as I migrated the repo.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 21 Mar 2018 10:54:18 +0100
 
