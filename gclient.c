@@ -298,6 +298,7 @@ static void gfio_thread_status_op(struct fio_client *client,
 	client_ts.members++;
 	client_ts.thread_number = p->ts.thread_number;
 	client_ts.groupid = p->ts.groupid;
+	client_ts.sig_figs = p->ts.sig_figs;
 
 	if (++sum_stat_nr == sum_stat_clients) {
 		strcpy(client_ts.name, "All clients");
@@ -379,24 +380,24 @@ static void gfio_update_client_eta(struct fio_client *client, struct jobs_eta *j
 			sprintf(output, "%3.1f%% done", perc);
 		}
 
-		iops_str[0] = num2str(je->iops[0], 4, 1, 0, N2S_PERSEC);
-		iops_str[1] = num2str(je->iops[1], 4, 1, 0, N2S_PERSEC);
-		iops_str[2] = num2str(je->iops[2], 4, 1, 0, N2S_PERSEC);
+		iops_str[0] = num2str(je->iops[0], je->sig_figs, 1, 0, N2S_PERSEC);
+		iops_str[1] = num2str(je->iops[1], je->sig_figs, 1, 0, N2S_PERSEC);
+		iops_str[2] = num2str(je->iops[2], je->sig_figs, 1, 0, N2S_PERSEC);
 
-		rate_str[0] = num2str(je->rate[0], 4, 10, i2p, N2S_BYTEPERSEC);
-		rate_alt[0] = num2str(je->rate[0], 4, 10, !i2p, N2S_BYTEPERSEC);
+		rate_str[0] = num2str(je->rate[0], je->sig_figs, 10, i2p, N2S_BYTEPERSEC);
+		rate_alt[0] = num2str(je->rate[0], je->sig_figs, 10, !i2p, N2S_BYTEPERSEC);
 		snprintf(tmp, sizeof(tmp), "%s (%s)", rate_str[0], rate_alt[0]);
 		gtk_entry_set_text(GTK_ENTRY(ge->eta.read_bw), tmp);
 		gtk_entry_set_text(GTK_ENTRY(ge->eta.read_iops), iops_str[0]);
 
-		rate_str[1] = num2str(je->rate[1], 4, 10, i2p, N2S_BYTEPERSEC);
-		rate_alt[1] = num2str(je->rate[1], 4, 10, !i2p, N2S_BYTEPERSEC);
+		rate_str[1] = num2str(je->rate[1], je->sig_figs, 10, i2p, N2S_BYTEPERSEC);
+		rate_alt[1] = num2str(je->rate[1], je->sig_figs, 10, !i2p, N2S_BYTEPERSEC);
 		snprintf(tmp, sizeof(tmp), "%s (%s)", rate_str[1], rate_alt[1]);
 		gtk_entry_set_text(GTK_ENTRY(ge->eta.write_bw), tmp);
 		gtk_entry_set_text(GTK_ENTRY(ge->eta.write_iops), iops_str[1]);
 
-		rate_str[2] = num2str(je->rate[2], 4, 10, i2p, N2S_BYTEPERSEC);
-		rate_alt[2] = num2str(je->rate[2], 4, 10, !i2p, N2S_BYTEPERSEC);
+		rate_str[2] = num2str(je->rate[2], je->sig_figs, 10, i2p, N2S_BYTEPERSEC);
+		rate_alt[2] = num2str(je->rate[2], je->sig_figs, 10, !i2p, N2S_BYTEPERSEC);
 		snprintf(tmp, sizeof(tmp), "%s (%s)", rate_str[2], rate_alt[2]);
 		gtk_entry_set_text(GTK_ENTRY(ge->eta.trim_bw), tmp);
 		gtk_entry_set_text(GTK_ENTRY(ge->eta.trim_iops), iops_str[2]);
@@ -463,24 +464,24 @@ static void gfio_update_all_eta(struct jobs_eta *je)
 			sprintf(output, "%3.1f%% done", perc);
 		}
 
-		iops_str[0] = num2str(je->iops[0], 4, 1, 0, N2S_PERSEC);
-		iops_str[1] = num2str(je->iops[1], 4, 1, 0, N2S_PERSEC);
-		iops_str[2] = num2str(je->iops[2], 4, 1, 0, N2S_PERSEC);
+		iops_str[0] = num2str(je->iops[0], je->sig_figs, 1, 0, N2S_PERSEC);
+		iops_str[1] = num2str(je->iops[1], je->sig_figs, 1, 0, N2S_PERSEC);
+		iops_str[2] = num2str(je->iops[2], je->sig_figs, 1, 0, N2S_PERSEC);
 
-		rate_str[0] = num2str(je->rate[0], 4, 10, i2p, N2S_BYTEPERSEC);
-		rate_alt[0] = num2str(je->rate[0], 4, 10, !i2p, N2S_BYTEPERSEC);
+		rate_str[0] = num2str(je->rate[0], je->sig_figs, 10, i2p, N2S_BYTEPERSEC);
+		rate_alt[0] = num2str(je->rate[0], je->sig_figs, 10, !i2p, N2S_BYTEPERSEC);
 		snprintf(tmp, sizeof(tmp), "%s (%s)", rate_str[0], rate_alt[0]);
 		gtk_entry_set_text(GTK_ENTRY(ui->eta.read_bw), tmp);
 		gtk_entry_set_text(GTK_ENTRY(ui->eta.read_iops), iops_str[0]);
 
-		rate_str[1] = num2str(je->rate[1], 4, 10, i2p, N2S_BYTEPERSEC);
-		rate_alt[1] = num2str(je->rate[1], 4, 10, !i2p, N2S_BYTEPERSEC);
+		rate_str[1] = num2str(je->rate[1], je->sig_figs, 10, i2p, N2S_BYTEPERSEC);
+		rate_alt[1] = num2str(je->rate[1], je->sig_figs, 10, !i2p, N2S_BYTEPERSEC);
 		snprintf(tmp, sizeof(tmp), "%s (%s)", rate_str[1], rate_alt[1]);
 		gtk_entry_set_text(GTK_ENTRY(ui->eta.write_bw), tmp);
 		gtk_entry_set_text(GTK_ENTRY(ui->eta.write_iops), iops_str[1]);
 
-		rate_str[2] = num2str(je->rate[2], 4, 10, i2p, N2S_BYTEPERSEC);
-		rate_alt[2] = num2str(je->rate[2], 4, 10, !i2p, N2S_BYTEPERSEC);
+		rate_str[2] = num2str(je->rate[2], je->sig_figs, 10, i2p, N2S_BYTEPERSEC);
+		rate_alt[2] = num2str(je->rate[2], je->sig_figs, 10, !i2p, N2S_BYTEPERSEC);
 		snprintf(tmp, sizeof(tmp), "%s (%s)", rate_str[2], rate_alt[2]);
 		gtk_entry_set_text(GTK_ENTRY(ui->eta.trim_bw), tmp);
 		gtk_entry_set_text(GTK_ENTRY(ui->eta.trim_iops), iops_str[2]);
@@ -587,10 +588,10 @@ static void gfio_add_job_op(struct fio_client *client, struct fio_net_cmd *cmd)
 	multitext_add_entry(&ge->eta.iotype, tmp);
 
 	i2p = is_power_of_2(o->kb_base);
-	c1 = num2str(o->min_bs[DDIR_READ], 4, 1, i2p, N2S_BYTE);
-	c2 = num2str(o->max_bs[DDIR_READ], 4, 1, i2p, N2S_BYTE);
-	c3 = num2str(o->min_bs[DDIR_WRITE], 4, 1, i2p, N2S_BYTE);
-	c4 = num2str(o->max_bs[DDIR_WRITE], 4, 1, i2p, N2S_BYTE);
+	c1 = num2str(o->min_bs[DDIR_READ], o->sig_figs, 1, i2p, N2S_BYTE);
+	c2 = num2str(o->max_bs[DDIR_READ], o->sig_figs, 1, i2p, N2S_BYTE);
+	c3 = num2str(o->min_bs[DDIR_WRITE], o->sig_figs, 1, i2p, N2S_BYTE);
+	c4 = num2str(o->max_bs[DDIR_WRITE], o->sig_figs, 1, i2p, N2S_BYTE);
 
 	sprintf(tmp, "%s-%s,%s-%s", c1, c2, c3, c4);
 	free(c1);
@@ -1099,7 +1100,7 @@ static void gfio_show_clat_percentiles(struct gfio_client *gc,
 				       int ddir)
 {
 	unsigned int *io_u_plat = ts->io_u_plat[ddir];
-	unsigned long nr = ts->clat_stat[ddir].samples;
+	unsigned long long nr = ts->clat_stat[ddir].samples;
 	fio_fp64_t *plist = ts->percentile_list;
 	unsigned int len, scale_down;
 	unsigned long long *ovals, minv, maxv;
@@ -1183,7 +1184,7 @@ static void gfio_show_ddir_status(struct gfio_client *gc, GtkWidget *mbox,
 	bw = (1000 * ts->io_bytes[ddir]) / runt;
 
 	iops = (1000 * (uint64_t)ts->total_io_u[ddir]) / runt;
-	iops_p = num2str(iops, 4, 1, 0, N2S_PERSEC);
+	iops_p = num2str(iops, ts->sig_figs, 1, 0, N2S_PERSEC);
 
 	box = gtk_hbox_new(FALSE, 3);
 	gtk_box_pack_start(GTK_BOX(mbox), box, TRUE, FALSE, 3);
@@ -1198,14 +1199,14 @@ static void gfio_show_ddir_status(struct gfio_client *gc, GtkWidget *mbox,
 	gtk_box_pack_start(GTK_BOX(main_vbox), box, TRUE, FALSE, 3);
 
 	label = new_info_label_in_frame(box, "IO");
-	io_p = num2str(ts->io_bytes[ddir], 4, 1, i2p, N2S_BYTE);
-	io_palt = num2str(ts->io_bytes[ddir], 4, 1, !i2p, N2S_BYTE);
+	io_p = num2str(ts->io_bytes[ddir], ts->sig_figs, 1, i2p, N2S_BYTE);
+	io_palt = num2str(ts->io_bytes[ddir], ts->sig_figs, 1, !i2p, N2S_BYTE);
 	snprintf(tmp, sizeof(tmp), "%s (%s)", io_p, io_palt);
 	gtk_label_set_text(GTK_LABEL(label), tmp);
 
 	label = new_info_label_in_frame(box, "Bandwidth");
-	bw_p = num2str(bw, 4, 1, i2p, ts->unit_base);
-	bw_palt = num2str(bw, 4, 1, !i2p, ts->unit_base);
+	bw_p = num2str(bw, ts->sig_figs, 1, i2p, ts->unit_base);
+	bw_palt = num2str(bw, ts->sig_figs, 1, !i2p, ts->unit_base);
 	snprintf(tmp, sizeof(tmp), "%s (%s)", bw_p, bw_palt);
 	gtk_label_set_text(GTK_LABEL(label), tmp);
 

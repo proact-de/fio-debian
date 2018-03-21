@@ -942,6 +942,8 @@ static void convert_ts(struct thread_stat *dst, struct thread_stat *src)
 	dst->kb_base		= le32_to_cpu(src->kb_base);
 	dst->unit_base		= le32_to_cpu(src->unit_base);
 
+	dst->sig_figs		= le32_to_cpu(src->sig_figs);
+
 	dst->latency_depth	= le32_to_cpu(src->latency_depth);
 	dst->latency_target	= le64_to_cpu(src->latency_target);
 	dst->latency_window	= le64_to_cpu(src->latency_window);
@@ -959,7 +961,7 @@ static void convert_ts(struct thread_stat *dst, struct thread_stat *src)
 	dst->ss_deviation.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_deviation.u.i));
 	dst->ss_criterion.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_criterion.u.i));
 
-	if (dst->ss_state & __FIO_SS_DATA) {
+	if (dst->ss_state & FIO_SS_DATA) {
 		for (i = 0; i < dst->ss_dur; i++ ) {
 			dst->ss_iops_data[i] = le64_to_cpu(src->ss_iops_data[i]);
 			dst->ss_bw_data[i] = le64_to_cpu(src->ss_bw_data[i]);
@@ -982,6 +984,7 @@ static void convert_gs(struct group_run_stats *dst, struct group_run_stats *src)
 
 	dst->kb_base	= le32_to_cpu(src->kb_base);
 	dst->unit_base	= le32_to_cpu(src->unit_base);
+	dst->sig_figs	= le32_to_cpu(src->sig_figs);
 	dst->groupid	= le32_to_cpu(src->groupid);
 	dst->unified_rw_rep	= le32_to_cpu(src->unified_rw_rep);
 }
@@ -1021,6 +1024,7 @@ static void handle_ts(struct fio_client *client, struct fio_net_cmd *cmd)
 	client_ts.thread_number = p->ts.thread_number;
 	client_ts.groupid = p->ts.groupid;
 	client_ts.unified_rw_rep = p->ts.unified_rw_rep;
+	client_ts.sig_figs = p->ts.sig_figs;
 
 	if (++sum_stat_nr == sum_stat_clients) {
 		strcpy(client_ts.name, "All clients");
@@ -1167,6 +1171,7 @@ static void convert_jobs_eta(struct jobs_eta *je)
 	je->nr_threads		= le32_to_cpu(je->nr_threads);
 	je->is_pow2		= le32_to_cpu(je->is_pow2);
 	je->unit_base		= le32_to_cpu(je->unit_base);
+	je->sig_figs		= le32_to_cpu(je->sig_figs);
 }
 
 void fio_client_sum_jobs_eta(struct jobs_eta *dst, struct jobs_eta *je)
@@ -1312,14 +1317,16 @@ static void client_flush_hist_samples(FILE *f, int hist_coarseness, void *sample
 static int fio_client_handle_iolog(struct fio_client *client,
 				   struct fio_net_cmd *cmd)
 {
-	struct cmd_iolog_pdu *pdu;
+	struct cmd_iolog_pdu *pdu = NULL;
 	bool store_direct;
-	char *log_pathname;
+	char *log_pathname = NULL;
+	int ret = 0;
 
 	pdu = convert_iolog(cmd, &store_direct);
 	if (!pdu) {
 		log_err("fio: failed converting IO log\n");
-		return 1;
+		ret = 1;
+		goto out;
 	}
 
         /* allocate buffer big enough for next sprintf() call */
@@ -1327,7 +1334,8 @@ static int fio_client_handle_iolog(struct fio_client *client,
 			strlen(client->hostname));
 	if (!log_pathname) {
 		log_err("fio: memory allocation of unique pathname failed\n");
-		return -1;
+		ret = -1;
+		goto out;
 	}
 	/* generate a unique pathname for the log file using hostname */
 	sprintf(log_pathname, "%s.%s", pdu->name, client->hostname);
@@ -1342,7 +1350,8 @@ static int fio_client_handle_iolog(struct fio_client *client,
 		if (fd < 0) {
 			log_err("fio: open log %s: %s\n",
 				log_pathname, strerror(errno));
-			return 1;
+			ret = 1;
+			goto out;
 		}
 
 		sz = cmd->pdu_len - sizeof(*pdu);
@@ -1351,17 +1360,19 @@ static int fio_client_handle_iolog(struct fio_client *client,
 
 		if (ret != sz) {
 			log_err("fio: short write on compressed log\n");
-			return 1;
+			ret = 1;
+			goto out;
 		}
 
-		return 0;
+		ret = 0;
 	} else {
 		FILE *f;
 		f = fopen((const char *) log_pathname, "w");
 		if (!f) {
 			log_err("fio: fopen log %s : %s\n",
 				log_pathname, strerror(errno));
-			return 1;
+			ret = 1;
+			goto out;
 		}
 
 		if (pdu->log_type == IO_LOG_TYPE_HIST) {
@@ -1372,8 +1383,17 @@ static int fio_client_handle_iolog(struct fio_client *client,
 					pdu->nr_samples * sizeof(struct io_sample));
 		}
 		fclose(f);
-		return 0;
+		ret = 0;
 	}
+
+out:
+	if (pdu && pdu != (void *) cmd->payload)
+		free(pdu);
+
+	if (log_pathname)
+		free(log_pathname);
+
+	return ret;
 }
 
 static void handle_probe(struct fio_client *client, struct fio_net_cmd *cmd)
@@ -1647,6 +1667,8 @@ int fio_handle_client(struct fio_client *client)
 	dprint(FD_NET, "client: got cmd op %s from %s (pdu=%u)\n",
 		fio_server_op(cmd->opcode), client->hostname, cmd->pdu_len);
 
+	client->last_cmd = cmd->opcode;
+
 	switch (cmd->opcode) {
 	case FIO_NET_CMD_QUIT:
 		if (ops->quit)
@@ -1670,7 +1692,7 @@ int fio_handle_client(struct fio_client *client)
 		struct cmd_ts_pdu *p = (struct cmd_ts_pdu *) cmd->payload;
 
 		dprint(FD_NET, "client: ts->ss_state = %u\n", (unsigned int) le32_to_cpu(p->ts.ss_state));
-		if (le32_to_cpu(p->ts.ss_state) & __FIO_SS_DATA) {
+		if (le32_to_cpu(p->ts.ss_state) & FIO_SS_DATA) {
 			dprint(FD_NET, "client: received steadystate ring buffers\n");
 
 			size = le64_to_cpu(p->ts.ss_dur);
@@ -1813,6 +1835,9 @@ static void request_client_etas(struct client_ops *ops)
 	struct client_eta *eta;
 	int skipped = 0;
 
+	if (eta_print == FIO_ETA_NEVER)
+		return;
+
 	dprint(FD_NET, "client: request eta (%d)\n", nr_clients);
 
 	eta = calloc(1, sizeof(*eta) + __THREAD_RUNSTR_SZ(REAL_MAX_JOBS));
@@ -1849,10 +1874,12 @@ static void request_client_etas(struct client_ops *ops)
 static int handle_cmd_timeout(struct fio_client *client,
 			      struct fio_net_cmd_reply *reply)
 {
+	uint16_t reply_opcode = reply->opcode;
+
 	flist_del(&reply->list);
 	free(reply);
 
-	if (reply->opcode != FIO_NET_CMD_SEND_ETA)
+	if (reply_opcode != FIO_NET_CMD_SEND_ETA)
 		return 1;
 
 	log_info("client <%s>: timeout on SEND_ETA\n", client->hostname);
@@ -1880,16 +1907,19 @@ static int client_check_cmd_timeout(struct fio_client *client,
 	int ret = 0;
 
 	flist_for_each_safe(entry, tmp, &client->cmd_list) {
+		unsigned int op;
+
 		reply = flist_entry(entry, struct fio_net_cmd_reply, list);
 
 		if (mtime_since(&reply->ts, now) < FIO_NET_CLIENT_TIMEOUT)
 			continue;
 
+		op = reply->opcode;
 		if (!handle_cmd_timeout(client, reply))
 			continue;
 
 		log_err("fio: client %s, timeout on cmd %s\n", client->hostname,
-						fio_server_op(reply->opcode));
+						fio_server_op(op));
 		ret = 1;
 	}
 
@@ -1919,7 +1949,10 @@ static int fio_check_clients_timed_out(void)
 		else
 			log_err("fio: client %s timed out\n", client->hostname);
 
-		client->error = ETIMEDOUT;
+		if (client->last_cmd != FIO_NET_CMD_VTRIGGER)
+			client->error = ETIMEDOUT;
+		else
+			log_info("fio: ignoring timeout due to vtrigger\n");
 		remove_client(client);
 		ret = 1;
 	}
@@ -1968,7 +2001,7 @@ int fio_handle_clients(struct client_ops *ops)
 			int timeout;
 
 			fio_gettime(&ts, NULL);
-			if (mtime_since(&eta_ts, &ts) >= 900) {
+			if (eta_time_within_slack(mtime_since(&eta_ts, &ts))) {
 				request_client_etas(ops);
 				memcpy(&eta_ts, &ts, sizeof(ts));
 

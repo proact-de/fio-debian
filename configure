@@ -142,6 +142,7 @@ gfio_check="no"
 libhdfs="no"
 pmemblk="no"
 devdax="no"
+pmem="no"
 disable_lex=""
 disable_pmem="no"
 prefix=/usr/local
@@ -171,6 +172,8 @@ for opt do
   --disable-numa) disable_numa="yes"
   ;;
   --disable-rdma) disable_rdma="yes"
+  ;;
+  --disable-rados) disable_rados="yes"
   ;;
   --disable-rbd) disable_rbd="yes"
   ;;
@@ -225,7 +228,20 @@ if test "$show_help" = "yes" ; then
 fi
 
 cross_prefix=${cross_prefix-${CROSS_COMPILE}}
-cc="${CC-${cross_prefix}gcc}"
+# Preferred compiler (can be overriden later after we know the platform):
+#  ${CC} (if set)
+#  ${cross_prefix}gcc (if cross-prefix specified)
+#  gcc if available
+#  clang if available
+if test -z "${CC}${cross_prefix}"; then
+  if has gcc; then
+    cc=gcc
+  elif has clang; then
+    cc=clang
+  fi
+else
+  cc="${CC-${cross_prefix}gcc}"
+fi
 
 if check_define __ANDROID__ ; then
   targetos="Android"
@@ -301,16 +317,16 @@ SunOS)
 CYGWIN*)
   # We still force some options, so keep this message here.
   echo "Forcing some known good options on Windows"
-  if test -z "$CC" ; then
+  if test -z "${CC}${cross_prefix}"; then
     if test ! -z "$build_32bit_win" && test "$build_32bit_win" = "yes"; then
-      CC="i686-w64-mingw32-gcc"
+      cc="i686-w64-mingw32-gcc"
       if test -e "../zlib/contrib/vstudio/vc14/x86/ZlibStatReleaseWithoutAsm/zlibstat.lib"; then
         echo "Building with zlib support"
         output_sym "CONFIG_ZLIB"
         echo "LIBS=../zlib/contrib/vstudio/vc14/x86/ZlibStatReleaseWithoutAsm/zlibstat.lib" >> $config_host_mak
       fi
     else
-      CC="x86_64-w64-mingw32-gcc"
+      cc="x86_64-w64-mingw32-gcc"
       if test -e "../zlib/contrib/vstudio/vc14/x64/ZlibStatReleaseWithoutAsm/zlibstat.lib"; then
         echo "Building with zlib support"
         output_sym "CONFIG_ZLIB"
@@ -330,6 +346,8 @@ CYGWIN*)
   # Flags below are still necessary mostly for MinGW.
   socklen_t="yes"
   sfaa="yes"
+  sync_sync="yes"
+  cmp_swap="yes"
   rusage_thread="yes"
   fdatasync="yes"
   clock_gettime="yes" # clock_monotonic probe has dependency on this
@@ -340,10 +358,24 @@ CYGWIN*)
   tls_thread="yes"
   static_assert="yes"
   ipv6="yes"
-  echo "CC=$CC" >> $config_host_mak
+  mkdir_two="no"
   echo "BUILD_CFLAGS=$CFLAGS -I../zlib -include config-host.h -D_GNU_SOURCE" >> $config_host_mak
   ;;
 esac
+
+# Now we know the target platform we can have another guess at the preferred
+# compiler when it wasn't explictly set
+if test -z "${CC}${cross_prefix}"; then
+  if test "$targetos" = "FreeBSD" || test "$targetos" = "Darwin"; then
+    if has clang; then
+      cc=clang
+    fi
+  fi
+fi
+if test -z "$cc"; then
+    echo "configure: failed to find compiler"
+    exit 1
+fi
 
 if test ! -z "$cpu" ; then
   # command line argument
@@ -414,18 +446,6 @@ case "$cpu" in
   echo "Unknown CPU"
   ;;
 esac
-
-if test -z "$CC" ; then
-  if test "$targetos" = "FreeBSD"; then
-    if has clang; then
-      CC=clang
-    else
-      CC=gcc
-    fi
-  fi
-fi
-
-cc="${CC-${cross_prefix}gcc}"
 
 ##########################################
 # check cross compile
@@ -690,6 +710,44 @@ if compile_prog "" "" "__sync_fetch_and_add()" ; then
     sfaa="yes"
 fi
 print_config "__sync_fetch_and_add" "$sfaa"
+
+##########################################
+# __sync_synchronize() test
+if test "$sync_sync" != "yes" ; then
+  sync_sync="no"
+fi
+cat > $TMPC << EOF
+#include <inttypes.h>
+
+int main(int argc, char **argv)
+{
+  __sync_synchronize();
+  return 0;
+}
+EOF
+if compile_prog "" "" "__sync_synchronize()" ; then
+    sync_sync="yes"
+fi
+print_config "__sync_synchronize" "$sync_sync"
+
+##########################################
+# __sync_val_compare_and_swap() test
+if test "$cmp_swap" != "yes" ; then
+  cmp_swap="no"
+fi
+cat > $TMPC << EOF
+#include <inttypes.h>
+
+int main(int argc, char **argv)
+{
+  int x = 0;
+  return __sync_val_compare_and_swap(&x, 1, 2);
+}
+EOF
+if compile_prog "" "" "__sync_val_compare_and_swap()" ; then
+    cmp_swap="yes"
+fi
+print_config "__sync_val_compare_and_swap" "$cmp_swap"
 
 ##########################################
 # libverbs probe
@@ -1471,6 +1529,35 @@ fi
 print_config "IPv6 helpers" "$ipv6"
 
 ##########################################
+# check for rados
+if test "$rados" != "yes" ; then
+  rados="no"
+fi
+cat > $TMPC << EOF
+#include <rados/librados.h>
+
+int main(int argc, char **argv)
+{
+  rados_t cluster;
+  rados_ioctx_t io_ctx;
+  const char cluster_name[] = "ceph";
+  const char user_name[] = "client.admin";
+  const char pool[] = "rados";
+
+  /* The rados_create2 signature required was only introduced in ceph 0.65 */
+  rados_create2(&cluster, cluster_name, user_name, 0);
+  rados_ioctx_create(cluster, pool, &io_ctx);
+
+  return 0;
+}
+EOF
+if test "$disable_rados" != "yes"  && compile_prog "" "-lrados" "rados"; then
+  LIBS="-lrados $LIBS"
+  rados="yes"
+fi
+print_config "Rados engine" "$rados"
+
+##########################################
 # check for rbd
 if test "$rbd" != "yes" ; then
   rbd="no"
@@ -1530,7 +1617,7 @@ print_config "rbd_poll" "$rbd_poll"
 fi
 
 ##########################################
-# check for rbd_invaidate_cache()
+# check for rbd_invalidate_cache()
 if test "$rbd_inval" != "yes" ; then
   rbd_inval="no"
 fi
@@ -1790,6 +1877,7 @@ print_config "libpmemblk" "$libpmemblk"
 
 # Choose the ioengines
 if test "$libpmem" = "yes" && test "$disable_pmem" = "no"; then
+  pmem="yes"
   devdax="yes"
   if test "$libpmemblk" = "yes"; then
     pmemblk="yes"
@@ -1803,6 +1891,10 @@ print_config "NVML pmemblk engine" "$pmemblk"
 ##########################################
 # Report whether dev-dax engine is enabled
 print_config "NVML dev-dax engine" "$devdax"
+
+##########################################
+# Report whether libpmem engine is enabled
+print_config "NVML libpmem engine" "$pmem"
 
 ##########################################
 # Check if we have lex/yacc available
@@ -2033,6 +2125,22 @@ if test "$enable_cuda" = "yes" && compile_prog "" "-lcuda" "cuda"; then
 fi
 print_config "cuda" "$cuda"
 
+##########################################
+# mkdir() probe. mingw apparently has a one-argument mkdir :/
+mkdir_two="no"
+cat > $TMPC << EOF
+#include <sys/stat.h>
+#include <sys/types.h>
+int main(int argc, char **argv)
+{
+  return mkdir("/tmp/bla", 0600);
+}
+EOF
+if compile_prog "" "" "mkdir(a, b)"; then
+  mkdir_two="yes"
+fi
+print_config "mkdir(a, b)" "$mkdir_two"
+
 #############################################################################
 
 if test "$wordsize" = "64" ; then
@@ -2076,6 +2184,12 @@ if test "$sync_file_range" = "yes" ; then
 fi
 if test "$sfaa" = "yes" ; then
   output_sym "CONFIG_SFAA"
+fi
+if test "$sync_sync" = "yes" ; then
+  output_sym "CONFIG_SYNC_SYNC"
+fi
+if test "$cmp_swap" = "yes" ; then
+  output_sym "CONFIG_CMP_SWAP"
 fi
 if test "$libverbs" = "yes" -a "$rdmacm" = "yes" ; then
   output_sym "CONFIG_RDMA"
@@ -2179,6 +2293,9 @@ fi
 if test "$ipv6" = "yes" ; then
   output_sym "CONFIG_IPV6"
 fi
+if test "$rados" = "yes" ; then
+  output_sym "CONFIG_RADOS"
+fi
 if test "$rbd" = "yes" ; then
   output_sym "CONFIG_RBD"
 fi
@@ -2223,6 +2340,9 @@ fi
 if test "$devdax" = "yes" ; then
   output_sym "CONFIG_LINUX_DEVDAX"
 fi
+if test "$pmem" = "yes" ; then
+  output_sym "CONFIG_LIBPMEM"
+fi
 if test "$arith" = "yes" ; then
   output_sym "CONFIG_ARITHMETIC"
   if test "$yacc_is_bison" = "yes" ; then
@@ -2260,6 +2380,9 @@ if test "$zlib" = "no" ; then
 fi
 if test "$cuda" = "yes" ; then
   output_sym "CONFIG_CUDA"
+fi
+if test "$mkdir_two" = "yes" ; then
+  output_sym "CONFIG_HAVE_MKDIR_TWO"
 fi
 
 echo "LIBS+=$LIBS" >> $config_host_mak
