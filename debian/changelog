@@ -18,6 +18,7 @@ fio (3.5-1) unstable; urgency=medium
     - Added build dependencies bison and flex to enable arithmetic
       calculations in fio jobs (see #893778, also see fio manpage,
       JOB FILE PARAMETERS).
+    - Added build dependency for the fio GlusterFS engine (see #893778).
   * docs: Removed tools/fio_latency2csv.py, not in upstream source anymore.
   * copyright: Switched copyright format URL to https as Lintian suggests.
 
