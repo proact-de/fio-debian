@@ -3,7 +3,8 @@ fio (3.5-1) unstable; urgency=medium
   * Imported upstream version 3.5.
   * patches:
     - Refreshed.
-    - fix-ftbfs-with-libmtd.h: Removed. Implemented upstream.
+    - fix-ftbfs-with-libmtd.h: Removed. Implemented upstream (also see
+    #893778).
   * changelog, rules: Removed trailing white spaces as lintian suggests.
   * compat: Switched debhelper compat level from 9 to 11 as lintian and
     debhelper manpage recommend.
