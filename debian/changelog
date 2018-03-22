@@ -11,6 +11,7 @@ fio (3.5-1) unstable; urgency=medium
       well.
     - reproducible-build: Removed. Implemented upstream (also see #893778
       and upstream commit 785e49c659023df1735bff195ad4ba133ebd23a7).
+    - genfio-interpreter: Keep /bin/bash as interpreter, no usrmerge (yet).  
   * changelog, rules: Removed trailing white spaces as lintian suggests.
   * compat: Switched debhelper compat level from 9 to 11 as lintian and
     debhelper manpage recommend.
