@@ -5,6 +5,8 @@ fio (3.5-1) unstable; urgency=medium
     - Refreshed.
     - fix-ftbfs-with-libmtd.h: Removed. Implemented upstream (also see
     #893778).
+    - makefile-hardening: Allow to add hardening options to CPPFLAGS as
+      well.
   * changelog, rules: Removed trailing white spaces as lintian suggests.
   * compat: Switched debhelper compat level from 9 to 11 as lintian and
     debhelper manpage recommend.
