@@ -21,3 +21,5 @@ export V = 1
 override_dh_auto_configure:
 	./configure --prefix=/usr --enable-gfio
 
+override_dh_installsystemd:
+	dh_installsystemd --no-enable
