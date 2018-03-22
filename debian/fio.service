@@ -6,3 +6,6 @@ Documentation=man:fio(1)
 [Service]
 Type=simple
 ExecStart=/usr/bin/fio --server
+
+[Install]
+WantedBy=multi-user.target
