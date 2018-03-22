@@ -7,7 +7,7 @@ fio (3.5-1) unstable; urgency=medium
     - Refreshed.
     - fix-ftbfs-with-libmtd.h: Removed. Implemented upstream (also see
     #893778).
-    - makefile-hardening: Allow to add hardening options to CPPFLAGS as
+    - makefile-hardening: Allow adding hardening options to CPPFLAGS as
       well.
     - reproducible-build: Removed. Implemented upstream (also see #893778
       and upstream commit 785e49c659023df1735bff195ad4ba133ebd23a7).
@@ -28,8 +28,8 @@ fio (3.5-1) unstable; urgency=medium
     - Added build dependency for the fio GlusterFS engine (see #893778).
     - Disable build dependency for libaio for all platforms except Linux,
       to enable build on non-Linux platforms like Hurd (see #893778).
-    - Change binary dependency to python2.7 as all the scripts use this
-      version.
+    - Change binary dependency to python2.7 as all the python scripts use
+      this version.
   * rules:
     - Enable verbose build to allow tools like blhc to check for
       hardening flags for compiler and linker (see #893778).
