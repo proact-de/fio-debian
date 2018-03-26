@@ -41,8 +41,10 @@ fio (3.5-1) unstable; urgency=medium
   * copyright: Switched copyright format URL to https as Lintian suggests.
   * Implemented all suggestions from sitsofe´s Debian patch comments I
     decided to implement (Closes: #893778).
+  * README.Debian: Added a note about fio´s weird usage of units in job
+    files and parseable output (Closes: #872321).
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 21 Mar 2018 10:54:18 +0100
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 26 Mar 2018 13:33:46 +0200
 
 fio (3.1-1) unstable; urgency=medium
 
