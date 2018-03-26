@@ -4,8 +4,9 @@ After=network.target
 Documentation=man:fio(1)
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/fio --server
+Type=forking
+PIDfile=/run/fio.pid
+ExecStart=/usr/bin/fio --server --daemonize /run/fio.pid
 
 [Install]
 WantedBy=multi-user.target
