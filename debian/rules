@@ -25,4 +25,4 @@ override_dh_installsystemd:
 	dh_installsystemd --no-enable
 
 override_dh_installinit:
-	dh_installinit --no-enable
+	dh_installinit --no-start --no-enable
