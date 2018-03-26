@@ -5,6 +5,7 @@ fio (3.5-1) unstable; urgency=medium
     by default (also see #893778).
   * Install sysvinit script for running fio as a service, disabled by
     default. Thanks to KatolaZ from Devuan project for helpful hint.
+    Does not install any symlinks currently (see #894084).
   * patches:
     - Refreshed.
     - fix-ftbfs-with-libmtd.h: Removed. Implemented upstream (also see
