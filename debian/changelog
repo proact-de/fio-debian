@@ -44,7 +44,7 @@ fio (3.5-1) unstable; urgency=medium
   * README.Debian: Added a note about fio´s weird usage of units in job
     files and parseable output (Closes: #872321).
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 26 Mar 2018 13:33:46 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 09 Apr 2018 13:45:59 +0200 
 
 fio (3.1-1) unstable; urgency=medium
 
