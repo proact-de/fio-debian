@@ -3,7 +3,8 @@ fio (3.6-1) unstable; urgency=medium
   * Imported upstream version 3.6.
   * patches: Refreshed.
   * control: Build with libaio-dev only on Linux platforms instead of all
-    other platforms than Linux. Thanks Hillel for the report
+    other platforms than Linux. Thanks for Sven Hoexter for finding the
+    mistake in the build depends. Thanks Hillel Lubman for the report
     (Closes: #898210).
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 09 May 2018 08:55:08 +0200
