@@ -4,16 +4,12 @@
 #include <ctype.h>
 #include <string.h>
 #include <assert.h>
-#include <libgen.h>
-#include <fcntl.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <netinet/in.h>
 
 #include "fio.h"
 #include "verify.h"
 #include "parse.h"
-#include "lib/fls.h"
 #include "lib/pattern.h"
 #include "options.h"
 #include "optgroup.h"
@@ -1521,7 +1517,7 @@ static int str_ioengine_external_cb(void *data, const char *str)
 	return 0;
 }
 
-static int rw_verify(struct fio_option *o, void *data)
+static int rw_verify(const struct fio_option *o, void *data)
 {
 	struct thread_data *td = cb_data_to_td(data);
 
@@ -1534,7 +1530,7 @@ static int rw_verify(struct fio_option *o, void *data)
 	return 0;
 }
 
-static int gtod_cpu_verify(struct fio_option *o, void *data)
+static int gtod_cpu_verify(const struct fio_option *o, void *data)
 {
 #ifndef FIO_HAVE_CPU_AFFINITY
 	struct thread_data *td = cb_data_to_td(data);
@@ -1818,11 +1814,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 #ifdef CONFIG_GUASI
 			  { .ival = "guasi",
 			    .help = "GUASI IO engine",
-			  },
-#endif
-#ifdef FIO_HAVE_BINJECT
-			  { .ival = "binject",
-			    .help = "binject direct inject block engine",
 			  },
 #endif
 #ifdef CONFIG_RDMA
@@ -3164,6 +3155,19 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IOLOG,
 		.pow2	= 1,
+	},
+	{
+		.name	= "replay_time_scale",
+		.lname	= "Replay Time Scale",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct thread_options, replay_time_scale),
+		.def	= "100",
+		.minval	= 1,
+		.parent	= "read_iolog",
+		.hide	= 1,
+		.help	= "Scale time for replay events",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_IOLOG,
 	},
 	{
 		.name	= "exec_prerun",
@@ -4908,7 +4912,7 @@ int fio_options_parse(struct thread_data *td, char **opts, int num_opts)
 	opts_copy = dup_and_sub_options(opts, num_opts);
 
 	for (ret = 0, i = 0, unknown = 0; i < num_opts; i++) {
-		struct fio_option *o;
+		const struct fio_option *o;
 		int newret = parse_option(opts_copy[i], opts[i], fio_options,
 						&o, &td->o, &td->opt_list);
 
@@ -4934,7 +4938,7 @@ int fio_options_parse(struct thread_data *td, char **opts, int num_opts)
 			opts = opts_copy;
 		}
 		for (i = 0; i < num_opts; i++) {
-			struct fio_option *o = NULL;
+			const struct fio_option *o = NULL;
 			int newret = 1;
 
 			if (!opts_copy[i])
@@ -4965,9 +4969,9 @@ int fio_cmd_option_parse(struct thread_data *td, const char *opt, char *val)
 
 	ret = parse_cmd_option(opt, val, fio_options, &td->o, &td->opt_list);
 	if (!ret) {
-		struct fio_option *o;
+		const struct fio_option *o;
 
-		o = find_option(fio_options, opt);
+		o = find_option_c(fio_options, opt);
 		if (o)
 			fio_option_mark_set(&td->o, o);
 	}
@@ -5032,7 +5036,7 @@ unsigned int fio_get_kb_base(void *data)
 	return kb_base;
 }
 
-int add_option(struct fio_option *o)
+int add_option(const struct fio_option *o)
 {
 	struct fio_option *__o;
 	int opt_index = 0;
@@ -5169,7 +5173,7 @@ bool __fio_option_is_set(struct thread_options *o, unsigned int off1)
 	return false;
 }
 
-void fio_option_mark_set(struct thread_options *o, struct fio_option *opt)
+void fio_option_mark_set(struct thread_options *o, const struct fio_option *opt)
 {
 	unsigned int opt_off, index, offset;
 

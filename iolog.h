@@ -1,6 +1,8 @@
 #ifndef FIO_IOLOG_H
 #define FIO_IOLOG_H
 
+#include <stdio.h>
+
 #include "lib/rbtree.h"
 #include "lib/ieee754.h"
 #include "flist.h"
@@ -199,7 +201,7 @@ enum {
  */
 struct io_piece {
 	union {
-		struct rb_node rb_node;
+		struct fio_rb_node rb_node;
 		struct flist_head list;
 	};
 	struct flist_head trim_list;
@@ -286,7 +288,7 @@ extern void finalize_logs(struct thread_data *td, bool);
 extern void setup_log(struct io_log **, struct log_params *, const char *);
 extern void flush_log(struct io_log *, bool);
 extern void flush_samples(FILE *, void *, uint64_t);
-extern unsigned long hist_sum(int, int, unsigned int *, unsigned int *);
+extern uint64_t hist_sum(int, int, uint64_t *, uint64_t *);
 extern void free_log(struct io_log *);
 extern void fio_writeout_logs(bool);
 extern void td_writeout_logs(struct thread_data *, bool);

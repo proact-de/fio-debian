@@ -22,29 +22,17 @@
  *
  */
 #include <unistd.h>
-#include <fcntl.h>
 #include <string.h>
-#include <limits.h>
 #include <signal.h>
-#include <time.h>
-#include <locale.h>
 #include <assert.h>
-#include <time.h>
 #include <inttypes.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/ipc.h>
-#include <sys/mman.h>
 #include <math.h>
 
 #include "fio.h"
-#ifndef FIO_NO_HAVE_SHM_H
-#include <sys/shm.h>
-#endif
-#include "hash.h"
 #include "smalloc.h"
 #include "verify.h"
-#include "trim.h"
 #include "diskutil.h"
 #include "cgroup.h"
 #include "profile.h"
@@ -58,8 +46,9 @@
 #include "lib/mountcheck.h"
 #include "rate-submit.h"
 #include "helper_thread.h"
+#include "pshared.h"
 
-static struct fio_mutex *startup_mutex;
+static struct fio_sem *startup_sem;
 static struct flist_head *cgroup_list;
 static char *cgroup_mnt;
 static int exit_value;
@@ -426,7 +415,7 @@ static void check_update_rusage(struct thread_data *td)
 	if (td->update_rusage) {
 		td->update_rusage = 0;
 		update_rusage_stat(td);
-		fio_mutex_up(td->rusage_sem);
+		fio_sem_up(td->rusage_sem);
 	}
 }
 
@@ -734,6 +723,7 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 					break;
 				} else if (io_u->ddir == DDIR_WRITE) {
 					io_u->ddir = DDIR_READ;
+					populate_verify_io_u(td, io_u);
 					break;
 				} else {
 					put_io_u(td, io_u);
@@ -1005,6 +995,9 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 				goto reap;
 			break;
 		}
+
+		if (io_u->ddir == DDIR_WRITE && td->flags & TD_F_DO_VERIFY)
+			populate_verify_io_u(td, io_u);
 
 		ddir = io_u->ddir;
 
@@ -1339,7 +1332,7 @@ static int init_io_u(struct thread_data *td)
 static int switch_ioscheduler(struct thread_data *td)
 {
 #ifdef FIO_HAVE_IOSCHED_SWITCH
-	char tmp[256], tmp2[128];
+	char tmp[256], tmp2[128], *p;
 	FILE *f;
 	int ret;
 
@@ -1375,17 +1368,19 @@ static int switch_ioscheduler(struct thread_data *td)
 	/*
 	 * Read back and check that the selected scheduler is now the default.
 	 */
-	memset(tmp, 0, sizeof(tmp));
-	ret = fread(tmp, sizeof(tmp), 1, f);
+	ret = fread(tmp, 1, sizeof(tmp) - 1, f);
 	if (ferror(f) || ret < 0) {
 		td_verror(td, errno, "fread");
 		fclose(f);
 		return 1;
 	}
+	tmp[ret] = '\0';
 	/*
-	 * either a list of io schedulers or "none\n" is expected.
+	 * either a list of io schedulers or "none\n" is expected. Strip the
+	 * trailing newline.
 	 */
-	tmp[strlen(tmp) - 1] = '\0';
+	p = tmp;
+	strsep(&p, "\n");
 
 	/*
 	 * Write to "none" entry doesn't fail, so check the result here.
@@ -1569,11 +1564,11 @@ static void *thread_main(void *data)
 	}
 
 	td_set_runstate(td, TD_INITIALIZED);
-	dprint(FD_MUTEX, "up startup_mutex\n");
-	fio_mutex_up(startup_mutex);
-	dprint(FD_MUTEX, "wait on td->mutex\n");
-	fio_mutex_down(td->mutex);
-	dprint(FD_MUTEX, "done waiting on td->mutex\n");
+	dprint(FD_MUTEX, "up startup_sem\n");
+	fio_sem_up(startup_sem);
+	dprint(FD_MUTEX, "wait on td->sem\n");
+	fio_sem_down(td->sem);
+	dprint(FD_MUTEX, "done waiting on td->sem\n");
 
 	/*
 	 * A new gid requires privilege, so we need to do this before setting
@@ -1802,11 +1797,11 @@ static void *thread_main(void *data)
 		deadlock_loop_cnt = 0;
 		do {
 			check_update_rusage(td);
-			if (!fio_mutex_down_trylock(stat_mutex))
+			if (!fio_sem_down_trylock(stat_sem))
 				break;
 			usleep(1000);
 			if (deadlock_loop_cnt++ > 5000) {
-				log_err("fio seems to be stuck grabbing stat_mutex, forcibly exiting\n");
+				log_err("fio seems to be stuck grabbing stat_sem, forcibly exiting\n");
 				td->error = EDEADLK;
 				goto err;
 			}
@@ -1819,7 +1814,7 @@ static void *thread_main(void *data)
 		if (td_trim(td) && td->io_bytes[DDIR_TRIM])
 			update_runtime(td, elapsed_us, DDIR_TRIM);
 		fio_gettime(&td->start, NULL);
-		fio_mutex_up(stat_mutex);
+		fio_sem_up(stat_sem);
 
 		if (td->error || td->terminate)
 			break;
@@ -1843,10 +1838,10 @@ static void *thread_main(void *data)
 		 */
 		check_update_rusage(td);
 
-		fio_mutex_down(stat_mutex);
+		fio_sem_down(stat_sem);
 		update_runtime(td, elapsed_us, DDIR_READ);
 		fio_gettime(&td->start, NULL);
-		fio_mutex_up(stat_mutex);
+		fio_sem_up(stat_sem);
 
 		if (td->error || td->terminate)
 			break;
@@ -2317,7 +2312,7 @@ reap:
 
 			init_disk_util(td);
 
-			td->rusage_sem = fio_mutex_init(FIO_MUTEX_LOCKED);
+			td->rusage_sem = fio_sem_init(FIO_SEM_LOCKED);
 			td->update_rusage = 0;
 
 			/*
@@ -2362,8 +2357,8 @@ reap:
 				} else if (i == fio_debug_jobno)
 					*fio_debug_jobp = pid;
 			}
-			dprint(FD_MUTEX, "wait on startup_mutex\n");
-			if (fio_mutex_down_timeout(startup_mutex, 10000)) {
+			dprint(FD_MUTEX, "wait on startup_sem\n");
+			if (fio_sem_down_timeout(startup_sem, 10000)) {
 				log_err("fio: job startup hung? exiting.\n");
 				fio_terminate_threads(TERMINATE_ALL);
 				fio_abort = 1;
@@ -2371,7 +2366,7 @@ reap:
 				free(fd);
 				break;
 			}
-			dprint(FD_MUTEX, "done waiting on startup_mutex\n");
+			dprint(FD_MUTEX, "done waiting on startup_sem\n");
 		}
 
 		/*
@@ -2430,7 +2425,7 @@ reap:
 			m_rate += ddir_rw_sum(td->o.ratemin);
 			t_rate += ddir_rw_sum(td->o.rate);
 			todo--;
-			fio_mutex_up(td->mutex);
+			fio_sem_up(td->sem);
 		}
 
 		reap_threads(&nr_running, &t_rate, &m_rate);
@@ -2479,16 +2474,17 @@ int fio_backend(struct sk_out *sk_out)
 		setup_log(&agg_io_log[DDIR_TRIM], &p, "agg-trim_bw.log");
 	}
 
-	startup_mutex = fio_mutex_init(FIO_MUTEX_LOCKED);
-	if (startup_mutex == NULL)
+	startup_sem = fio_sem_init(FIO_SEM_LOCKED);
+	if (startup_sem == NULL)
 		return 1;
 
 	set_genesis_time();
 	stat_init();
-	helper_thread_create(startup_mutex, sk_out);
+	helper_thread_create(startup_sem, sk_out);
 
 	cgroup_list = smalloc(sizeof(*cgroup_list));
-	INIT_FLIST_HEAD(cgroup_list);
+	if (cgroup_list)
+		INIT_FLIST_HEAD(cgroup_list);
 
 	run_threads(sk_out);
 
@@ -2510,19 +2506,21 @@ int fio_backend(struct sk_out *sk_out)
 		steadystate_free(td);
 		fio_options_free(td);
 		if (td->rusage_sem) {
-			fio_mutex_remove(td->rusage_sem);
+			fio_sem_remove(td->rusage_sem);
 			td->rusage_sem = NULL;
 		}
-		fio_mutex_remove(td->mutex);
-		td->mutex = NULL;
+		fio_sem_remove(td->sem);
+		td->sem = NULL;
 	}
 
 	free_disk_util();
-	cgroup_kill(cgroup_list);
-	sfree(cgroup_list);
+	if (cgroup_list) {
+		cgroup_kill(cgroup_list);
+		sfree(cgroup_list);
+	}
 	sfree(cgroup_mnt);
 
-	fio_mutex_remove(startup_mutex);
+	fio_sem_remove(startup_sem);
 	stat_exit();
 	return exit_value;
 }
