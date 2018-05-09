@@ -1,10 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#include <dirent.h>
-#include <libgen.h>
 #include <math.h>
 
 #include "fio.h"
@@ -18,9 +15,9 @@
 #include "helper_thread.h"
 #include "smalloc.h"
 
-#define LOG_MSEC_SLACK	10
+#define LOG_MSEC_SLACK	1
 
-struct fio_mutex *stat_mutex;
+struct fio_sem *stat_sem;
 
 void clear_rusage_stat(struct thread_data *td)
 {
@@ -135,7 +132,7 @@ static int double_cmp(const void *a, const void *b)
 	return cmp;
 }
 
-unsigned int calc_clat_percentiles(unsigned int *io_u_plat, unsigned long long nr,
+unsigned int calc_clat_percentiles(uint64_t *io_u_plat, unsigned long long nr,
 				   fio_fp64_t *plist, unsigned long long **output,
 				   unsigned long long *maxv, unsigned long long *minv)
 {
@@ -198,7 +195,7 @@ unsigned int calc_clat_percentiles(unsigned int *io_u_plat, unsigned long long n
 /*
  * Find and display the p-th percentile of clat
  */
-static void show_clat_percentiles(unsigned int *io_u_plat, unsigned long long nr,
+static void show_clat_percentiles(uint64_t *io_u_plat, unsigned long long nr,
 				  fio_fp64_t *plist, unsigned int precision,
 				  const char *pre, struct buf_output *out)
 {
@@ -323,7 +320,7 @@ void show_group_stats(struct group_run_stats *rs, struct buf_output *out)
 	}
 }
 
-void stat_calc_dist(unsigned int *map, unsigned long total, double *io_u_dist)
+void stat_calc_dist(uint64_t *map, unsigned long total, double *io_u_dist)
 {
 	int i;
 
@@ -342,7 +339,7 @@ void stat_calc_dist(unsigned int *map, unsigned long total, double *io_u_dist)
 }
 
 static void stat_calc_lat(struct thread_stat *ts, double *dst,
-			  unsigned int *src, int nr)
+			  uint64_t *src, int nr)
 {
 	unsigned long total = ddir_rw_sum(ts->total_io_u);
 	int i;
@@ -673,7 +670,6 @@ static int calc_block_percentiles(int nr_block_infos, uint32_t *block_infos,
 	if (len > 1)
 		qsort((void *)plist, len, sizeof(plist[0]), double_cmp);
 
-	nr_uninit = 0;
 	/* Start only after the uninit entries end */
 	for (nr_uninit = 0;
 	     nr_uninit < nr_block_infos
@@ -1860,13 +1856,14 @@ void __show_run_stats(void)
 		char time_buf[32];
 		struct timeval now;
 		unsigned long long ms_since_epoch;
+		time_t tv_sec;
 
 		gettimeofday(&now, NULL);
 		ms_since_epoch = (unsigned long long)(now.tv_sec) * 1000 +
 		                 (unsigned long long)(now.tv_usec) / 1000;
 
-		os_ctime_r((const time_t *) &now.tv_sec, time_buf,
-				sizeof(time_buf));
+		tv_sec = now.tv_sec;
+		os_ctime_r(&tv_sec, time_buf, sizeof(time_buf));
 		if (time_buf[strlen(time_buf) - 1] == '\n')
 			time_buf[strlen(time_buf) - 1] = '\0';
 
@@ -1945,9 +1942,9 @@ void __show_run_stats(void)
 
 void show_run_stats(void)
 {
-	fio_mutex_down(stat_mutex);
+	fio_sem_down(stat_sem);
 	__show_run_stats();
-	fio_mutex_up(stat_mutex);
+	fio_sem_up(stat_sem);
 }
 
 void __show_running_run_stats(void)
@@ -1957,7 +1954,7 @@ void __show_running_run_stats(void)
 	struct timespec ts;
 	int i;
 
-	fio_mutex_down(stat_mutex);
+	fio_sem_down(stat_sem);
 
 	rt = malloc(thread_number * sizeof(unsigned long long));
 	fio_gettime(&ts, NULL);
@@ -1983,7 +1980,7 @@ void __show_running_run_stats(void)
 			continue;
 		if (td->rusage_sem) {
 			td->update_rusage = 1;
-			fio_mutex_down(td->rusage_sem);
+			fio_sem_down(td->rusage_sem);
 		}
 		td->update_rusage = 0;
 	}
@@ -2000,7 +1997,7 @@ void __show_running_run_stats(void)
 	}
 
 	free(rt);
-	fio_mutex_up(stat_mutex);
+	fio_sem_up(stat_sem);
 }
 
 static bool status_interval_init;
@@ -2340,9 +2337,11 @@ static void _add_stat_to_log(struct io_log *iolog, unsigned long elapsed,
 		__add_stat_to_log(iolog, ddir, elapsed, log_max);
 }
 
-static long add_log_sample(struct thread_data *td, struct io_log *iolog,
-			   union io_sample_data data, enum fio_ddir ddir,
-			   unsigned int bs, uint64_t offset)
+static unsigned long add_log_sample(struct thread_data *td,
+				    struct io_log *iolog,
+				    union io_sample_data data,
+				    enum fio_ddir ddir, unsigned int bs,
+				    uint64_t offset)
 {
 	unsigned long elapsed, this_window;
 
@@ -2373,7 +2372,7 @@ static long add_log_sample(struct thread_data *td, struct io_log *iolog,
 	if (elapsed < iolog->avg_last[ddir])
 		return iolog->avg_last[ddir] - elapsed;
 	else if (this_window < iolog->avg_msec) {
-		int diff = iolog->avg_msec - this_window;
+		unsigned long diff = iolog->avg_msec - this_window;
 
 		if (inline_log(iolog) || diff > LOG_MSEC_SLACK)
 			return diff;
@@ -2460,7 +2459,7 @@ void add_clat_sample(struct thread_data *td, enum fio_ddir ddir,
 		this_window = elapsed - hw->hist_last;
 		
 		if (this_window >= iolog->hist_msec) {
-			unsigned int *io_u_plat;
+			uint64_t *io_u_plat;
 			struct io_u_plat_entry *dst;
 
 			/*
@@ -2470,7 +2469,7 @@ void add_clat_sample(struct thread_data *td, enum fio_ddir ddir,
 			 * located in iolog.c after printing this sample to the
 			 * log file.
 			 */
-			io_u_plat = (unsigned int *) td->ts.io_u_plat[ddir];
+			io_u_plat = (uint64_t *) td->ts.io_u_plat[ddir];
 			dst = malloc(sizeof(struct io_u_plat_entry));
 			memcpy(&(dst->io_u_plat), io_u_plat,
 				FIO_IO_U_PLAT_NR * sizeof(unsigned int));
@@ -2562,7 +2561,7 @@ static int __add_samples(struct thread_data *td, struct timespec *parent_tv,
 {
 	unsigned long spent, rate;
 	enum fio_ddir ddir;
-	unsigned int next, next_log;
+	unsigned long next, next_log;
 
 	next_log = avg_time;
 
@@ -2687,7 +2686,7 @@ int calc_log_samples(void)
 
 void stat_init(void)
 {
-	stat_mutex = fio_mutex_init(FIO_MUTEX_UNLOCKED);
+	stat_sem = fio_sem_init(FIO_SEM_UNLOCKED);
 }
 
 void stat_exit(void)
@@ -2696,8 +2695,8 @@ void stat_exit(void)
 	 * When we have the mutex, we know out-of-band access to it
 	 * have ended.
 	 */
-	fio_mutex_down(stat_mutex);
-	fio_mutex_remove(stat_mutex);
+	fio_sem_down(stat_sem);
+	fio_sem_remove(stat_sem);
 }
 
 /*

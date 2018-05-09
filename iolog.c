@@ -4,7 +4,6 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
-#include <libgen.h>
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -15,11 +14,11 @@
 
 #include "flist.h"
 #include "fio.h"
-#include "verify.h"
 #include "trim.h"
 #include "filelock.h"
 #include "smalloc.h"
 #include "blktrace.h"
+#include "pshared.h"
 
 static int iolog_flush(struct io_log *log);
 
@@ -64,6 +63,7 @@ void log_file(struct thread_data *td, struct fio_file *f,
 static void iolog_delay(struct thread_data *td, unsigned long delay)
 {
 	uint64_t usec = utime_since_now(&td->last_issue);
+	unsigned long orig_delay = delay;
 	uint64_t this_delay;
 	struct timespec ts;
 
@@ -89,8 +89,8 @@ static void iolog_delay(struct thread_data *td, unsigned long delay)
 	}
 
 	usec = utime_since_now(&ts);
-	if (usec > delay)
-		td->time_offset = usec - delay;
+	if (usec > orig_delay)
+		td->time_offset = usec - orig_delay;
 	else
 		td->time_offset = 0;
 }
@@ -184,7 +184,7 @@ int read_iolog_get(struct thread_data *td, struct io_u *io_u)
 void prune_io_piece_log(struct thread_data *td)
 {
 	struct io_piece *ipo;
-	struct rb_node *n;
+	struct fio_rb_node *n;
 
 	while ((n = rb_first(&td->io_hist_tree)) != NULL) {
 		ipo = rb_entry(n, struct io_piece, rb_node);
@@ -208,7 +208,7 @@ void prune_io_piece_log(struct thread_data *td)
  */
 void log_io_piece(struct thread_data *td, struct io_u *io_u)
 {
-	struct rb_node **p, *parent;
+	struct fio_rb_node **p, *parent;
 	struct io_piece *ipo, *__ipo;
 
 	ipo = malloc(sizeof(struct io_piece));
@@ -694,10 +694,10 @@ void free_log(struct io_log *log)
 	sfree(log);
 }
 
-unsigned long hist_sum(int j, int stride, unsigned int *io_u_plat,
-		unsigned int *io_u_plat_last)
+uint64_t hist_sum(int j, int stride, uint64_t *io_u_plat,
+		uint64_t *io_u_plat_last)
 {
-	unsigned long sum;
+	uint64_t sum;
 	int k;
 
 	if (io_u_plat_last) {
@@ -718,8 +718,8 @@ static void flush_hist_samples(FILE *f, int hist_coarseness, void *samples,
 	int log_offset;
 	uint64_t i, j, nr_samples;
 	struct io_u_plat_entry *entry, *entry_before;
-	unsigned int *io_u_plat;
-	unsigned int *io_u_plat_before;
+	uint64_t *io_u_plat;
+	uint64_t *io_u_plat_before;
 
 	int stride = 1 << hist_coarseness;
 	
@@ -743,10 +743,10 @@ static void flush_hist_samples(FILE *f, int hist_coarseness, void *samples,
 		fprintf(f, "%lu, %u, %u, ", (unsigned long) s->time,
 						io_sample_ddir(s), s->bs);
 		for (j = 0; j < FIO_IO_U_PLAT_NR - stride; j += stride) {
-			fprintf(f, "%lu, ", hist_sum(j, stride, io_u_plat,
-						io_u_plat_before));
+			fprintf(f, "%llu, ", (unsigned long long)
+			        hist_sum(j, stride, io_u_plat, io_u_plat_before));
 		}
-		fprintf(f, "%lu\n", (unsigned long)
+		fprintf(f, "%llu\n", (unsigned long long)
 		        hist_sum(FIO_IO_U_PLAT_NR - stride, stride, io_u_plat,
 					io_u_plat_before));
 
@@ -979,7 +979,7 @@ int iolog_file_inflate(const char *file)
 	struct iolog_compress ic;
 	z_stream stream;
 	struct stat sb;
-	ssize_t ret;
+	size_t ret;
 	size_t total;
 	void *buf;
 	FILE *f;
@@ -1001,12 +1001,12 @@ int iolog_file_inflate(const char *file)
 	ic.seq = 1;
 
 	ret = fread(ic.buf, ic.len, 1, f);
-	if (ret < 0) {
+	if (ret == 0 && ferror(f)) {
 		perror("fread");
 		fclose(f);
 		free(buf);
 		return 1;
-	} else if (ret != 1) {
+	} else if (ferror(f) || (!feof(f) && ret != 1)) {
 		log_err("fio: short read on reading log\n");
 		fclose(f);
 		free(buf);

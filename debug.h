@@ -1,9 +1,7 @@
 #ifndef FIO_DEBUG_H
 #define FIO_DEBUG_H
 
-#include <assert.h>
 #include "lib/types.h"
-#include "log.h"
 
 enum {
 	FD_PROCESS	= 0,
@@ -43,6 +41,7 @@ enum {
 	FIO_WARN_VERIFY_BUF	= 2,
 	FIO_WARN_ZONED_BUG	= 4,
 	FIO_WARN_IOLOG_DROP	= 8,
+	FIO_WARN_FADVISE	= 16,
 };
 
 #ifdef FIO_INC_DEBUG
@@ -52,7 +51,7 @@ struct debug_level {
 	unsigned long shift;
 	unsigned int jobno;
 };
-extern struct debug_level debug_levels[];
+extern const struct debug_level debug_levels[];
 
 extern unsigned long fio_debug;
 
@@ -60,7 +59,7 @@ void __dprint(int type, const char *str, ...) __attribute__((format (printf, 2, 
 
 #define dprint(type, str, args...)			\
 	do {						\
-		if ((((1 << type)) & fio_debug) == 0)	\
+		if (((1 << type) & fio_debug) == 0)	\
 			break;				\
 		__dprint((type), (str), ##args);	\
 	} while (0)					\

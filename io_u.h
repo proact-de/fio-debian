@@ -3,7 +3,6 @@
 
 #include "compiler/compiler.h"
 #include "os/os.h"
-#include "log.h"
 #include "io_ddir.h"
 #include "debug.h"
 #include "file.h"
@@ -113,9 +112,6 @@ struct io_u {
 #endif
 #ifdef CONFIG_SOLARISAIO
 		aio_result_t resultp;
-#endif
-#ifdef FIO_HAVE_BINJECT
-		struct b_user_cmd buc;
 #endif
 #ifdef CONFIG_RDMA
 		struct ibv_mr *mr;
