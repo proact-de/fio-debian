@@ -3,7 +3,7 @@ Author: Martin Steigerwald <martin.steigerwald@proact.de>
 
 --- a/Makefile
 +++ b/Makefile
-@@ -21,9 +21,9 @@
+@@ -20,9 +20,9 @@
  endif
  
  DEBUGFLAGS = -DFIO_INC_DEBUG
