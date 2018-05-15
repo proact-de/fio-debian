@@ -1,3 +1,10 @@
+fio (3.6-2) unstable; urgency=medium
+
+  * control: Build with librdmacm-dev and librbd-dev only on Linux platforms as
+    they are only available for those.
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 15 May 2018 10:21:30 +0200
+
 fio (3.6-1) unstable; urgency=medium
 
   * Imported upstream version 3.6.
