@@ -1,3 +1,10 @@
+fio (3.6-3) unstable; urgency=medium
+
+  * control: Also build libibverbs-dev only on Linux platforms as it is only
+    available for those.
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 15 May 2018 14:04:56 +0200
+
 fio (3.6-2) unstable; urgency=medium
 
   * control: Build with librdmacm-dev and librbd-dev only on Linux platforms as
