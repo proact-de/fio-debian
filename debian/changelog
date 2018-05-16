@@ -1,3 +1,11 @@
+fio (3.6-4) unstable; urgency=medium
+
+  * Contrary to what I stated in 3.5-1 changelog entry libnuma1-dev appears
+    to be available in buster/sid. As it is only available for Linux platforms
+    restrict the build dependency to those instead.
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 16 May 2018 11:24:41 +0200
+
 fio (3.6-3) unstable; urgency=medium
 
   * control: Also build libibverbs-dev only on Linux platforms as it is only
