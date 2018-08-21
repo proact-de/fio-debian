@@ -40,4 +40,3 @@ Description: flexible I/O tester - gui frontend
  fio contains the command line version of fio which acts as a backend
  to the GUI frontend. The frontend can talk to a locally or remotely
  running fio server.
-
