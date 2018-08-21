@@ -110,8 +110,6 @@ struct thread_options {
 	unsigned int write_hint;
 	unsigned int verify;
 	unsigned int do_verify;
-	unsigned int verifysort;
-	unsigned int verifysort_nr;
 	unsigned int verify_interval;
 	unsigned int verify_offset;
 	char verify_pattern[MAX_PATTERN_SIZE];
@@ -174,6 +172,7 @@ struct thread_options {
 	unsigned int fdatasync_blocks;
 	unsigned int barrier_blocks;
 	unsigned long long start_delay;
+	unsigned long long start_delay_orig;
 	unsigned long long start_delay_high;
 	unsigned long long timeout;
 	unsigned long long ramp_time;
@@ -318,6 +317,7 @@ struct thread_options {
 	unsigned int replay_align;
 	unsigned int replay_scale;
 	unsigned int replay_time_scale;
+	unsigned int replay_skip;
 
 	unsigned int per_job_logs;
 
@@ -391,8 +391,6 @@ struct thread_options_pack {
 	uint32_t write_hint;
 	uint32_t verify;
 	uint32_t do_verify;
-	uint32_t verifysort;
-	uint32_t verifysort_nr;
 	uint32_t verify_interval;
 	uint32_t verify_offset;
 	uint8_t verify_pattern[MAX_PATTERN_SIZE];
@@ -594,6 +592,7 @@ struct thread_options_pack {
 	uint32_t replay_align;
 	uint32_t replay_scale;
 	uint32_t replay_time_scale;
+	uint32_t replay_skip;
 
 	uint32_t per_job_logs;
 

@@ -362,7 +362,7 @@ static void stat_calc_lat(struct thread_stat *ts, double *dst,
  * To keep the terse format unaltered, add all of the ns latency
  * buckets to the first us latency bucket
  */
-void stat_calc_lat_nu(struct thread_stat *ts, double *io_u_lat_u)
+static void stat_calc_lat_nu(struct thread_stat *ts, double *io_u_lat_u)
 {
 	unsigned long ntotal = 0, total = ddir_rw_sum(ts->total_io_u);
 	int i;
@@ -1288,6 +1288,7 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 		usr_cpu = 0;
 		sys_cpu = 0;
 	}
+	json_object_add_value_int(root, "job_runtime", ts->total_run_time);
 	json_object_add_value_float(root, "usr_cpu", usr_cpu);
 	json_object_add_value_float(root, "sys_cpu", sys_cpu);
 	json_object_add_value_int(root, "ctx", ts->ctx);
@@ -1398,7 +1399,7 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 	if (ts->ss_dur) {
 		struct json_object *data;
 		struct json_array *iops, *bw;
-		int i, j, k;
+		int j, k, l;
 		char ss_buf[64];
 
 		snprintf(ss_buf, sizeof(ss_buf), "%s%s:%f%s",
@@ -1434,8 +1435,8 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 			j = ts->ss_head;
 		else
 			j = ts->ss_head == 0 ? ts->ss_dur - 1 : ts->ss_head - 1;
-		for (i = 0; i < ts->ss_dur; i++) {
-			k = (j + i) % ts->ss_dur;
+		for (l = 0; l < ts->ss_dur; l++) {
+			k = (j + l) % ts->ss_dur;
 			json_array_add_value_int(bw, ts->ss_bw_data[k]);
 			json_array_add_value_int(iops, ts->ss_iops_data[k]);
 		}
@@ -1934,17 +1935,12 @@ void __show_run_stats(void)
 		buf_output_free(out);
 	}
 
+	fio_idle_prof_cleanup();
+
 	log_info_flush();
 	free(runstats);
 	free(threadstats);
 	free(opt_lists);
-}
-
-void show_run_stats(void)
-{
-	fio_sem_down(stat_sem);
-	__show_run_stats();
-	fio_sem_up(stat_sem);
 }
 
 void __show_running_run_stats(void)
@@ -2212,12 +2208,14 @@ static struct io_logs *get_cur_log(struct io_log *iolog)
 	 * submissions, flag 'td' as needing a log regrow and we'll take
 	 * care of it on the submission side.
 	 */
-	if (iolog->td->o.io_submit_mode == IO_MODE_OFFLOAD ||
+	if ((iolog->td && iolog->td->o.io_submit_mode == IO_MODE_OFFLOAD) ||
 	    !per_unit_log(iolog))
 		return regrow_log(iolog);
 
-	iolog->td->flags |= TD_F_REGROW_LOGS;
-	assert(iolog->pending->nr_samples < iolog->pending->max_samples);
+	if (iolog->td)
+		iolog->td->flags |= TD_F_REGROW_LOGS;
+	if (iolog->pending)
+		assert(iolog->pending->nr_samples < iolog->pending->max_samples);
 	return iolog->pending;
 }
 

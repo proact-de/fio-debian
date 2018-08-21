@@ -28,7 +28,7 @@ static void handle_ts(struct fio_client *client, struct fio_net_cmd *cmd);
 static void handle_gs(struct fio_client *client, struct fio_net_cmd *cmd);
 static void handle_probe(struct fio_client *client, struct fio_net_cmd *cmd);
 static void handle_text(struct fio_client *client, struct fio_net_cmd *cmd);
-static void handle_stop(struct fio_client *client, struct fio_net_cmd *cmd);
+static void handle_stop(struct fio_client *client);
 static void handle_start(struct fio_client *client, struct fio_net_cmd *cmd);
 
 static void convert_text(struct fio_net_cmd *cmd);
@@ -116,6 +116,58 @@ static int read_data(int fd, void *data, size_t size)
 		return EAGAIN;
 
 	return 0;
+}
+
+static int read_ini_data(int fd, void *data, size_t size)
+{
+	char *p = data;
+	int ret = 0;
+	FILE *fp;
+	int dupfd;
+
+	dupfd = dup(fd);
+	if (dupfd < 0)
+		return errno;
+
+	fp = fdopen(dupfd, "r");
+	if (!fp) {
+		ret = errno;
+		close(dupfd);
+		goto out;
+	}
+
+	while (1) {
+		ssize_t len;
+		char buf[OPT_LEN_MAX+1], *sub;
+
+		if (!fgets(buf, sizeof(buf), fp)) {
+			if (ferror(fp)) {
+				if (errno == EAGAIN || errno == EINTR)
+					continue;
+				ret = errno;
+			}
+			break;
+		}
+
+		sub = fio_option_dup_subs(buf);
+		len = strlen(sub);
+		if (len + 1 > size) {
+			log_err("fio: no space left to read data\n");
+			free(sub);
+			ret = ENOSPC;
+			break;
+		}
+
+		memcpy(p, sub, len);
+		free(sub);
+		p += len;
+		*p = '\0';
+		size -= len;
+	}
+
+	fclose(fp);
+out:
+	return ret;
 }
 
 static void fio_client_json_init(void)
@@ -763,13 +815,17 @@ static int __fio_client_send_local_ini(struct fio_client *client,
 		return ret;
 	}
 
+	/*
+	 * Add extra space for variable expansion, but doesn't guarantee.
+	 */
+	sb.st_size += OPT_LEN_MAX;
 	p_size = sb.st_size + sizeof(*pdu);
 	pdu = malloc(p_size);
 	buf = pdu->buf;
 
 	len = sb.st_size;
 	p = buf;
-	if (read_data(fd, p, len)) {
+	if (read_ini_data(fd, p, len)) {
 		log_err("fio: failed reading job file %s\n", filename);
 		close(fd);
 		free(pdu);
@@ -1441,7 +1497,7 @@ static void handle_start(struct fio_client *client, struct fio_net_cmd *cmd)
 	sum_stat_clients += client->nr_stat;
 }
 
-static void handle_stop(struct fio_client *client, struct fio_net_cmd *cmd)
+static void handle_stop(struct fio_client *client)
 {
 	if (client->error)
 		log_info("client <%s>: exited with error %d\n", client->hostname, client->error);
@@ -1744,7 +1800,7 @@ int fio_handle_client(struct fio_client *client)
 		client->state = Client_stopped;
 		client->error = le32_to_cpu(pdu->error);
 		client->signal = le32_to_cpu(pdu->signal);
-		ops->stop(client, cmd);
+		ops->stop(client);
 		break;
 		}
 	case FIO_NET_CMD_ADD_JOB: {

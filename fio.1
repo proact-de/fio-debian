@@ -68,12 +68,11 @@ available ioengines.
 Convert \fIjobfile\fR to a set of command\-line options.
 .TP
 .BI \-\-readonly
-Turn on safety read\-only checks, preventing writes. The \fB\-\-readonly\fR
+Turn on safety read\-only checks, preventing writes and trims. The \fB\-\-readonly\fR
 option is an extra safety guard to prevent users from accidentally starting
-a write workload when that is not desired. Fio will only write if
-`rw=write/randwrite/rw/randrw' is given. This extra safety net can be used
-as an extra precaution as \fB\-\-readonly\fR will also enable a write check in
-the I/O engine core to prevent writes due to unknown user space bug(s).
+a write or trim workload when that is not desired. Fio will only modify the
+device under test if `rw=write/randwrite/rw/randrw/trim/randtrim/trimwrite'
+is given. This safety net can be used as an extra precaution.
 .TP
 .BI \-\-eta \fR=\fPwhen
 Specifies when real\-time ETA estimate should be printed. \fIwhen\fR may
@@ -1121,7 +1120,9 @@ at past I/O history. This means that some blocks may not be read or written,
 and that some blocks may be read/written more than once. If this option is
 used with \fBverify\fR and multiple blocksizes (via \fBbsrange\fR),
 only intact blocks are verified, i.e., partially\-overwritten blocks are
-ignored.
+ignored.  With an async I/O engine and an I/O depth > 1, it is possible for
+the same block to be overwritten, which can cause verification errors.  Either
+do not use norandommap in this case, or also use the lfsr random generator.
 .TP
 .BI softrandommap \fR=\fPbool
 See \fBnorandommap\fR. If fio runs with the random block map enabled and
@@ -1227,7 +1228,7 @@ If you want a workload that has 50% 2k reads and 50% 4k reads, while having
 90% 4k writes and 10% 8k writes, you would specify:
 .RS
 .P
-bssplit=2k/50:4k/50,4k/90,8k/10
+bssplit=2k/50:4k/50,4k/90:8k/10
 .RE
 .P
 Fio supports defining up to 64 different weights for each data direction.
@@ -1628,12 +1629,12 @@ constraint.
 .TP
 .B pmemblk
 Read and write using filesystem DAX to a file on a filesystem
-mounted with DAX on a persistent memory device through the NVML
+mounted with DAX on a persistent memory device through the PMDK
 libpmemblk library.
 .TP
 .B dev\-dax
 Read and write using device DAX to a persistent memory device (e.g.,
-/dev/dax0.0) through the NVML libpmem library.
+/dev/dax0.0) through the PMDK libpmem library.
 .TP
 .B external
 Prefix to specify loading an external I/O engine object file. Append
@@ -1649,7 +1650,7 @@ done other than creating the file.
 .TP
 .B libpmem
 Read and write using mmap I/O to a file on a filesystem
-mounted with DAX on a persistent memory device through the NVML
+mounted with DAX on a persistent memory device through the PMDK
 libpmem library.
 .SS "I/O engine specific parameters"
 In addition, there are some parameters which are only valid when a specific
@@ -1828,6 +1829,33 @@ unit access (fua) flag. Default: 0.
 .BI (sg)writefua \fR=\fPbool
 With writefua option set to 1, write operations include the force
 unit access (fua) flag. Default: 0.
+.TP
+.BI (sg)sg_write_mode \fR=\fPstr
+Specify the type of write commands to issue. This option can take three
+values:
+.RS
+.RS
+.TP
+.B write (default)
+Write opcodes are issued as usual
+.TP
+.B verify
+Issue WRITE AND VERIFY commands. The BYTCHK bit is set to 0. This
+directs the device to carry out a medium verification with no data
+comparison. The writefua option is ignored with this selection.
+.TP
+.B same
+Issue WRITE SAME commands. This transfers a single block to the device
+and writes this same block of data to a contiguous sequence of LBAs
+beginning at the specified offset. fio's block size parameter
+specifies the amount of data written with each command. However, the
+amount of data actually transferred to the device is equal to the
+device's block (sector) size. For a device with 512 byte sectors,
+blocksize=8k will write 16 sectors with each command. fio will still
+generate 8k of data for each command butonly the first 512 bytes will
+be used and transferred to the device. The writefua option is ignored
+with this selection.
+
 .SS "I/O depth"
 .TP
 .BI iodepth \fR=\fPint
@@ -2066,6 +2094,12 @@ value.
 .BI replay_scale \fR=\fPint
 Scale sector offsets down by this factor when replaying traces.
 .SS "Threads, processes and job synchronization"
+.TP
+.BI replay_skip \fR=\fPstr
+Sometimes it's useful to skip certain IO types in a replay trace. This could
+be, for instance, eliminating the writes in the trace. Or not replaying the
+trims/discards, if you are redirecting to a device that doesn't support them.
+This option takes a comma separated list of read, write, trim, sync.
 .TP
 .BI thread
 Fio defaults to creating jobs by using fork, however if this option is
@@ -2338,17 +2372,12 @@ that the written data is also correctly read back. If the data direction
 given is a read or random read, fio will assume that it should verify a
 previously written file. If the data direction includes any form of write,
 the verify will be of the newly written data.
+.P
+To avoid false verification errors, do not use the norandommap option when
+verifying data with async I/O engines and I/O depths > 1.  Or use the
+norandommap and the lfsr random generator together to avoid writing to the
+same offset with muliple outstanding I/Os.
 .RE
-.TP
-.BI verifysort \fR=\fPbool
-If true, fio will sort written verify blocks when it deems it faster to read
-them back in a sorted manner. This is often the case when overwriting an
-existing file, since the blocks are already laid out in the file system. You
-can ignore this option unless doing huge amounts of really fast I/O where
-the red\-black tree sorting CPU time becomes significant. Default: true.
-.TP
-.BI verifysort_nr \fR=\fPint
-Pre\-load and sort verify blocks for a read workload.
 .TP
 .BI verify_offset \fR=\fPint
 Swap the verification header with data somewhere else in the block before
