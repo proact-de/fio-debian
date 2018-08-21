@@ -1,6 +1,8 @@
 fio (3.8-1) unstable; urgency=medium
 
   * Imported upstream version 3.8.
+  * rules: Use '--disable-native' to disable build system local CPU optimizations
+    (Closes: #898473). Thank you, Sitsofe.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 21 Aug 2018 16:19:28 +0200
 
