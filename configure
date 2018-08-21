@@ -1894,15 +1894,15 @@ fi
 
 ##########################################
 # Report whether pmemblk engine is enabled
-print_config "NVML pmemblk engine" "$pmemblk"
+print_config "PMDK pmemblk engine" "$pmemblk"
 
 ##########################################
 # Report whether dev-dax engine is enabled
-print_config "NVML dev-dax engine" "$devdax"
+print_config "PMDK dev-dax engine" "$devdax"
 
 ##########################################
 # Report whether libpmem engine is enabled
-print_config "NVML libpmem engine" "$pmem"
+print_config "PMDK libpmem engine" "$pmem"
 
 ##########################################
 # Check if we have lex/yacc available
@@ -2218,10 +2218,10 @@ if test "$posix_pshared" = "yes" ; then
   output_sym "CONFIG_PSHARED"
 fi
 if test "$have_asprintf" = "yes" ; then
-    output_sym "HAVE_ASPRINTF"
+    output_sym "CONFIG_HAVE_ASPRINTF"
 fi
 if test "$have_vasprintf" = "yes" ; then
-    output_sym "HAVE_VASPRINTF"
+    output_sym "CONFIG_HAVE_VASPRINTF"
 fi
 if test "$linux_fallocate" = "yes" ; then
   output_sym "CONFIG_LINUX_FALLOCATE"

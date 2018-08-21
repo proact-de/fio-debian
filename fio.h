@@ -44,6 +44,7 @@
 #include "io_u_queue.h"
 #include "workqueue.h"
 #include "steadystate.h"
+#include "lib/nowarn_snprintf.h"
 
 #ifdef CONFIG_SOLARISAIO
 #include <sys/asynch.h>
@@ -405,8 +406,6 @@ struct thread_data {
 	struct flist_head trim_list;
 	unsigned long trim_entries;
 
-	struct flist_head next_rand_list;
-
 	/*
 	 * for fileservice, how often to switch to a new file
 	 */
@@ -470,7 +469,9 @@ enum {
 			break;						\
 		(td)->error = ____e;					\
 		if (!(td)->first_error)					\
-			snprintf(td->verror, sizeof(td->verror), "file:%s:%d, func=%s, error=%s", __FILE__, __LINE__, (func), (msg));		\
+			nowarn_snprintf(td->verror, sizeof(td->verror),	\
+					"file:%s:%d, func=%s, error=%s", \
+					__FILE__, __LINE__, (func), (msg)); \
 	} while (0)
 
 
@@ -532,19 +533,20 @@ extern bool eta_time_within_slack(unsigned int time);
 
 static inline void fio_ro_check(const struct thread_data *td, struct io_u *io_u)
 {
-	assert(!(io_u->ddir == DDIR_WRITE && !td_write(td)));
+	assert(!(io_u->ddir == DDIR_WRITE && !td_write(td)) &&
+	       !(io_u->ddir == DDIR_TRIM && !td_trim(td)));
 }
 
 #define REAL_MAX_JOBS		4096
 
-static inline int should_fsync(struct thread_data *td)
+static inline bool should_fsync(struct thread_data *td)
 {
 	if (td->last_was_sync)
-		return 0;
+		return false;
 	if (td_write(td) || td->o.override_sync)
-		return 1;
+		return true;
 
-	return 0;
+	return false;
 }
 
 /*
@@ -566,6 +568,7 @@ extern void fio_fill_default_options(struct thread_data *);
 extern int fio_show_option_help(const char *);
 extern void fio_options_set_ioengine_opts(struct option *long_options, struct thread_data *td);
 extern void fio_options_dup_and_init(struct option *);
+extern char *fio_option_dup_subs(const char *);
 extern void fio_options_mem_dupe(struct thread_data *);
 extern void td_fill_rand_seeds(struct thread_data *);
 extern void td_fill_verify_state_seed(struct thread_data *);
@@ -720,22 +723,17 @@ static inline bool option_check_rate(struct thread_data *td, enum fio_ddir ddir)
 	return false;
 }
 
-static inline bool __should_check_rate(struct thread_data *td,
-				       enum fio_ddir ddir)
+static inline bool __should_check_rate(struct thread_data *td)
 {
 	return (td->flags & TD_F_CHECK_RATE) != 0;
 }
 
 static inline bool should_check_rate(struct thread_data *td)
 {
-	if (__should_check_rate(td, DDIR_READ) && td->bytes_done[DDIR_READ])
-		return true;
-	if (__should_check_rate(td, DDIR_WRITE) && td->bytes_done[DDIR_WRITE])
-		return true;
-	if (__should_check_rate(td, DDIR_TRIM) && td->bytes_done[DDIR_TRIM])
-		return true;
+	if (!__should_check_rate(td))
+		return false;
 
-	return false;
+	return ddir_rw_sum(td->bytes_done) != 0;
 }
 
 static inline unsigned int td_max_bs(struct thread_data *td)

@@ -574,23 +574,6 @@ static int fixed_block_size(struct thread_options *o)
 		o->min_bs[DDIR_READ] == o->min_bs[DDIR_TRIM];
 }
 
-
-static unsigned long long get_rand_start_delay(struct thread_data *td)
-{
-	unsigned long long delayrange;
-	uint64_t frand_max;
-	unsigned long r;
-
-	delayrange = td->o.start_delay_high - td->o.start_delay;
-
-	frand_max = rand_max(&td->delay_state);
-	r = __rand(&td->delay_state);
-	delayrange = (unsigned long long) ((double) delayrange * (r / (frand_max + 1.0)));
-
-	delayrange += td->o.start_delay;
-	return delayrange;
-}
-
 /*
  * <3 Johannes
  */
@@ -611,13 +594,19 @@ static int fixup_options(struct thread_data *td)
 	struct thread_options *o = &td->o;
 	int ret = 0;
 
+	if (read_only && (td_write(td) || td_trim(td))) {
+		log_err("fio: trim and write operations are not allowed"
+			 " with the --readonly parameter.\n");
+		ret |= 1;
+	}
+
 #ifndef CONFIG_PSHARED
 	if (!o->use_thread) {
 		log_info("fio: this platform does not support process shared"
 			 " mutexes, forcing use of threads. Use the 'thread'"
 			 " option to get rid of this warning.\n");
 		o->use_thread = 1;
-		ret = warnings_fatal;
+		ret |= warnings_fatal;
 	}
 #endif
 
@@ -625,7 +614,7 @@ static int fixup_options(struct thread_data *td)
 		log_err("fio: read iolog overrides write_iolog\n");
 		free(o->write_iolog_file);
 		o->write_iolog_file = NULL;
-		ret = warnings_fatal;
+		ret |= warnings_fatal;
 	}
 
 	/*
@@ -679,20 +668,25 @@ static int fixup_options(struct thread_data *td)
 	    !o->norandommap) {
 		log_err("fio: Any use of blockalign= turns off randommap\n");
 		o->norandommap = 1;
-		ret = warnings_fatal;
+		ret |= warnings_fatal;
 	}
 
 	if (!o->file_size_high)
 		o->file_size_high = o->file_size_low;
 
-	if (o->start_delay_high)
-		o->start_delay = get_rand_start_delay(td);
+	if (o->start_delay_high) {
+		if (!o->start_delay_orig)
+			o->start_delay_orig = o->start_delay;
+		o->start_delay = rand_between(&td->delay_state,
+						o->start_delay_orig,
+						o->start_delay_high);
+	}
 
 	if (o->norandommap && o->verify != VERIFY_NONE
 	    && !fixed_block_size(o))  {
 		log_err("fio: norandommap given for variable block sizes, "
 			"verify limited\n");
-		ret = warnings_fatal;
+		ret |= warnings_fatal;
 	}
 	if (o->bs_unaligned && (o->odirect || td_ioengine_flagged(td, FIO_RAWIO)))
 		log_err("fio: bs_unaligned may not work with raw io\n");
@@ -736,7 +730,7 @@ static int fixup_options(struct thread_data *td)
 		log_err("fio: checking for in-flight overlaps when the "
 			"io_submit_mode is offload is not supported\n");
 		o->serialize_overlap = 0;
-		ret = warnings_fatal;
+		ret |= warnings_fatal;
 	}
 
 	if (o->nr_files > td->files_index)
@@ -750,7 +744,7 @@ static int fixup_options(struct thread_data *td)
 	    ((o->ratemin[DDIR_READ] + o->ratemin[DDIR_WRITE] + o->ratemin[DDIR_TRIM]) &&
 	    (o->rate_iops_min[DDIR_READ] + o->rate_iops_min[DDIR_WRITE] + o->rate_iops_min[DDIR_TRIM]))) {
 		log_err("fio: rate and rate_iops are mutually exclusive\n");
-		ret = 1;
+		ret |= 1;
 	}
 	if ((o->rate[DDIR_READ] && (o->rate[DDIR_READ] < o->ratemin[DDIR_READ])) ||
 	    (o->rate[DDIR_WRITE] && (o->rate[DDIR_WRITE] < o->ratemin[DDIR_WRITE])) ||
@@ -759,13 +753,13 @@ static int fixup_options(struct thread_data *td)
 	    (o->rate_iops[DDIR_WRITE] && (o->rate_iops[DDIR_WRITE] < o->rate_iops_min[DDIR_WRITE])) ||
 	    (o->rate_iops[DDIR_TRIM] && (o->rate_iops[DDIR_TRIM] < o->rate_iops_min[DDIR_TRIM]))) {
 		log_err("fio: minimum rate exceeds rate\n");
-		ret = 1;
+		ret |= 1;
 	}
 
 	if (!o->timeout && o->time_based) {
 		log_err("fio: time_based requires a runtime/timeout setting\n");
 		o->time_based = 0;
-		ret = warnings_fatal;
+		ret |= warnings_fatal;
 	}
 
 	if (o->fill_device && !o->size)
@@ -781,7 +775,7 @@ static int fixup_options(struct thread_data *td)
 			log_info("fio: multiple writers may overwrite blocks "
 				"that belong to other jobs. This can cause "
 				"verification failures.\n");
-			ret = warnings_fatal;
+			ret |= warnings_fatal;
 		}
 
 		/*
@@ -793,7 +787,7 @@ static int fixup_options(struct thread_data *td)
 			log_info("fio: verification read phase will never "
 				 "start because write phase uses all of "
 				 "runtime\n");
-			ret = warnings_fatal;
+			ret |= warnings_fatal;
 		}
 
 		if (!fio_option_is_set(o, refill_buffers))
@@ -829,15 +823,15 @@ static int fixup_options(struct thread_data *td)
 		if (td_ioengine_flagged(td, FIO_PIPEIO)) {
 			log_info("fio: cannot pre-read files with an IO engine"
 				 " that isn't seekable. Pre-read disabled.\n");
-			ret = warnings_fatal;
+			ret |= warnings_fatal;
 		}
 	}
 
-	if (!o->unit_base) {
+	if (o->unit_base == N2S_NONE) {
 		if (td_ioengine_flagged(td, FIO_BIT_BASED))
-			o->unit_base = 1;
+			o->unit_base = N2S_BITPERSEC;
 		else
-			o->unit_base = 8;
+			o->unit_base = N2S_BYTEPERSEC;
 	}
 
 #ifndef FIO_HAVE_ANY_FALLOCATE
@@ -853,7 +847,7 @@ static int fixup_options(struct thread_data *td)
 			 " this warning\n");
 		o->fsync_blocks = o->fdatasync_blocks;
 		o->fdatasync_blocks = 0;
-		ret = warnings_fatal;
+		ret |= warnings_fatal;
 	}
 #endif
 
@@ -866,7 +860,7 @@ static int fixup_options(struct thread_data *td)
 		log_err("fio: Windows does not support direct or non-buffered io with"
 				" the synchronous ioengines. Use the 'windowsaio' ioengine"
 				" with 'direct=1' and 'iodepth=1' instead.\n");
-		ret = 1;
+		ret |= 1;
 	}
 #endif
 
@@ -899,7 +893,7 @@ static int fixup_options(struct thread_data *td)
 	if (o->size && o->size < td_min_bs(td)) {
 		log_err("fio: size too small, must not be less than minimum block size: %llu < %u\n",
 			(unsigned long long) o->size, td_min_bs(td));
-		ret = 1;
+		ret |= 1;
 	}
 
 	/*
@@ -916,7 +910,7 @@ static int fixup_options(struct thread_data *td)
 
 	if (td_ioengine_flagged(td, FIO_NOEXTEND) && o->file_append) {
 		log_err("fio: can't append/extent with IO engine %s\n", td->io_ops->name);
-		ret = 1;
+		ret |= 1;
 	}
 
 	if (fio_option_is_set(o, gtod_cpu)) {
@@ -933,7 +927,7 @@ static int fixup_options(struct thread_data *td)
 		log_err("fio: block error histogram only available "
 			"with a single file per job, but %d files "
 			"provided\n", o->nr_files);
-		ret = 1;
+		ret |= 1;
 	}
 
 	if (fio_option_is_set(o, clat_percentiles) &&
@@ -947,7 +941,7 @@ static int fixup_options(struct thread_data *td)
 		   o->lat_percentiles && o->clat_percentiles) {
 		log_err("fio: lat_percentiles and clat_percentiles are "
 			"mutually exclusive\n");
-		ret = 1;
+		ret |= 1;
 	}
 
 	if (o->disable_lat)
@@ -997,23 +991,26 @@ void td_fill_verify_state_seed(struct thread_data *td)
 
 static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 {
+	unsigned int read_seed = td->rand_seeds[FIO_RAND_BS_OFF];
+	unsigned int write_seed = td->rand_seeds[FIO_RAND_BS1_OFF];
+	unsigned int trim_seed = td->rand_seeds[FIO_RAND_BS2_OFF];
 	int i;
 
 	/*
 	 * trimwrite is special in that we need to generate the same
 	 * offsets to get the "write after trim" effect. If we are
 	 * using bssplit to set buffer length distributions, ensure that
-	 * we seed the trim and write generators identically.
+	 * we seed the trim and write generators identically. Ditto for
+	 * verify, read and writes must have the same seed, if we are doing
+	 * read verify.
 	 */
-	if (td_trimwrite(td)) {
-		init_rand_seed(&td->bsrange_state[DDIR_READ], td->rand_seeds[FIO_RAND_BS_OFF], use64);
-		init_rand_seed(&td->bsrange_state[DDIR_WRITE], td->rand_seeds[FIO_RAND_BS1_OFF], use64);
-		init_rand_seed(&td->bsrange_state[DDIR_TRIM], td->rand_seeds[FIO_RAND_BS1_OFF], use64);
-	} else {
-		init_rand_seed(&td->bsrange_state[DDIR_READ], td->rand_seeds[FIO_RAND_BS_OFF], use64);
-		init_rand_seed(&td->bsrange_state[DDIR_WRITE], td->rand_seeds[FIO_RAND_BS1_OFF], use64);
-		init_rand_seed(&td->bsrange_state[DDIR_TRIM], td->rand_seeds[FIO_RAND_BS2_OFF], use64);
-	}
+	if (td->o.verify != VERIFY_NONE)
+		write_seed = read_seed;
+	if (td_trimwrite(td))
+		trim_seed = write_seed;
+	init_rand_seed(&td->bsrange_state[DDIR_READ], read_seed, use64);
+	init_rand_seed(&td->bsrange_state[DDIR_WRITE], write_seed, use64);
+	init_rand_seed(&td->bsrange_state[DDIR_TRIM], trim_seed, use64);
 
 	td_fill_verify_state_seed(td);
 	init_rand_seed(&td->rwmix_state, td->rand_seeds[FIO_RAND_MIX_OFF], false);
@@ -1453,6 +1450,11 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		}
 	}
 
+	if (setup_random_seeds(td)) {
+		td_verror(td, errno, "setup_random_seeds");
+		goto err;
+	}
+
 	if (fixup_options(td))
 		goto err;
 
@@ -1507,11 +1509,6 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 
 	td->groupid = groupid;
 	prev_group_jobs++;
-
-	if (setup_random_seeds(td)) {
-		td_verror(td, errno, "setup_random_seeds");
-		goto err;
-	}
 
 	if (setup_rate(td))
 		goto err;

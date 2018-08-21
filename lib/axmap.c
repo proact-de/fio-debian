@@ -37,6 +37,28 @@
 
 #define firstfree_valid(b)	((b)->first_free != (uint64_t) -1)
 
+static const unsigned long bit_masks[] = {
+	0x0000000000000000, 0x0000000000000001, 0x0000000000000003, 0x0000000000000007,
+	0x000000000000000f, 0x000000000000001f, 0x000000000000003f, 0x000000000000007f,
+	0x00000000000000ff, 0x00000000000001ff, 0x00000000000003ff, 0x00000000000007ff,
+	0x0000000000000fff, 0x0000000000001fff, 0x0000000000003fff, 0x0000000000007fff,
+	0x000000000000ffff, 0x000000000001ffff, 0x000000000003ffff, 0x000000000007ffff,
+	0x00000000000fffff, 0x00000000001fffff, 0x00000000003fffff, 0x00000000007fffff,
+	0x0000000000ffffff, 0x0000000001ffffff, 0x0000000003ffffff, 0x0000000007ffffff,
+	0x000000000fffffff, 0x000000001fffffff, 0x000000003fffffff, 0x000000007fffffff,
+	0x00000000ffffffff,
+#if BITS_PER_LONG == 64
+	0x00000001ffffffff, 0x00000003ffffffff, 0x00000007ffffffff, 0x0000000fffffffff,
+	0x0000001fffffffff, 0x0000003fffffffff, 0x0000007fffffffff, 0x000000ffffffffff,
+	0x000001ffffffffff, 0x000003ffffffffff, 0x000007ffffffffff, 0x00000fffffffffff,
+	0x00001fffffffffff, 0x00003fffffffffff, 0x00007fffffffffff, 0x0000ffffffffffff,
+	0x0001ffffffffffff, 0x0003ffffffffffff, 0x0007ffffffffffff, 0x000fffffffffffff,
+	0x001fffffffffffff, 0x003fffffffffffff, 0x007fffffffffffff, 0x00ffffffffffffff,
+	0x01ffffffffffffff, 0x03ffffffffffffff, 0x07ffffffffffffff, 0x0fffffffffffffff,
+	0x1fffffffffffffff, 0x3fffffffffffffff, 0x7fffffffffffffff, 0xffffffffffffffff
+#endif
+};
+
 struct axmap_level {
 	int level;
 	unsigned long map_size;
@@ -50,7 +72,7 @@ struct axmap {
 	uint64_t nr_bits;
 };
 
-static unsigned long ulog64(unsigned long val, unsigned int log)
+static inline unsigned long ulog64(unsigned long val, unsigned int log)
 {
 	while (log-- && val)
 		val >>= UNIT_SHIFT;
@@ -134,10 +156,10 @@ static bool axmap_handler(struct axmap *axmap, uint64_t bit_nr,
 			  void *), void *data)
 {
 	struct axmap_level *al;
+	uint64_t index = bit_nr;
 	int i;
 
 	for (i = 0; i < axmap->nr_levels; i++) {
-		unsigned long index = ulog64(bit_nr, i);
 		unsigned long offset = index >> UNIT_SHIFT;
 		unsigned int bit = index & BLOCKS_PER_UNIT_MASK;
 
@@ -145,26 +167,25 @@ static bool axmap_handler(struct axmap *axmap, uint64_t bit_nr,
 
 		if (func(al, offset, bit, data))
 			return true;
+
+		if (index)
+			index >>= UNIT_SHIFT;
 	}
 
 	return false;
 }
 
 static bool axmap_handler_topdown(struct axmap *axmap, uint64_t bit_nr,
-	bool (*func)(struct axmap_level *, unsigned long, unsigned int, void *),
-	void *data)
+	bool (*func)(struct axmap_level *, unsigned long, unsigned int, void *))
 {
-	struct axmap_level *al;
-	int i, level = axmap->nr_levels;
+	int i;
 
 	for (i = axmap->nr_levels - 1; i >= 0; i--) {
-		unsigned long index = ulog64(bit_nr, --level);
+		unsigned long index = ulog64(bit_nr, i);
 		unsigned long offset = index >> UNIT_SHIFT;
 		unsigned int bit = index & BLOCKS_PER_UNIT_MASK;
 
-		al = &axmap->levels[i];
-
-		if (func(al, offset, bit, data))
+		if (func(&axmap->levels[i], offset, bit, NULL))
 			return true;
 	}
 
@@ -194,28 +215,6 @@ struct axmap_set_data {
 	unsigned int set_bits;
 };
 
-static const unsigned long bit_masks[] = {
-	0x0000000000000000, 0x0000000000000001, 0x0000000000000003, 0x0000000000000007,
-	0x000000000000000f, 0x000000000000001f, 0x000000000000003f, 0x000000000000007f,
-	0x00000000000000ff, 0x00000000000001ff, 0x00000000000003ff, 0x00000000000007ff,
-	0x0000000000000fff, 0x0000000000001fff, 0x0000000000003fff, 0x0000000000007fff,
-	0x000000000000ffff, 0x000000000001ffff, 0x000000000003ffff, 0x000000000007ffff,
-	0x00000000000fffff, 0x00000000001fffff, 0x00000000003fffff, 0x00000000007fffff,
-	0x0000000000ffffff, 0x0000000001ffffff, 0x0000000003ffffff, 0x0000000007ffffff,
-	0x000000000fffffff, 0x000000001fffffff, 0x000000003fffffff, 0x000000007fffffff,
-	0x00000000ffffffff,
-#if BITS_PER_LONG == 64
-	0x00000001ffffffff, 0x00000003ffffffff, 0x00000007ffffffff, 0x0000000fffffffff,
-	0x0000001fffffffff, 0x0000003fffffffff, 0x0000007fffffffff, 0x000000ffffffffff,
-	0x000001ffffffffff, 0x000003ffffffffff, 0x000007ffffffffff, 0x00000fffffffffff,
-	0x00001fffffffffff, 0x00003fffffffffff, 0x00007fffffffffff, 0x0000ffffffffffff,
-	0x0001ffffffffffff, 0x0003ffffffffffff, 0x0007ffffffffffff, 0x000fffffffffffff,
-	0x001fffffffffffff, 0x003fffffffffffff, 0x007fffffffffffff, 0x00ffffffffffffff,
-	0x01ffffffffffffff, 0x03ffffffffffffff, 0x07ffffffffffffff, 0x0fffffffffffffff,
-	0x1fffffffffffffff, 0x3fffffffffffffff, 0x7fffffffffffffff, 0xffffffffffffffff
-#endif
-};
-
 static bool axmap_set_fn(struct axmap_level *al, unsigned long offset,
 			 unsigned int bit, void *__data)
 {
@@ -231,20 +230,24 @@ static bool axmap_set_fn(struct axmap_level *al, unsigned long offset,
 	 * Mask off any potential overlap, only sets contig regions
 	 */
 	overlap = al->map[offset] & mask;
-	if (overlap == mask)
+	if (overlap == mask) {
+done:
+		data->set_bits = 0;
 		return true;
+	}
 
-	while (overlap) {
-		unsigned long clear_mask = ~(1UL << ffz(~overlap));
+	if (overlap) {
+		const int __bit = ffz(~overlap);
 
-		mask &= clear_mask;
-		overlap &= clear_mask;
-		nr_bits--;
+		nr_bits = __bit - bit;
+		if (!nr_bits)
+			goto done;
+
+		mask = bit_masks[nr_bits] << bit;
 	}
 
 	assert(mask);
 	assert(!(al->map[offset] & mask));
-		
 	al->map[offset] |= mask;
 
 	if (!al->level)
@@ -303,7 +306,7 @@ unsigned int axmap_set_nr(struct axmap *axmap, uint64_t bit_nr,
 		unsigned int max_bits, this_set;
 
 		max_bits = BLOCKS_PER_UNIT - (bit_nr & BLOCKS_PER_UNIT_MASK);
-		if (max_bits < nr_bits)
+		if (nr_bits > max_bits)
 			data.nr_bits = max_bits;
 
 		this_set = data.nr_bits;
@@ -328,7 +331,7 @@ static bool axmap_isset_fn(struct axmap_level *al, unsigned long offset,
 bool axmap_isset(struct axmap *axmap, uint64_t bit_nr)
 {
 	if (bit_nr <= axmap->nr_bits)
-		return axmap_handler_topdown(axmap, bit_nr, axmap_isset_fn, NULL);
+		return axmap_handler_topdown(axmap, bit_nr, axmap_isset_fn);
 
 	return false;
 }
@@ -346,13 +349,8 @@ static uint64_t axmap_find_first_free(struct axmap *axmap, unsigned int level,
 	for (i = level; i >= 0; i--) {
 		struct axmap_level *al = &axmap->levels[i];
 
-		/*
-		 * Clear 'ret', this is a bug condition.
-		 */
-		if (index >= al->map_size) {
-			ret = -1ULL;
-			break;
-		}
+		if (index >= al->map_size)
+			goto err;
 
 		for (j = index; j < al->map_size; j++) {
 			if (al->map[j] == -1UL)
@@ -370,6 +368,7 @@ static uint64_t axmap_find_first_free(struct axmap *axmap, unsigned int level,
 	if (ret < axmap->nr_bits)
 		return ret;
 
+err:
 	return (uint64_t) -1ULL;
 }
 

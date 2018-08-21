@@ -211,7 +211,7 @@ void log_io_piece(struct thread_data *td, struct io_u *io_u)
 	struct fio_rb_node **p, *parent;
 	struct io_piece *ipo, *__ipo;
 
-	ipo = malloc(sizeof(struct io_piece));
+	ipo = calloc(1, sizeof(struct io_piece));
 	init_ipo(ipo);
 	ipo->file = io_u->file;
 	ipo->offset = io_u->offset;
@@ -227,16 +227,11 @@ void log_io_piece(struct thread_data *td, struct io_u *io_u)
 	}
 
 	/*
-	 * We don't need to sort the entries if we only performed sequential
-	 * writes. In this case, just reading back data in the order we wrote
-	 * it out is the faster but still safe.
-	 *
-	 * One exception is if we don't have a random map in which case we need
+	 * Only sort writes if we don't have a random map in which case we need
 	 * to check for duplicate blocks and drop the old one, which we rely on
 	 * the rb insert/lookup for handling.
 	 */
-	if (((!td->o.verifysort) || !td_random(td)) &&
-	      file_randommap(td, ipo->file)) {
+	if (file_randommap(td, ipo->file)) {
 		INIT_FLIST_HEAD(&ipo->list);
 		flist_add_tail(&ipo->list, &td->io_hist_list);
 		ipo->flags |= IP_F_ONLIST;
@@ -320,7 +315,7 @@ void unlog_io_piece(struct thread_data *td, struct io_u *io_u)
 	td->io_hist_len--;
 }
 
-void trim_io_piece(struct thread_data *td, const struct io_u *io_u)
+void trim_io_piece(const struct io_u *io_u)
 {
 	struct io_piece *ipo = io_u->ipo;
 
@@ -343,7 +338,7 @@ void write_iolog_close(struct thread_data *td)
  * Read version 2 iolog data. It is enhanced to include per-file logging,
  * syncs, etc.
  */
-static int read_iolog2(struct thread_data *td, FILE *f)
+static bool read_iolog2(struct thread_data *td, FILE *f)
 {
 	unsigned long long offset;
 	unsigned int bytes;
@@ -445,7 +440,7 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 		/*
 		 * Make note of file
 		 */
-		ipo = malloc(sizeof(*ipo));
+		ipo = calloc(1, sizeof(*ipo));
 		init_ipo(ipo);
 		ipo->ddir = rw;
 		if (rw == DDIR_WAIT) {
@@ -479,7 +474,7 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 	}
 
 	if (!reads && !writes && !waits)
-		return 1;
+		return false;
 	else if (reads && !writes)
 		td->o.td_ddir = TD_DDIR_READ;
 	else if (!reads && writes)
@@ -487,22 +482,22 @@ static int read_iolog2(struct thread_data *td, FILE *f)
 	else
 		td->o.td_ddir = TD_DDIR_RW;
 
-	return 0;
+	return true;
 }
 
 /*
  * open iolog, check version, and call appropriate parser
  */
-static int init_iolog_read(struct thread_data *td)
+static bool init_iolog_read(struct thread_data *td)
 {
 	char buffer[256], *p;
 	FILE *f;
-	int ret;
+	bool ret;
 
 	f = fopen(td->o.read_iolog_file, "r");
 	if (!f) {
 		perror("fopen read iolog");
-		return 1;
+		return false;
 	}
 
 	p = fgets(buffer, sizeof(buffer), f);
@@ -510,7 +505,7 @@ static int init_iolog_read(struct thread_data *td)
 		td_verror(td, errno, "iolog read");
 		log_err("fio: unable to read iolog\n");
 		fclose(f);
-		return 1;
+		return false;
 	}
 
 	/*
@@ -521,7 +516,7 @@ static int init_iolog_read(struct thread_data *td)
 		ret = read_iolog2(td, f);
 	else {
 		log_err("fio: iolog version 1 is no longer supported\n");
-		ret = 1;
+		ret = false;
 	}
 
 	fclose(f);
@@ -531,7 +526,7 @@ static int init_iolog_read(struct thread_data *td)
 /*
  * Set up a log for storing io patterns.
  */
-static int init_iolog_write(struct thread_data *td)
+static bool init_iolog_write(struct thread_data *td)
 {
 	struct fio_file *ff;
 	FILE *f;
@@ -540,7 +535,7 @@ static int init_iolog_write(struct thread_data *td)
 	f = fopen(td->o.write_iolog_file, "a");
 	if (!f) {
 		perror("fopen write iolog");
-		return 1;
+		return false;
 	}
 
 	/*
@@ -555,7 +550,7 @@ static int init_iolog_write(struct thread_data *td)
 	 */
 	if (fprintf(f, "%s\n", iolog_ver2) < 0) {
 		perror("iolog init\n");
-		return 1;
+		return false;
 	}
 
 	/*
@@ -564,12 +559,12 @@ static int init_iolog_write(struct thread_data *td)
 	for_each_file(td, ff, i)
 		log_file(td, ff, FIO_LOG_ADD_FILE);
 
-	return 0;
+	return true;
 }
 
-int init_iolog(struct thread_data *td)
+bool init_iolog(struct thread_data *td)
 {
-	int ret = 0;
+	bool ret;
 
 	if (td->o.read_iolog_file) {
 		int need_swap;
@@ -584,8 +579,10 @@ int init_iolog(struct thread_data *td)
 			ret = init_iolog_read(td);
 	} else if (td->o.write_iolog_file)
 		ret = init_iolog_write(td);
+	else
+		ret = true;
 
-	if (ret)
+	if (!ret)
 		td_verror(td, EINVAL, "failed initializing iolog");
 
 	return ret;
@@ -622,12 +619,12 @@ void setup_log(struct io_log **log, struct log_params *p,
 	}
 
 	if (l->td && l->td->o.io_submit_mode != IO_MODE_OFFLOAD) {
-		struct io_logs *p;
+		struct io_logs *__p;
 
-		p = calloc(1, sizeof(*l->pending));
-		p->max_samples = DEF_LOG_ENTRIES;
-		p->log = calloc(p->max_samples, log_entry_sz(l));
-		l->pending = p;
+		__p = calloc(1, sizeof(*l->pending));
+		__p->max_samples = DEF_LOG_ENTRIES;
+		__p->log = calloc(__p->max_samples, log_entry_sz(l));
+		l->pending = __p;
 	}
 
 	if (l->log_offset)

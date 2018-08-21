@@ -107,6 +107,149 @@ static int test_multi(size_t size, unsigned int bit_off)
 	return err;
 }
 
+struct overlap_test {
+	unsigned int start;
+	unsigned int nr;
+	unsigned int ret;
+};
+
+static int test_overlap(void)
+{
+	struct overlap_test tests[] = {
+		{
+			.start	= 0,
+			.nr	= 0,
+			.ret	= 0,
+		},
+		{
+			.start	= 16,
+			.nr	= 16,
+			.ret	= 16,
+		},
+		{
+			.start	= 16,
+			.nr	= 0,
+			.ret	= 0,
+		},
+		{
+			.start	= 0,
+			.nr	= 32,
+			.ret	= 16,
+		},
+		{
+			.start	= 48,
+			.nr	= 32,
+			.ret	= 32,
+		},
+		{
+			.start	= 32,
+			.nr	= 32,
+			.ret	= 16,
+		},
+		{
+			.start	= 79,
+			.nr	= 1,
+			.ret	= 0,
+		},
+		{
+			.start	= 80,
+			.nr	= 21,
+			.ret	= 21,
+		},
+		{
+			.start	= 102,
+			.nr	= 1,
+			.ret	= 1,
+		},
+		{
+			.start	= 101,
+			.nr	= 3,
+			.ret	= 1,
+		},
+		{
+			.start	= 106,
+			.nr	= 4,
+			.ret	= 4,
+		},
+		{
+			.start	= 105,
+			.nr	= 3,
+			.ret	= 1,
+		},
+		{
+			.start	= 120,
+			.nr	= 4,
+			.ret	= 4,
+		},
+		{
+			.start	= 118,
+			.nr	= 2,
+			.ret	= 2,
+		},
+		{
+			.start	= 118,
+			.nr	= 2,
+			.ret	= 0,
+		},
+		{
+			.start	= 1100,
+			.nr	= 1,
+			.ret	= 1,
+		},
+		{
+			.start	= 1000,
+			.nr	= 256,
+			.ret	= 100,
+		},
+		{
+			.start	= 22684,
+			.nr	= 1,
+			.ret	= 1,
+		},
+		{
+			.start	= 22670,
+			.nr	= 60,
+			.ret	= 14,
+		},
+		{
+			.start	= -1U,
+		},
+	};
+	struct axmap *map;
+	int entries, i, ret, err = 0;
+
+	entries = 0;
+	for (i = 0; tests[i].start != -1U; i++) {
+		unsigned int this = tests[i].start + tests[i].nr;
+
+		if (this > entries)
+			entries = this;
+	}
+
+	printf("Test overlaps...");
+	fflush(stdout);
+
+	map = axmap_new(entries);
+
+	for (i = 0; tests[i].start != -1U; i++) {
+		struct overlap_test *t = &tests[i];
+
+		ret = axmap_set_nr(map, t->start, t->nr);
+		if (ret != t->ret) {
+			printf("fail\n");
+			printf("start=%u, nr=%d, ret=%d: %d\n", t->start, t->nr,
+								t->ret, ret);
+			err = 1;
+			break;
+		}
+	}
+
+	if (!err)
+		printf("pass!\n");
+	axmap_free(map);
+	return err;
+}
+
 int main(int argc, char *argv[])
 {
 	size_t size = (1UL << 23) - 200;
@@ -124,6 +267,8 @@ int main(int argc, char *argv[])
 		return 2;
 	if (test_multi(size, 17))
 		return 3;
+	if (test_overlap())
+		return 4;
 
 	return 0;
 }
