@@ -1,3 +1,9 @@
+fio (3.8-1) unstable; urgency=medium
+
+  * Imported upstream version 3.8.
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 21 Aug 2018 16:19:28 +0200
+
 fio (3.6-4) unstable; urgency=medium
 
   * Contrary to what I stated in 3.5-1 changelog entry libnuma1-dev appears
