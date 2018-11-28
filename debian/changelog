@@ -1,6 +1,6 @@
 fio (3.12-1) UNRELEASED; urgency=medium
 
-  * Imported upstream version 3.12. 
+  * Imported upstream version 3.12.
   * patches: Refreshed.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 28 Nov 2018 14:56:59 +0100
