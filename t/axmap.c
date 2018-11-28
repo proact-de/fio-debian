@@ -5,12 +5,10 @@
 #include "../lib/lfsr.h"
 #include "../lib/axmap.h"
 
-static int test_regular(size_t size, int seed)
+static int test_regular(uint64_t size, int seed)
 {
 	struct fio_lfsr lfsr;
 	struct axmap *map;
-	size_t osize;
-	uint64_t ff;
 	int err;
 
 	printf("Using %llu entries...", (unsigned long long) size);
@@ -18,7 +16,6 @@ static int test_regular(size_t size, int seed)
 
 	lfsr_init(&lfsr, size, seed, seed & 0xF);
 	map = axmap_new(size);
-	osize = size;
 	err = 0;
 
 	while (size--) {
@@ -45,18 +42,161 @@ static int test_regular(size_t size, int seed)
 	if (err)
 		return err;
 
-	ff = axmap_next_free(map, osize);
-	if (ff != (uint64_t) -1ULL) {
-		printf("axmap_next_free broken: got %llu\n", (unsigned long long) ff);
+	printf("pass!\n");
+	axmap_free(map);
+	return 0;
+}
+
+static int check_next_free(struct axmap *map, uint64_t start, uint64_t expected)
+{
+
+	uint64_t ff;
+
+	ff = axmap_next_free(map, start);
+	if (ff != expected) {
+		printf("axmap_next_free broken: Expected %llu, got %llu\n",
+				(unsigned long long)expected, (unsigned long long) ff);
 		return 1;
 	}
+	return 0;
+}
+
+static int test_next_free(uint64_t size, int seed)
+{
+	struct fio_lfsr lfsr;
+	struct axmap *map;
+	uint64_t osize;
+	uint64_t ff, lastfree;
+	int err, i;
+
+	printf("Test next_free %llu entries...", (unsigned long long) size);
+	fflush(stdout);
+
+	map = axmap_new(size);
+	err = 0;
+
+
+	/* Empty map.  Next free after 0 should be 1. */
+	if (check_next_free(map, 0, 1))
+		err = 1;
+
+	/* Empty map.  Next free after 63 should be 64. */
+	if (check_next_free(map, 63, 64))
+		err = 1;
+
+	/* Empty map.  Next free after size - 2 should be size - 1 */
+	if (check_next_free(map, size - 2, size - 1))
+		err = 1;
+
+	/* Empty map.  Next free after size - 1 should be 0 */
+	if (check_next_free(map, size - 1, 0))
+		err = 1;
+
+	/* Empty map.  Next free after 63 should be 64. */
+	if (check_next_free(map, 63, 64))
+		err = 1;
+
+
+	/* Bit 63 set.  Next free after 62 should be 64. */
+	axmap_set(map, 63);
+	if (check_next_free(map, 62, 64))
+		err = 1;
+
+	/* Last bit set.  Next free after size - 2 should be 0. */
+	axmap_set(map, size - 1);
+	if (check_next_free(map, size - 2, 0))
+		err = 1;
+
+	/* Last bit set.  Next free after size - 1 should be 0. */
+	if (check_next_free(map, size - 1, 0))
+		err = 1;
+	
+	/* Last 64 bits set.  Next free after size - 66 or size - 65 should be 0. */
+	for (i=size - 65; i < size; i++)
+		axmap_set(map, i);
+	if (check_next_free(map, size - 66, 0))
+		err = 1;
+	if (check_next_free(map, size - 65, 0))
+		err = 1;
+	
+	/* Last 64 bits set.  Next free after size - 67 should be size - 66. */
+	if (check_next_free(map, size - 67, size - 66))
+		err = 1;
+
+	axmap_free(map);
+	
+	/* Start with a fresh map and mostly fill it up */
+	lfsr_init(&lfsr, size, seed, seed & 0xF);
+	map = axmap_new(size);
+	osize = size;
+
+	/* Leave 1 entry free */
+	size--;
+	while (size--) {
+		uint64_t val;
+
+		if (lfsr_next(&lfsr, &val)) {
+			printf("lfsr: short loop\n");
+			err = 1;
+			break;
+		}
+		if (axmap_isset(map, val)) {
+			printf("bit already set\n");
+			err = 1;
+			break;
+		}
+		axmap_set(map, val);
+		if (!axmap_isset(map, val)) {
+			printf("bit not set\n");
+			err = 1;
+			break;
+		}
+	}
+
+	/* Get last free bit */
+	lastfree = axmap_next_free(map, 0);
+	if (lastfree == -1ULL) {
+		printf("axmap_next_free broken: Couldn't find last free bit\n");
+		err = 1;
+	}
+
+	/* Start with last free bit and test wrap-around */
+	ff = axmap_next_free(map, lastfree);
+	if (ff != lastfree) {
+		printf("axmap_next_free broken: wrap-around test #1 failed\n");
+		err = 1;
+	}
+
+	/* Start with last bit and test wrap-around */
+	ff = axmap_next_free(map, osize - 1);
+	if (ff != lastfree) {
+		printf("axmap_next_free broken: wrap-around test #2 failed\n");
+		err = 1;
+	}
+
+	/* Set last free bit */
+	axmap_set(map, lastfree);
+	ff = axmap_next_free(map, 0);
+	if (ff != -1ULL) {
+		printf("axmap_next_free broken: Expected -1 from full map\n");
+		err = 1;
+	}
+
+	ff = axmap_next_free(map, osize);
+	if (ff != -1ULL) {
+		printf("axmap_next_free broken: Expected -1 from out of bounds request\n");
+		err = 1;
+	}
+
+	if (err)
+		return err;
 
 	printf("pass!\n");
 	axmap_free(map);
 	return 0;
 }
 
-static int test_multi(size_t size, unsigned int bit_off)
+static int test_multi(uint64_t size, unsigned int bit_off)
 {
 	unsigned int map_size = size;
 	struct axmap *map;
@@ -212,6 +352,11 @@ static int test_overlap(void)
 			.ret	= 14,
 		},
 		{
+			.start	= 22670,
+			.nr	= 60,
+			.ret	= 0,
+		},
+		{
 			.start	= -1U,
 		},
 	};
@@ -226,7 +371,7 @@ static int test_overlap(void)
 			entries = this;
 	}
 
-	printf("Test overlaps...");
+	printf("Test overlaps...\n");
 	fflush(stdout);
 
 	map = axmap_new(entries);
@@ -234,25 +379,23 @@ static int test_overlap(void)
 	for (i = 0; tests[i].start != -1U; i++) {
 		struct overlap_test *t = &tests[i];
 
+		printf("\tstart=%6u, nr=%3u: ", t->start, t->nr);
 		ret = axmap_set_nr(map, t->start, t->nr);
 		if (ret != t->ret) {
-			printf("fail\n");
-			printf("start=%u, nr=%d, ret=%d: %d\n", t->start, t->nr,
-								t->ret, ret);
+			printf("%3d (FAIL, wanted %d)\n", ret, t->ret);
 			err = 1;
 			break;
 		}
+		printf("%3d (PASS)\n", ret);
 	}
 
-	if (!err)
-		printf("pass!\n");
 	axmap_free(map);
 	return err;
 }
 
 int main(int argc, char *argv[])
 {
-	size_t size = (1UL << 23) - 200;
+	uint64_t size = (1ULL << 23) - 200;
 	int seed = 1;
 
 	if (argc > 1) {
@@ -269,6 +412,16 @@ int main(int argc, char *argv[])
 		return 3;
 	if (test_overlap())
 		return 4;
+	if (test_next_free(size, seed))
+		return 5;
+
+	/* Test 3 levels, all full:  64*64*64 */
+	if (test_next_free(64*64*64, seed))
+		return 6;
+
+	/* Test 4 levels, with 2 inner levels not full */
+	if (test_next_free(((((64*64)-63)*64)-63)*64*12, seed))
+		return 7;
 
 	return 0;
 }

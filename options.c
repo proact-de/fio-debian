@@ -52,7 +52,7 @@ static int bs_cmp(const void *p1, const void *p2)
 
 struct split {
 	unsigned int nr;
-	unsigned int val1[ZONESPLIT_MAX];
+	unsigned long long val1[ZONESPLIT_MAX];
 	unsigned long long val2[ZONESPLIT_MAX];
 };
 
@@ -119,7 +119,7 @@ static int bssplit_ddir(struct thread_options *o, enum fio_ddir ddir, char *str,
 			bool data)
 {
 	unsigned int i, perc, perc_missing;
-	unsigned int max_bs, min_bs;
+	unsigned long long max_bs, min_bs;
 	struct split split;
 
 	memset(&split, 0, sizeof(split));
@@ -482,7 +482,7 @@ static int str_rwmix_write_cb(void *data, unsigned long long *val)
 
 static int str_exitall_cb(void)
 {
-	exitall_on_terminate = 1;
+	exitall_on_terminate = true;
 	return 0;
 }
 
@@ -959,48 +959,6 @@ static int zone_split_ddir(struct thread_options *o, enum fio_ddir ddir,
 	return 0;
 }
 
-static void __td_zone_gen_index(struct thread_data *td, enum fio_ddir ddir)
-{
-	unsigned int i, j, sprev, aprev;
-	uint64_t sprev_sz;
-
-	td->zone_state_index[ddir] = malloc(sizeof(struct zone_split_index) * 100);
-
-	sprev_sz = sprev = aprev = 0;
-	for (i = 0; i < td->o.zone_split_nr[ddir]; i++) {
-		struct zone_split *zsp = &td->o.zone_split[ddir][i];
-
-		for (j = aprev; j < aprev + zsp->access_perc; j++) {
-			struct zone_split_index *zsi = &td->zone_state_index[ddir][j];
-
-			zsi->size_perc = sprev + zsp->size_perc;
-			zsi->size_perc_prev = sprev;
-
-			zsi->size = sprev_sz + zsp->size;
-			zsi->size_prev = sprev_sz;
-		}
-
-		aprev += zsp->access_perc;
-		sprev += zsp->size_perc;
-		sprev_sz += zsp->size;
-	}
-}
-
-/*
- * Generate state table for indexes, so we don't have to do it inline from
- * the hot IO path
- */
-static void td_zone_gen_index(struct thread_data *td)
-{
-	int i;
-
-	td->zone_state_index = malloc(DDIR_RWDIR_CNT *
-					sizeof(struct zone_split_index *));
-
-	for (i = 0; i < DDIR_RWDIR_CNT; i++)
-		__td_zone_gen_index(td, i);
-}
-
 static int parse_zoned_distribution(struct thread_data *td, const char *input,
 				    bool absolute)
 {
@@ -1055,9 +1013,7 @@ static int parse_zoned_distribution(struct thread_data *td, const char *input,
 		return ret;
 	}
 
-	if (!ret)
-		td_zone_gen_index(td);
-	else {
+	if (ret) {
 		for (i = 0; i < DDIR_RWDIR_CNT; i++)
 			td->o.zone_split_nr[i] = 0;
 	}
@@ -1199,7 +1155,7 @@ static int str_steadystate_cb(void *data, const char *str)
  * is escaped with a '\', then that ':' is part of the filename and does not
  * indicate a new file.
  */
-static char *get_next_name(char **ptr)
+char *get_next_str(char **ptr)
 {
 	char *str = *ptr;
 	char *p, *start;
@@ -1241,14 +1197,14 @@ static char *get_next_name(char **ptr)
 }
 
 
-static int get_max_name_idx(char *input)
+int get_max_str_idx(char *input)
 {
 	unsigned int cur_idx;
 	char *str, *p;
 
 	p = str = strdup(input);
 	for (cur_idx = 0; ; cur_idx++)
-		if (get_next_name(&str) == NULL)
+		if (get_next_str(&str) == NULL)
 			break;
 
 	free(p);
@@ -1268,9 +1224,9 @@ int set_name_idx(char *target, size_t tlen, char *input, int index,
 
 	p = str = strdup(input);
 
-	index %= get_max_name_idx(input);
+	index %= get_max_str_idx(input);
 	for (cur_idx = 0; cur_idx <= index; cur_idx++)
-		fname = get_next_name(&str);
+		fname = get_next_str(&str);
 
 	if (client_sockaddr_str[0] && unique_filename) {
 		len = snprintf(target, tlen, "%s/%s.", fname,
@@ -1282,6 +1238,23 @@ int set_name_idx(char *target, size_t tlen, char *input, int index,
 	free(p);
 
 	return len;
+}
+
+char* get_name_by_idx(char *input, int index)
+{
+	unsigned int cur_idx;
+	char *fname, *str, *p;
+
+	p = str = strdup(input);
+
+	index %= get_max_str_idx(input);
+	for (cur_idx = 0; cur_idx <= index; cur_idx++)
+		fname = get_next_str(&str);
+
+	fname = strdup(fname);
+	free(p);
+
+	return fname;
 }
 
 static int str_filename_cb(void *data, const char *input)
@@ -1300,7 +1273,7 @@ static int str_filename_cb(void *data, const char *input)
 	if (!td->files_index)
 		td->o.nr_files = 0;
 
-	while ((fname = get_next_name(&str)) != NULL) {
+	while ((fname = get_next_str(&str)) != NULL) {
 		if (!strlen(fname))
 			break;
 		add_file(td, fname, 0, 1);
@@ -1321,7 +1294,7 @@ static int str_directory_cb(void *data, const char fio_unused *unused)
 		return 0;
 
 	p = str = strdup(td->o.directory);
-	while ((dirname = get_next_name(&str)) != NULL) {
+	while ((dirname = get_next_str(&str)) != NULL) {
 		if (lstat(dirname, &sb) < 0) {
 			ret = errno;
 
@@ -1855,11 +1828,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .help = "RDMA IO engine",
 			  },
 #endif
-#ifdef CONFIG_FUSION_AW
-			  { .ival = "fusion-aw-sync",
-			    .help = "Fusion-io atomic write engine",
-			  },
-#endif
 #ifdef CONFIG_LINUX_EXT4_MOVE_EXTENT
 			  { .ival = "e4defrag",
 			    .help = "ext4 defrag engine",
@@ -1889,6 +1857,17 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			  },
 
 #endif
+#ifdef CONFIG_IME
+			  { .ival = "ime_psync",
+			    .help = "DDN's IME synchronous IO engine",
+			  },
+			  { .ival = "ime_psyncv",
+			    .help = "DDN's IME synchronous IO engine using iovecs",
+			  },
+			  { .ival = "ime_aio",
+			    .help = "DDN's IME asynchronous IO engine",
+			  },
+#endif
 #ifdef CONFIG_LINUX_DEVDAX
 			  { .ival = "dev-dax",
 			    .help = "DAX Device based IO engine",
@@ -1905,6 +1884,11 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 #ifdef CONFIG_LIBPMEM
 			  { .ival = "libpmem",
 			    .help = "PMDK libpmem based IO engine",
+			  },
+#endif
+#ifdef CONFIG_HTTP
+			  { .ival = "http",
+			    .help = "HTTP (WebDAV/S3) IO engine",
 			  },
 #endif
 		},
@@ -2112,7 +2096,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.name	= "bs",
 		.lname	= "Block size",
 		.alias	= "blocksize",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_ULL,
 		.off1	= offsetof(struct thread_options, bs[DDIR_READ]),
 		.off2	= offsetof(struct thread_options, bs[DDIR_WRITE]),
 		.off3	= offsetof(struct thread_options, bs[DDIR_TRIM]),
@@ -2129,7 +2113,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.name	= "ba",
 		.lname	= "Block size align",
 		.alias	= "blockalign",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_ULL,
 		.off1	= offsetof(struct thread_options, ba[DDIR_READ]),
 		.off2	= offsetof(struct thread_options, ba[DDIR_WRITE]),
 		.off3	= offsetof(struct thread_options, ba[DDIR_TRIM]),
@@ -2163,7 +2147,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	{
 		.name	= "bssplit",
 		.lname	= "Block size split",
-		.type	= FIO_OPT_STR,
+		.type	= FIO_OPT_STR_ULL,
 		.cb	= str_bssplit_cb,
 		.off1	= offsetof(struct thread_options, bssplit),
 		.help	= "Set a specific mix of block sizes",
@@ -2215,14 +2199,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.help	= "Set the random generator seed value",
 		.def	= "0x89",
 		.parent = "rw",
-		.category = FIO_OPT_C_IO,
-		.group	= FIO_OPT_G_RANDOM,
-	},
-	{
-		.name	= "use_os_rand",
-		.lname	= "Use OS random",
-		.type	= FIO_OPT_DEPRECATED,
-		.off1	= offsetof(struct thread_options, dep_use_os_rand),
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_RANDOM,
 	},
@@ -3135,6 +3111,17 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_IOLOG,
 	},
 	{
+		.name	= "read_iolog_chunked",
+		.lname	= "Read I/O log in parts",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct thread_options, read_iolog_chunked),
+		.def	= "0",
+		.parent	= "read_iolog",
+		.help	= "Parse IO pattern in chunks",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_IOLOG,
+	},
+	{
 		.name	= "replay_no_stall",
 		.lname	= "Don't stall on replay",
 		.type	= FIO_OPT_BOOL,
@@ -3204,6 +3191,35 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.group	= FIO_OPT_G_IOLOG,
 	},
 	{
+		.name	= "merge_blktrace_file",
+		.lname	= "Merged blktrace output filename",
+		.type	= FIO_OPT_STR_STORE,
+		.off1	= offsetof(struct thread_options, merge_blktrace_file),
+		.help	= "Merged blktrace output filename",
+		.category = FIO_OPT_C_IO,
+		.group = FIO_OPT_G_IOLOG,
+	},
+	{
+		.name	= "merge_blktrace_scalars",
+		.lname	= "Percentage to scale each trace",
+		.type	= FIO_OPT_FLOAT_LIST,
+		.off1	= offsetof(struct thread_options, merge_blktrace_scalars),
+		.maxlen	= FIO_IO_U_LIST_MAX_LEN,
+		.help	= "Percentage to scale each trace",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_IOLOG,
+	},
+	{
+		.name	= "merge_blktrace_iters",
+		.lname	= "Number of iterations to run per trace",
+		.type	= FIO_OPT_FLOAT_LIST,
+		.off1	= offsetof(struct thread_options, merge_blktrace_iters),
+		.maxlen	= FIO_IO_U_LIST_MAX_LEN,
+		.help	= "Number of iterations to run per trace",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_IOLOG,
+	},
+	{
 		.name	= "exec_prerun",
 		.lname	= "Pre-execute runnable",
 		.type	= FIO_OPT_STR_STORE,
@@ -3240,6 +3256,30 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	},
 #endif
 	{
+		.name	= "zonemode",
+		.lname	= "Zone mode",
+		.help	= "Mode for the zonesize, zonerange and zoneskip parameters",
+		.type	= FIO_OPT_STR,
+		.off1	= offsetof(struct thread_options, zone_mode),
+		.def	= "none",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_ZONE,
+		.posval	= {
+			   { .ival = "none",
+			     .oval = ZONE_MODE_NONE,
+			     .help = "no zoning",
+			   },
+			   { .ival = "strided",
+			     .oval = ZONE_MODE_STRIDED,
+			     .help = "strided mode - random I/O is restricted to a single zone",
+			   },
+			   { .ival = "zbd",
+			     .oval = ZONE_MODE_ZBD,
+			     .help = "zoned block device mode - random I/O selects one of multiple zones randomly",
+			   },
+		},
+	},
+	{
 		.name	= "zonesize",
 		.lname	= "Zone size",
 		.type	= FIO_OPT_STR_VAL,
@@ -3269,6 +3309,52 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.help	= "Space between IO zones",
 		.def	= "0",
 		.interval = 1024 * 1024,
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_ZONE,
+	},
+	{
+		.name	= "read_beyond_wp",
+		.lname	= "Allow reads beyond the zone write pointer",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct thread_options, read_beyond_wp),
+		.help	= "Allow reads beyond the zone write pointer",
+		.def	= "0",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_INVALID,
+	},
+	{
+		.name	= "max_open_zones",
+		.lname	= "Maximum number of open zones",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct thread_options, max_open_zones),
+		.maxval	= FIO_MAX_OPEN_ZBD_ZONES,
+		.help	= "Limit random writes to SMR drives to the specified"
+			  " number of sequential zones",
+		.def	= "0",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_INVALID,
+	},
+	{
+		.name	= "zone_reset_threshold",
+		.lname	= "Zone reset threshold",
+		.help	= "Zoned block device reset threshold",
+		.type	= FIO_OPT_FLOAT_LIST,
+		.maxlen	= 1,
+		.off1	= offsetof(struct thread_options, zrt),
+		.minfp	= 0,
+		.maxfp	= 1,
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_ZONE,
+	},
+	{
+		.name	= "zone_reset_frequency",
+		.lname	= "Zone reset frequency",
+		.help	= "Zoned block device zone reset frequency in HZ",
+		.type	= FIO_OPT_FLOAT_LIST,
+		.maxlen	= 1,
+		.off1	= offsetof(struct thread_options, zrf),
+		.minfp	= 0,
+		.maxfp	= 1,
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_ZONE,
 	},

@@ -35,7 +35,6 @@ int rand_r(unsigned *);
 #define FIO_HAVE_CPU_AFFINITY
 #define FIO_HAVE_CHARDEV_SIZE
 #define FIO_HAVE_GETTID
-#define FIO_USE_GENERIC_RAND
 
 #define FIO_PREFERRED_ENGINE		"windowsaio"
 #define FIO_PREFERRED_CLOCK_SOURCE	CS_CGETTIME
@@ -73,6 +72,10 @@ int rand_r(unsigned *);
 
 /* Winsock doesn't support MSG_WAIT */
 #define OS_MSG_DONTWAIT	0
+
+#ifndef S_ISSOCK
+#define S_ISSOCK(x) 0
+#endif
 
 #define SIGCONT	0
 #define SIGUSR1	1

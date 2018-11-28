@@ -1,4 +1,4 @@
-#include <malloc.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <glib.h>
@@ -121,7 +121,7 @@ static void gfio_text_op(struct fio_client *client, struct fio_net_cmd *cmd)
 	GtkTreeIter iter;
 	struct tm *tm;
 	time_t sec;
-	char tmp[64], timebuf[80];
+	char tmp[64], timebuf[96];
 
 	sec = p->log_sec;
 	tm = localtime(&sec);

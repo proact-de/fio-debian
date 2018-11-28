@@ -18,6 +18,7 @@
 
 #include "fio.h"
 #include "diskutil.h"
+#include "zbd.h"
 
 static FLIST_HEAD(engine_list);
 
@@ -279,7 +280,7 @@ out:
 enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 {
 	const enum fio_ddir ddir = acct_ddir(io_u);
-	unsigned long buflen = io_u->xfer_buflen;
+	unsigned long long buflen = io_u->xfer_buflen;
 	enum fio_q_status ret;
 
 	dprint_io_u(io_u, "queue");
@@ -287,6 +288,15 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 
 	assert((io_u->flags & IO_U_F_FLIGHT) == 0);
 	io_u_set(td, io_u, IO_U_F_FLIGHT);
+
+	/*
+	 * If overlap checking was enabled in offload mode we
+	 * can release this lock that was acquired when we
+	 * started the overlap check because the IO_U_F_FLIGHT
+	 * flag is now set
+	 */
+	if (td_offload_overlap(td))
+		pthread_mutex_unlock(&overlap_check);
 
 	assert(fio_file_open(io_u->file));
 
@@ -319,6 +329,10 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	}
 
 	ret = td->io_ops->queue(td, io_u);
+	if (ret != FIO_Q_BUSY && io_u->post_submit) {
+		io_u->post_submit(io_u, io_u->error == 0);
+		io_u->post_submit = NULL;
+	}
 
 	unlock_file(td, io_u->file);
 
@@ -350,7 +364,14 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 			 "invalid block size. Try setting direct=0.\n");
 	}
 
-	if (!td->io_ops->commit || io_u->ddir == DDIR_TRIM) {
+	if (zbd_unaligned_write(io_u->error) &&
+	    td->io_issues[io_u->ddir & 1] == 1 &&
+	    td->o.zone_mode != ZONE_MODE_ZBD) {
+		log_info("fio: first I/O failed. If %s is a zoned block device, consider --zonemode=zbd\n",
+			 io_u->file->file_name);
+	}
+
+	if (!td->io_ops->commit) {
 		io_u_mark_submit(td, 1);
 		io_u_mark_complete(td, 1);
 	}
@@ -431,6 +452,14 @@ void td_io_commit(struct thread_data *td)
 
 int td_io_open_file(struct thread_data *td, struct fio_file *f)
 {
+	if (fio_file_closing(f)) {
+		/*
+		 * Open translates to undo closing.
+		 */
+		fio_file_clear_closing(f);
+		get_file(f);
+		return 0;
+	}
 	assert(!fio_file_open(f));
 	assert(f->fd == -1);
 	assert(td->io_ops->open_file);
@@ -539,11 +568,6 @@ int td_io_close_file(struct thread_data *td, struct fio_file *f)
 	 * mark as closing, do real close when last io on it has completed
 	 */
 	fio_file_set_closing(f);
-
-	disk_util_dec(f->du);
-
-	if (td->o.file_lock_mode != FILE_LOCK_NONE)
-		unlock_file_all(td, f);
 
 	return put_file(td, f);
 }

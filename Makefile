@@ -50,7 +50,7 @@ SOURCE :=	$(sort $(patsubst $(SRCDIR)/%,%,$(wildcard $(SRCDIR)/crc/*.c)) \
 		gettime-thread.c helpers.c json.c idletime.c td_error.c \
 		profiles/tiobench.c profiles/act.c io_u_queue.c filelock.c \
 		workqueue.c rate-submit.c optgroup.c helper_thread.c \
-		steadystate.c
+		steadystate.c zone-dist.c
 
 ifdef CONFIG_LIBHDFS
   HDFSFLAGS= -I $(JAVA_HOME)/include -I $(JAVA_HOME)/include/linux -I $(FIO_LIBHDFS_INCLUDE)
@@ -86,9 +86,6 @@ endif
 ifdef CONFIG_GUASI
   SOURCE += engines/guasi.c
 endif
-ifdef CONFIG_FUSION_AW
-  SOURCE += engines/fusion-aw.c
-endif
 ifdef CONFIG_SOLARISAIO
   SOURCE += engines/solarisaio.c
 endif
@@ -100,6 +97,9 @@ ifdef CONFIG_RADOS
 endif
 ifdef CONFIG_RBD
   SOURCE += engines/rbd.c
+endif
+ifdef CONFIG_HTTP
+  SOURCE += engines/http.c
 endif
 SOURCE += oslib/asprintf.c
 ifndef CONFIG_STRSEP
@@ -141,6 +141,12 @@ ifdef CONFIG_LINUX_DEVDAX
 endif
 ifdef CONFIG_LIBPMEM
   SOURCE += engines/libpmem.c
+endif
+ifdef CONFIG_IME
+  SOURCE += engines/ime.c
+endif
+ifdef CONFIG_LINUX_BLKZONED
+  SOURCE += zbd.c
 endif
 
 ifeq ($(CONFIG_TARGET_OS), Linux)
@@ -192,7 +198,7 @@ endif
 ifneq (,$(findstring CYGWIN,$(CONFIG_TARGET_OS)))
   SOURCE += os/windows/posix.c
   LIBS	 += -lpthread -lpsapi -lws2_32
-  CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format -static
+  CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format
 endif
 
 OBJS := $(SOURCE:.c=.o)
@@ -294,6 +300,23 @@ T_PROGS += $(T_VS_PROGS)
 
 PROGS += $(T_PROGS)
 
+ifdef CONFIG_HAVE_CUNIT
+UT_OBJS = unittests/unittest.o
+UT_OBJS += unittests/lib/memalign.o
+UT_OBJS += unittests/lib/strntol.o
+UT_OBJS += unittests/oslib/strlcat.o
+UT_OBJS += unittests/oslib/strndup.o
+UT_TARGET_OBJS = lib/memalign.o
+UT_TARGET_OBJS += lib/strntol.o
+UT_TARGET_OBJS += oslib/strlcat.o
+UT_TARGET_OBJS += oslib/strndup.o
+UT_PROGS = unittests/unittest
+else
+UT_OBJS =
+UT_TARGET_OBJS =
+UT_PROGS =
+endif
+
 ifneq ($(findstring $(MAKEFLAGS),s),s)
 ifndef V
 	QUIET_CC	= @echo '   ' CC $@;
@@ -320,7 +343,7 @@ mandir = $(prefix)/man
 sharedir = $(prefix)/share/fio
 endif
 
-all: $(PROGS) $(T_TEST_PROGS) $(SCRIPTS) FORCE
+all: $(PROGS) $(T_TEST_PROGS) $(UT_PROGS) $(SCRIPTS) FORCE
 
 .PHONY: all install clean test
 .PHONY: FORCE cscope
@@ -461,8 +484,13 @@ t/fio-verify-state: $(T_VS_OBJS)
 t/time-test: $(T_TT_OBJS)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_TT_OBJS) $(LIBS)
 
+ifdef CONFIG_HAVE_CUNIT
+unittests/unittest: $(UT_OBJS) $(UT_TARGET_OBJS)
+	$(QUIET_LINK)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(UT_OBJS) $(UT_TARGET_OBJS) -lcunit
+endif
+
 clean: FORCE
-	@rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(PROGS) $(T_PROGS) $(T_TEST_PROGS) core.* core gfio FIO-VERSION-FILE *.[do] lib/*.d oslib/*.[do] crc/*.d engines/*.[do] profiles/*.[do] t/*.[do] config-host.mak config-host.h y.tab.[ch] lex.yy.c exp/*.[do] lexer.h
+	@rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(UT_OBJS) $(PROGS) $(T_PROGS) $(T_TEST_PROGS) core.* core gfio unittests/unittest FIO-VERSION-FILE *.[do] lib/*.d oslib/*.[do] crc/*.d engines/*.[do] profiles/*.[do] t/*.[do] unittests/*.[do] unittests/*/*.[do] config-host.mak config-host.h y.tab.[ch] lex.yy.c exp/*.[do] lexer.h
 	@rm -rf  doc/output
 
 distclean: clean FORCE
