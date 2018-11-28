@@ -2,7 +2,7 @@ fio (3.12-1) UNRELEASED; urgency=medium
 
   * Imported upstream version 3.12.
   * patches: Refreshed.
-  * copyright: Removed files that upstream removed like engines/fusion-aw.c.
+  * copyright: Removed engines/fusion-aw.c, removed by upstream.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 28 Nov 2018 14:56:59 +0100
 
