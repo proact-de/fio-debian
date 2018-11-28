@@ -1,4 +1,4 @@
-fio (3.12) UNRELEASED; urgency=medium
+fio (3.12-1) UNRELEASED; urgency=medium
 
   * Imported upstream version 3.12. 
   * patches: Refreshed.
