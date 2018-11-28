@@ -57,7 +57,9 @@
 /*
  * "local" is pseudo-policy
  */
-#define MPOL_LOCAL MPOL_MAX
+#ifndef MPOL_LOCAL
+#define MPOL_LOCAL 4
+#endif
 #endif
 
 #ifdef CONFIG_CUDA
@@ -166,6 +168,8 @@ struct zone_split_index {
 	uint64_t size;
 	uint64_t size_prev;
 };
+
+#define FIO_MAX_OPEN_ZBD_ZONES 128
 
 /*
  * This describes a single thread/process executing a fio job.
@@ -399,6 +403,11 @@ struct thread_data {
 	 * For IO replaying
 	 */
 	struct flist_head io_log_list;
+	FILE *io_log_rfile;
+	unsigned int io_log_current;
+	unsigned int io_log_checkmark;
+	unsigned int io_log_highmark;
+	struct timespec io_log_highmark_time;
 
 	/*
 	 * For tracking/handling discards
@@ -496,7 +505,7 @@ enum {
 #define __fio_stringify_1(x)	#x
 #define __fio_stringify(x)	__fio_stringify_1(x)
 
-extern int exitall_on_terminate;
+extern bool exitall_on_terminate;
 extern unsigned int thread_number;
 extern unsigned int stat_number;
 extern int shm_id;
@@ -505,7 +514,7 @@ extern int output_format;
 extern int append_terse_output;
 extern int temp_stall_ts;
 extern uintptr_t page_mask, page_size;
-extern int read_only;
+extern bool read_only;
 extern int eta_print;
 extern int eta_new_line;
 extern unsigned int eta_interval_msec;
@@ -516,9 +525,10 @@ extern enum fio_cs fio_clock_source;
 extern int fio_clock_source_set;
 extern int warnings_fatal;
 extern int terse_version;
-extern int is_backend;
+extern bool is_backend;
+extern bool is_local_backend;
 extern int nr_clients;
-extern int log_syslog;
+extern bool log_syslog;
 extern int status_interval;
 extern const char fio_version_string[];
 extern char *trigger_file;
@@ -528,6 +538,11 @@ extern long long trigger_timeout;
 extern char *aux_path;
 
 extern struct thread_data *threads;
+
+static inline bool is_running_backend(void)
+{
+	return is_backend || is_local_backend;
+}
 
 extern bool eta_time_within_slack(unsigned int time);
 
@@ -736,17 +751,17 @@ static inline bool should_check_rate(struct thread_data *td)
 	return ddir_rw_sum(td->bytes_done) != 0;
 }
 
-static inline unsigned int td_max_bs(struct thread_data *td)
+static inline unsigned long long td_max_bs(struct thread_data *td)
 {
-	unsigned int max_bs;
+	unsigned long long max_bs;
 
 	max_bs = max(td->o.max_bs[DDIR_READ], td->o.max_bs[DDIR_WRITE]);
 	return max(td->o.max_bs[DDIR_TRIM], max_bs);
 }
 
-static inline unsigned int td_min_bs(struct thread_data *td)
+static inline unsigned long long td_min_bs(struct thread_data *td)
 {
-	unsigned int min_bs;
+	unsigned long long min_bs;
 
 	min_bs = min(td->o.min_bs[DDIR_READ], td->o.min_bs[DDIR_WRITE]);
 	return min(td->o.min_bs[DDIR_TRIM], min_bs);
@@ -757,20 +772,23 @@ static inline bool td_async_processing(struct thread_data *td)
 	return (td->flags & TD_F_NEED_LOCK) != 0;
 }
 
+static inline bool td_offload_overlap(struct thread_data *td)
+{
+	return td->o.serialize_overlap && td->o.io_submit_mode == IO_MODE_OFFLOAD;
+}
+
 /*
  * We currently only need to do locking if we have verifier threads
  * accessing our internal structures too
  */
-static inline void td_io_u_lock(struct thread_data *td)
+static inline void __td_io_u_lock(struct thread_data *td)
 {
-	if (td_async_processing(td))
-		pthread_mutex_lock(&td->io_u_lock);
+	pthread_mutex_lock(&td->io_u_lock);
 }
 
-static inline void td_io_u_unlock(struct thread_data *td)
+static inline void __td_io_u_unlock(struct thread_data *td)
 {
-	if (td_async_processing(td))
-		pthread_mutex_unlock(&td->io_u_lock);
+	pthread_mutex_unlock(&td->io_u_lock);
 }
 
 static inline void td_io_u_free_notify(struct thread_data *td)
@@ -838,5 +856,8 @@ enum {
 
 extern void exec_trigger(const char *);
 extern void check_trigger_file(void);
+
+extern bool in_flight_overlap(struct io_u_queue *q, struct io_u *io_u);
+extern pthread_mutex_t overlap_check;
 
 #endif

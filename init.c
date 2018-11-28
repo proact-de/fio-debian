@@ -30,6 +30,7 @@
 #include "idletime.h"
 #include "filelock.h"
 #include "steadystate.h"
+#include "blktrace.h"
 
 #include "oslib/getopt.h"
 #include "oslib/strcasestr.h"
@@ -44,15 +45,16 @@ const char fio_version_string[] = FIO_VERSION;
 
 static char **ini_file;
 static int max_jobs = FIO_MAX_JOBS;
-static int dump_cmdline;
-static int parse_only;
+static bool dump_cmdline;
+static bool parse_only;
+static bool merge_blktrace_only;
 
 static struct thread_data def_thread;
 struct thread_data *threads = NULL;
 static char **job_sections;
 static int nr_job_sections;
 
-int exitall_on_terminate = 0;
+bool exitall_on_terminate = false;
 int output_format = FIO_OUTPUT_NORMAL;
 int eta_print = FIO_ETA_AUTO;
 unsigned int eta_interval_msec = 1000;
@@ -62,12 +64,13 @@ FILE *f_err = NULL;
 char *exec_profile = NULL;
 int warnings_fatal = 0;
 int terse_version = 3;
-int is_backend = 0;
+bool is_backend = false;
+bool is_local_backend = false;
 int nr_clients = 0;
-int log_syslog = 0;
+bool log_syslog = false;
 
-int write_bw_log = 0;
-int read_only = 0;
+bool write_bw_log = false;
+bool read_only = false;
 int status_interval = 0;
 
 char *trigger_file = NULL;
@@ -258,7 +261,7 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 	{
 		.name		= (char *) "status-interval",
 		.has_arg	= required_argument,
-		.val		= 'L',
+		.val		= 'L' | FIO_CLIENT_FLAG,
 	},
 	{
 		.name		= (char *) "trigger-file",
@@ -284,6 +287,11 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 		.name		= (char *) "aux-path",
 		.has_arg	= required_argument,
 		.val		= 'K',
+	},
+	{
+		.name		= (char *) "merge-blktrace-only",
+		.has_arg	= no_argument,
+		.val		= 'A' | FIO_CLIENT_FLAG,
 	},
 	{
 		.name		= NULL,
@@ -531,7 +539,7 @@ static void put_job(struct thread_data *td)
 
 static int __setup_rate(struct thread_data *td, enum fio_ddir ddir)
 {
-	unsigned int bs = td->o.min_bs[ddir];
+	unsigned long long bs = td->o.min_bs[ddir];
 
 	assert(ddir_rw(ddir));
 
@@ -617,17 +625,34 @@ static int fixup_options(struct thread_data *td)
 		ret |= warnings_fatal;
 	}
 
+	if (o->zone_mode == ZONE_MODE_NONE && o->zone_size) {
+		log_err("fio: --zonemode=none and --zonesize are not compatible.\n");
+		ret |= 1;
+	}
+
+	if (o->zone_mode == ZONE_MODE_STRIDED && !o->zone_size) {
+		log_err("fio: --zonesize must be specified when using --zonemode=strided.\n");
+		ret |= 1;
+	}
+
+	if (o->zone_mode == ZONE_MODE_NOT_SPECIFIED) {
+		if (o->zone_size)
+			o->zone_mode = ZONE_MODE_STRIDED;
+		else
+			o->zone_mode = ZONE_MODE_NONE;
+	}
+
 	/*
-	 * only really works with 1 file
+	 * Strided zone mode only really works with 1 file.
 	 */
-	if (o->zone_size && o->open_files > 1)
-		o->zone_size = 0;
+	if (o->zone_mode == ZONE_MODE_STRIDED && o->open_files > 1)
+		o->zone_mode = ZONE_MODE_NONE;
 
 	/*
 	 * If zone_range isn't specified, backward compatibility dictates it
 	 * should be made equal to zone_size.
 	 */
-	if (o->zone_size && !o->zone_range)
+	if (o->zone_mode == ZONE_MODE_STRIDED && !o->zone_range)
 		o->zone_range = o->zone_size;
 
 	/*
@@ -719,19 +744,12 @@ static int fixup_options(struct thread_data *td)
 	/*
 	 * There's no need to check for in-flight overlapping IOs if the job
 	 * isn't changing data or the maximum iodepth is guaranteed to be 1
+	 * when we are not in offload mode
 	 */
 	if (o->serialize_overlap && !(td->flags & TD_F_READ_IOLOG) &&
-	    (!(td_write(td) || td_trim(td)) || o->iodepth == 1))
+	    (!(td_write(td) || td_trim(td)) || o->iodepth == 1) &&
+	    o->io_submit_mode != IO_MODE_OFFLOAD)
 		o->serialize_overlap = 0;
-	/*
-	 * Currently can't check for overlaps in offload mode
-	 */
-	if (o->serialize_overlap && o->io_submit_mode == IO_MODE_OFFLOAD) {
-		log_err("fio: checking for in-flight overlaps when the "
-			"io_submit_mode is offload is not supported\n");
-		o->serialize_overlap = 0;
-		ret |= warnings_fatal;
-	}
 
 	if (o->nr_files > td->files_index)
 		o->nr_files = td->files_index;
@@ -891,7 +909,7 @@ static int fixup_options(struct thread_data *td)
 	 * If size is set but less than the min block size, complain
 	 */
 	if (o->size && o->size < td_min_bs(td)) {
-		log_err("fio: size too small, must not be less than minimum block size: %llu < %u\n",
+		log_err("fio: size too small, must not be less than minimum block size: %llu < %llu\n",
 			(unsigned long long) o->size, td_min_bs(td));
 		ret |= 1;
 	}
@@ -1401,6 +1419,17 @@ static bool wait_for_ok(const char *jobname, struct thread_options *o)
 }
 
 /*
+ * Treat an empty log file name the same as a one not given
+ */
+static const char *make_log_name(const char *logname, const char *jobname)
+{
+	if (logname && strcmp(logname, ""))
+		return logname;
+
+	return jobname;
+}
+
+/*
  * Adds a job to the list of things todo. Sanitizes the various options
  * to make sure we don't have conflicts, and initializes various
  * members of td.
@@ -1524,7 +1553,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
-		const char *pre = o->lat_log_file ? o->lat_log_file : o->name;
+		const char *pre = make_log_name(o->lat_log_file, o->name);
 		const char *suf;
 
 		if (p.log_gz_store)
@@ -1543,6 +1572,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		gen_log_name(logname, sizeof(logname), "clat", pre,
 				td->thread_number, suf, o->per_job_logs);
 		setup_log(&td->clat_log, &p, logname);
+
 	}
 
 	if (o->write_hist_log) {
@@ -1556,7 +1586,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
-		const char *pre = o->hist_log_file ? o->hist_log_file : o->name;
+		const char *pre = make_log_name(o->hist_log_file, o->name);
 		const char *suf;
 
 #ifndef CONFIG_ZLIB
@@ -1587,7 +1617,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
-		const char *pre = o->bw_log_file ? o->bw_log_file : o->name;
+		const char *pre = make_log_name(o->bw_log_file, o->name);
 		const char *suf;
 
 		if (fio_option_is_set(o, bw_avg_time))
@@ -1618,7 +1648,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
-		const char *pre = o->iops_log_file ? o->iops_log_file : o->name;
+		const char *pre = make_log_name(o->iops_log_file, o->name);
 		const char *suf;
 
 		if (fio_option_is_set(o, iops_avg_time))
@@ -1651,6 +1681,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 				char *c1, *c2, *c3, *c4;
 				char *c5 = NULL, *c6 = NULL;
 				int i2p = is_power_of_2(o->kb_base);
+				struct buf_output out;
 
 				c1 = num2str(o->min_bs[DDIR_READ], o->sig_figs, 1, i2p, N2S_BYTE);
 				c2 = num2str(o->max_bs[DDIR_READ], o->sig_figs, 1, i2p, N2S_BYTE);
@@ -1662,19 +1693,22 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 					c6 = num2str(o->max_bs[DDIR_TRIM], o->sig_figs, 1, i2p, N2S_BYTE);
 				}
 
-				log_info("%s: (g=%d): rw=%s, ", td->o.name,
+				buf_output_init(&out);
+				__log_buf(&out, "%s: (g=%d): rw=%s, ", td->o.name,
 							td->groupid,
 							ddir_str(o->td_ddir));
 
 				if (o->bs_is_seq_rand)
-					log_info("bs=(R) %s-%s, (W) %s-%s, bs_is_seq_rand, ",
+					__log_buf(&out, "bs=(R) %s-%s, (W) %s-%s, bs_is_seq_rand, ",
 							c1, c2, c3, c4);
 				else
-					log_info("bs=(R) %s-%s, (W) %s-%s, (T) %s-%s, ",
+					__log_buf(&out, "bs=(R) %s-%s, (W) %s-%s, (T) %s-%s, ",
 							c1, c2, c3, c4, c5, c6);
 
-				log_info("ioengine=%s, iodepth=%u\n",
+				__log_buf(&out, "ioengine=%s, iodepth=%u\n",
 						td->io_ops->name, o->iodepth);
+				log_info_buf(out.buf, out.buflen);
+				buf_output_free(&out);
 
 				free(c1);
 				free(c2);
@@ -1689,6 +1723,14 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 
 	if (td_steadystate_init(td))
 		goto err;
+
+	if (o->merge_blktrace_file && !merge_blktrace_iologs(td))
+		goto err;
+
+	if (merge_blktrace_only) {
+		put_job(td);
+		return 0;
+	}
 
 	/*
 	 * recurse add identical jobs, clear numjobs and stonewall options
@@ -2139,6 +2181,7 @@ static void usage(const char *name)
 	printf("  --debug=options\tEnable debug logging. May be one/more of:\n");
 	show_debug_categories();
 	printf("  --parse-only\t\tParse options only, don't start any IO\n");
+	printf("  --merge-blktrace-only\tMerge blktraces only, don't start any IO\n");
 	printf("  --output\t\tWrite output to file\n");
 	printf("  --bandwidth-log\tGenerate aggregate bandwidth logs\n");
 	printf("  --minimal\t\tMinimal (terse) output\n");
@@ -2158,7 +2201,7 @@ static void usage(const char *name)
 	printf("  --showcmd\t\tTurn a job file into command line options\n");
 	printf("  --eta=when\t\tWhen ETA estimate should be printed\n");
 	printf("            \t\tMay be \"always\", \"never\" or \"auto\"\n");
-	printf("  --eta-newline=time\tForce a new line for every 'time'");
+	printf("  --eta-newline=t\tForce a new line for every 't'");
 	printf(" period passed\n");
 	printf("  --status-interval=t\tForce full status dump every");
 	printf(" 't' period passed\n");
@@ -2261,6 +2304,10 @@ const struct debug_level debug_levels[] = {
 	{ .name = "helperthread",
 	  .help = "Helper thread logging",
 	  .shift = FD_HELPERTHREAD,
+	},
+	{ .name = "zbd",
+	  .help = "Zoned Block Device logging",
+	  .shift = FD_ZBD,
 	},
 	{ .name = NULL, },
 };
@@ -2433,7 +2480,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 	char *ostr = cmd_optstr;
 	char *pid_file = NULL;
 	void *cur_client = NULL;
-	int backend = 0;
+	bool backend = false;
 
 	/*
 	 * Reset optind handling, since we may call this multiple times
@@ -2459,7 +2506,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			exit_val = 1;
 			break;
 		case 'b':
-			write_bw_log = 1;
+			write_bw_log = true;
 			break;
 		case 'o': {
 			FILE *tmp;
@@ -2514,7 +2561,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			break;
 		case 's':
 			did_arg = true;
-			dump_cmdline = 1;
+			dump_cmdline = true;
 			break;
 		case 'r':
 			read_only = 1;
@@ -2580,7 +2627,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			break;
 		case 'P':
 			did_arg = true;
-			parse_only = 1;
+			parse_only = true;
 			break;
 		case 'x': {
 			size_t new_size;
@@ -2705,8 +2752,8 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			}
 			if (optarg)
 				fio_server_set_arg(optarg);
-			is_backend = 1;
-			backend = 1;
+			is_backend = true;
+			backend = true;
 #else
 			log_err("fio: client/server requires SHM support\n");
 			do_exit++;
@@ -2850,6 +2897,11 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 				exit_val = 1;
 			}
 			trigger_timeout /= 1000000;
+			break;
+
+		case 'A':
+			did_arg = true;
+			merge_blktrace_only = true;
 			break;
 		case '?':
 			log_err("%s: unrecognized option '%s'\n", argv[0],

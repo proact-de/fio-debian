@@ -14,6 +14,7 @@
 #include "hash.h"
 #include "lib/axmap.h"
 #include "rwlock.h"
+#include "zbd.h"
 
 #ifdef CONFIG_LINUX_FALLOCATE
 #include <linux/falloc.h>
@@ -107,7 +108,7 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 {
 	int new_layout = 0, unlink_file = 0, flags;
 	unsigned long long left;
-	unsigned int bs;
+	unsigned long long bs;
 	char *b = NULL;
 
 	if (read_only) {
@@ -260,7 +261,7 @@ static bool pre_read_file(struct thread_data *td, struct fio_file *f)
 {
 	int r, did_open = 0, old_runstate;
 	unsigned long long left;
-	unsigned int bs;
+	unsigned long long bs;
 	bool ret = true;
 	char *b;
 
@@ -330,7 +331,7 @@ unsigned long long get_rand_file_size(struct thread_data *td)
 {
 	unsigned long long ret, sized;
 	uint64_t frand_max;
-	unsigned long r;
+	uint64_t r;
 
 	frand_max = rand_max(&td->file_size_state);
 	r = __rand(&td->file_size_state);
@@ -900,15 +901,12 @@ int setup_files(struct thread_data *td)
 	unsigned int i, nr_fs_extra = 0;
 	int err = 0, need_extend;
 	int old_state;
-	const unsigned int bs = td_min_bs(td);
+	const unsigned long long bs = td_min_bs(td);
 	uint64_t fs = 0;
 
 	dprint(FD_FILE, "setup files\n");
 
 	old_state = td_bump_runstate(td, TD_SETTING_UP);
-
-	if (o->read_iolog_file)
-		goto done;
 
 	/*
 	 * Find out physical size of files or devices for this thread,
@@ -924,6 +922,9 @@ int setup_files(struct thread_data *td)
 
 	if (err)
 		goto err_out;
+
+	if (o->read_iolog_file)
+		goto done;
 
 	/*
 	 * check sizes. if the files/devices do not exist and the size
@@ -1142,9 +1143,6 @@ int setup_files(struct thread_data *td)
 	if (err)
 		goto err_out;
 
-	if (!o->zone_size)
-		o->zone_size = o->size;
-
 	/*
 	 * iolog already set the total io size, if we read back
 	 * stored entries.
@@ -1161,7 +1159,14 @@ done:
 		td->done = 1;
 
 	td_restore_runstate(td, old_state);
+
+	if (td->o.zone_mode == ZONE_MODE_ZBD) {
+		err = zbd_init(td);
+		if (err)
+			goto err_out;
+	}
 	return 0;
+
 err_offset:
 	log_err("%s: you need to specify valid offset=\n", o->name);
 err_out:
@@ -1187,13 +1192,13 @@ bool pre_read_files(struct thread_data *td)
 static void __init_rand_distribution(struct thread_data *td, struct fio_file *f)
 {
 	unsigned int range_size, seed;
-	unsigned long nranges;
+	uint64_t nranges;
 	uint64_t fsize;
 
 	range_size = min(td->o.min_bs[DDIR_READ], td->o.min_bs[DDIR_WRITE]);
 	fsize = min(f->real_file_size, f->io_size);
 
-	nranges = (fsize + range_size - 1) / range_size;
+	nranges = (fsize + range_size - 1ULL) / range_size;
 
 	seed = jhash(f->file_name, strlen(f->file_name), 0) * td->thread_number;
 	if (!td->o.rand_repeatable)
@@ -1348,6 +1353,8 @@ void close_and_free_files(struct thread_data *td)
 			dprint(FD_FILE, "free unlink %s\n", f->file_name);
 			td_io_unlink_file(td, f);
 		}
+
+		zbd_free_zone_info(f);
 
 		if (use_free)
 			free(f->file_name);
@@ -1675,6 +1682,11 @@ int put_file(struct thread_data *td, struct fio_file *f)
 	if (--f->references)
 		return 0;
 
+	disk_util_dec(f->du);
+
+	if (td->o.file_lock_mode != FILE_LOCK_NONE)
+		unlock_file_all(td, f);
+
 	if (should_fsync(td) && td->o.fsync_on_close) {
 		f_ret = fsync(f->fd);
 		if (f_ret < 0)
@@ -1688,6 +1700,7 @@ int put_file(struct thread_data *td, struct fio_file *f)
 		ret = f_ret;
 
 	td->nr_open_files--;
+	fio_file_clear_closing(f);
 	fio_file_clear_open(f);
 	assert(f->fd == -1);
 	return ret;
@@ -1867,6 +1880,8 @@ void fio_file_reset(struct thread_data *td, struct fio_file *f)
 		axmap_reset(f->io_axmap);
 	else if (fio_file_lfsr(f))
 		lfsr_reset(&f->lfsr, td->rand_seeds[FIO_RAND_BLOCK_OFF]);
+
+	zbd_file_reset(td, f);
 }
 
 bool fio_files_done(struct thread_data *td)

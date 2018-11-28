@@ -211,6 +211,9 @@ struct thread_stat {
 	uint32_t first_error;
 	uint64_t total_err_count;
 
+	/* ZBD stats */
+	uint64_t nr_zone_resets;
+
 	uint64_t nr_block_infos;
 	uint32_t block_infos[MAX_NR_BLOCK_INFOS];
 
@@ -308,12 +311,12 @@ extern void update_rusage_stat(struct thread_data *);
 extern void clear_rusage_stat(struct thread_data *);
 
 extern void add_lat_sample(struct thread_data *, enum fio_ddir, unsigned long long,
-				unsigned int, uint64_t);
+				unsigned long long, uint64_t);
 extern void add_clat_sample(struct thread_data *, enum fio_ddir, unsigned long long,
-				unsigned int, uint64_t);
+				unsigned long long, uint64_t);
 extern void add_slat_sample(struct thread_data *, enum fio_ddir, unsigned long,
-				unsigned int, uint64_t);
-extern void add_agg_sample(union io_sample_data, enum fio_ddir, unsigned int);
+				unsigned long long, uint64_t);
+extern void add_agg_sample(union io_sample_data, enum fio_ddir, unsigned long long);
 extern void add_iops_sample(struct thread_data *, struct io_u *,
 				unsigned int);
 extern void add_bw_sample(struct thread_data *, struct io_u *,
@@ -323,7 +326,7 @@ extern void add_sync_clat_sample(struct thread_stat *ts,
 extern int calc_log_samples(void);
 
 extern struct io_log *agg_io_log[DDIR_RWDIR_CNT];
-extern int write_bw_log;
+extern bool write_bw_log;
 
 static inline bool nsec_to_usec(unsigned long long *min,
 				unsigned long long *max, double *mean,

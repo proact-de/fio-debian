@@ -29,6 +29,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <math.h>
+#include <pthread.h>
 
 #include "fio.h"
 #include "smalloc.h"
@@ -47,12 +48,13 @@
 #include "rate-submit.h"
 #include "helper_thread.h"
 #include "pshared.h"
+#include "zone-dist.h"
 
 static struct fio_sem *startup_sem;
 static struct flist_head *cgroup_list;
 static struct cgroup_mnt *cgroup_mnt;
 static int exit_value;
-static volatile int fio_abort;
+static volatile bool fio_abort;
 static unsigned int nr_process = 0;
 static unsigned int nr_thread = 0;
 
@@ -64,6 +66,7 @@ unsigned int stat_number = 0;
 int shm_id = 0;
 int temp_stall_ts;
 unsigned long done_secs = 0;
+pthread_mutex_t overlap_check = PTHREAD_MUTEX_INITIALIZER;
 
 #define JOB_START_TIMEOUT	(5 * 1000)
 
@@ -454,7 +457,7 @@ int io_queue_event(struct thread_data *td, struct io_u *io_u, int *ret,
 			*ret = -io_u->error;
 			clear_io_u(td, io_u);
 		} else if (io_u->resid) {
-			int bytes = io_u->xfer_buflen - io_u->resid;
+			long long bytes = io_u->xfer_buflen - io_u->resid;
 			struct fio_file *f = io_u->file;
 
 			if (bytes_issued)
@@ -566,7 +569,7 @@ static int unlink_all_files(struct thread_data *td)
 /*
  * Check if io_u will overlap an in-flight IO in the queue
  */
-static bool in_flight_overlap(struct io_u_queue *q, struct io_u *io_u)
+bool in_flight_overlap(struct io_u_queue *q, struct io_u *io_u)
 {
 	bool overlap;
 	struct io_u *check_io_u;
@@ -583,7 +586,7 @@ static bool in_flight_overlap(struct io_u_queue *q, struct io_u *io_u)
 
 			if (x1 < y2 && y1 < x2) {
 				overlap = true;
-				dprint(FD_IO, "in-flight overlap: %llu/%lu, %llu/%lu\n",
+				dprint(FD_IO, "in-flight overlap: %llu/%llu, %llu/%llu\n",
 						x1, io_u->buflen,
 						y1, check_io_u->buflen);
 				break;
@@ -966,8 +969,10 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 		 * Break if we exceeded the bytes. The exception is time
 		 * based runs, but we still need to break out of the loop
 		 * for those to run verification, if enabled.
+		 * Jobs read from iolog do not use this stop condition.
 		 */
 		if (bytes_issued >= total_bytes &&
+		    !td->o.read_iolog_file &&
 		    (!td->o.time_based ||
 		     (td->o.time_based && td->o.verify != VERIFY_NONE)))
 			break;
@@ -1033,7 +1038,7 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 			log_io_piece(td, io_u);
 
 		if (td->o.io_submit_mode == IO_MODE_OFFLOAD) {
-			const unsigned long blen = io_u->xfer_buflen;
+			const unsigned long long blen = io_u->xfer_buflen;
 			const enum fio_ddir __ddir = acct_ddir(io_u);
 
 			if (td->error)
@@ -1184,14 +1189,14 @@ static void cleanup_io_u(struct thread_data *td)
 		if (td->io_ops->io_u_free)
 			td->io_ops->io_u_free(td, io_u);
 
-		fio_memfree(io_u, sizeof(*io_u));
+		fio_memfree(io_u, sizeof(*io_u), td_offload_overlap(td));
 	}
 
 	free_io_mem(td);
 
 	io_u_rexit(&td->io_u_requeues);
-	io_u_qexit(&td->io_u_freelist);
-	io_u_qexit(&td->io_u_all);
+	io_u_qexit(&td->io_u_freelist, false);
+	io_u_qexit(&td->io_u_all, td_offload_overlap(td));
 
 	free_file_completion_logging(td);
 }
@@ -1199,60 +1204,20 @@ static void cleanup_io_u(struct thread_data *td)
 static int init_io_u(struct thread_data *td)
 {
 	struct io_u *io_u;
-	unsigned int max_bs, min_write;
 	int cl_align, i, max_units;
-	int data_xfer = 1, err;
-	char *p;
+	int err;
 
 	max_units = td->o.iodepth;
-	max_bs = td_max_bs(td);
-	min_write = td->o.min_bs[DDIR_WRITE];
-	td->orig_buffer_size = (unsigned long long) max_bs
-					* (unsigned long long) max_units;
-
-	if (td_ioengine_flagged(td, FIO_NOIO) || !(td_read(td) || td_write(td)))
-		data_xfer = 0;
 
 	err = 0;
 	err += !io_u_rinit(&td->io_u_requeues, td->o.iodepth);
-	err += !io_u_qinit(&td->io_u_freelist, td->o.iodepth);
-	err += !io_u_qinit(&td->io_u_all, td->o.iodepth);
+	err += !io_u_qinit(&td->io_u_freelist, td->o.iodepth, false);
+	err += !io_u_qinit(&td->io_u_all, td->o.iodepth, td_offload_overlap(td));
 
 	if (err) {
 		log_err("fio: failed setting up IO queues\n");
 		return 1;
 	}
-
-	/*
-	 * if we may later need to do address alignment, then add any
-	 * possible adjustment here so that we don't cause a buffer
-	 * overflow later. this adjustment may be too much if we get
-	 * lucky and the allocator gives us an aligned address.
-	 */
-	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
-	    td_ioengine_flagged(td, FIO_RAWIO))
-		td->orig_buffer_size += page_mask + td->o.mem_align;
-
-	if (td->o.mem_type == MEM_SHMHUGE || td->o.mem_type == MEM_MMAPHUGE) {
-		unsigned long bs;
-
-		bs = td->orig_buffer_size + td->o.hugepage_size - 1;
-		td->orig_buffer_size = bs & ~(td->o.hugepage_size - 1);
-	}
-
-	if (td->orig_buffer_size != (size_t) td->orig_buffer_size) {
-		log_err("fio: IO memory too large. Reduce max_bs or iodepth\n");
-		return 1;
-	}
-
-	if (data_xfer && allocate_io_mem(td))
-		return 1;
-
-	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
-	    td_ioengine_flagged(td, FIO_RAWIO))
-		p = PTR_ALIGN(td->orig_buffer, page_mask) + td->o.mem_align;
-	else
-		p = td->orig_buffer;
 
 	cl_align = os_cache_line_size();
 
@@ -1262,7 +1227,7 @@ static int init_io_u(struct thread_data *td)
 		if (td->terminate)
 			return 1;
 
-		ptr = fio_memalign(cl_align, sizeof(*io_u));
+		ptr = fio_memalign(cl_align, sizeof(*io_u), td_offload_overlap(td));
 		if (!ptr) {
 			log_err("fio: unable to allocate aligned memory\n");
 			break;
@@ -1272,21 +1237,6 @@ static int init_io_u(struct thread_data *td)
 		memset(io_u, 0, sizeof(*io_u));
 		INIT_FLIST_HEAD(&io_u->verify_list);
 		dprint(FD_MEM, "io_u alloc %p, index %u\n", io_u, i);
-
-		if (data_xfer) {
-			io_u->buf = p;
-			dprint(FD_MEM, "io_u %p, mem %p\n", io_u, io_u->buf);
-
-			if (td_write(td))
-				io_u_fill_buffer(td, io_u, min_write, max_bs);
-			if (td_write(td) && td->o.verify_pattern_bytes) {
-				/*
-				 * Fill the buffer with the pattern if we are
-				 * going to be doing writes.
-				 */
-				fill_verify_pattern(td, io_u->buf, max_bs, io_u, 0, 0);
-			}
-		}
 
 		io_u->index = i;
 		io_u->flags = IO_U_F_FREE;
@@ -1306,12 +1256,84 @@ static int init_io_u(struct thread_data *td)
 				return 1;
 			}
 		}
-
-		p += max_bs;
 	}
+
+	init_io_u_buffers(td);
 
 	if (init_file_completion_logging(td, max_units))
 		return 1;
+
+	return 0;
+}
+
+int init_io_u_buffers(struct thread_data *td)
+{
+	struct io_u *io_u;
+	unsigned long long max_bs, min_write;
+	int i, max_units;
+	int data_xfer = 1;
+	char *p;
+
+	max_units = td->o.iodepth;
+	max_bs = td_max_bs(td);
+	min_write = td->o.min_bs[DDIR_WRITE];
+	td->orig_buffer_size = (unsigned long long) max_bs
+					* (unsigned long long) max_units;
+
+	if (td_ioengine_flagged(td, FIO_NOIO) || !(td_read(td) || td_write(td)))
+		data_xfer = 0;
+
+	/*
+	 * if we may later need to do address alignment, then add any
+	 * possible adjustment here so that we don't cause a buffer
+	 * overflow later. this adjustment may be too much if we get
+	 * lucky and the allocator gives us an aligned address.
+	 */
+	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
+	    td_ioengine_flagged(td, FIO_RAWIO))
+		td->orig_buffer_size += page_mask + td->o.mem_align;
+
+	if (td->o.mem_type == MEM_SHMHUGE || td->o.mem_type == MEM_MMAPHUGE) {
+		unsigned long long bs;
+
+		bs = td->orig_buffer_size + td->o.hugepage_size - 1;
+		td->orig_buffer_size = bs & ~(td->o.hugepage_size - 1);
+	}
+
+	if (td->orig_buffer_size != (size_t) td->orig_buffer_size) {
+		log_err("fio: IO memory too large. Reduce max_bs or iodepth\n");
+		return 1;
+	}
+
+	if (data_xfer && allocate_io_mem(td))
+		return 1;
+
+	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
+	    td_ioengine_flagged(td, FIO_RAWIO))
+		p = PTR_ALIGN(td->orig_buffer, page_mask) + td->o.mem_align;
+	else
+		p = td->orig_buffer;
+
+	for (i = 0; i < max_units; i++) {
+		io_u = td->io_u_all.io_us[i];
+		dprint(FD_MEM, "io_u alloc %p, index %u\n", io_u, i);
+
+		if (data_xfer) {
+			io_u->buf = p;
+			dprint(FD_MEM, "io_u %p, mem %p\n", io_u, io_u->buf);
+
+			if (td_write(td))
+				io_u_fill_buffer(td, io_u, min_write, max_bs);
+			if (td_write(td) && td->o.verify_pattern_bytes) {
+				/*
+				 * Fill the buffer with the pattern if we are
+				 * going to be doing writes.
+				 */
+				fill_verify_pattern(td, io_u->buf, max_bs, io_u, 0, 0);
+			}
+		}
+		p += max_bs;
+	}
 
 	return 0;
 }
@@ -1572,6 +1594,8 @@ static void *thread_main(void *data)
 		td_verror(td, errno, "setuid");
 		goto err;
 	}
+
+	td_zone_gen_index(td);
 
 	/*
 	 * Do this early, we don't want the compress threads to be limited
@@ -1850,7 +1874,16 @@ static void *thread_main(void *data)
 			 "perhaps try --debug=io option for details?\n",
 			 td->o.name, td->io_ops->name);
 
+	/*
+	 * Acquire this lock if we were doing overlap checking in
+	 * offload mode so that we don't clean up this job while
+	 * another thread is checking its io_u's for overlap
+	 */
+	if (td_offload_overlap(td))
+		pthread_mutex_lock(&overlap_check);
 	td_set_runstate(td, TD_FINISHING);
+	if (td_offload_overlap(td))
+		pthread_mutex_unlock(&overlap_check);
 
 	update_rusage_stat(td);
 	td->ts.total_run_time = mtime_since_now(&td->epoch);
@@ -1888,15 +1921,7 @@ err:
 	close_ioengine(td);
 	cgroup_shutdown(td, cgroup_mnt);
 	verify_free_state(td);
-
-	if (td->zone_state_index) {
-		int i;
-
-		for (i = 0; i < DDIR_RWDIR_CNT; i++)
-			free(td->zone_state_index[i]);
-		free(td->zone_state_index);
-		td->zone_state_index = NULL;
-	}
+	td_zone_free_index(td);
 
 	if (fio_option_is_set(o, cpumask)) {
 		ret = fio_cpuset_exit(&o->cpumask);
@@ -1909,6 +1934,8 @@ err:
 	 */
 	if (o->write_iolog_file)
 		write_iolog_close(td);
+	if (td->io_log_rfile)
+		fclose(td->io_log_rfile);
 
 	td_set_runstate(td, TD_EXITED);
 
@@ -2197,18 +2224,22 @@ static void run_threads(struct sk_out *sk_out)
 	}
 
 	if (output_format & FIO_OUTPUT_NORMAL) {
-		log_info("Starting ");
+		struct buf_output out;
+
+		buf_output_init(&out);
+		__log_buf(&out, "Starting ");
 		if (nr_thread)
-			log_info("%d thread%s", nr_thread,
+			__log_buf(&out, "%d thread%s", nr_thread,
 						nr_thread > 1 ? "s" : "");
 		if (nr_process) {
 			if (nr_thread)
-				log_info(" and ");
-			log_info("%d process%s", nr_process,
+				__log_buf(&out, " and ");
+			__log_buf(&out, "%d process%s", nr_process,
 						nr_process > 1 ? "es" : "");
 		}
-		log_info("\n");
-		log_info_flush();
+		__log_buf(&out, "\n");
+		log_info_buf(out.buf, out.buflen);
+		buf_output_free(&out);
 	}
 
 	todo = thread_number;
@@ -2351,7 +2382,7 @@ reap:
 			if (fio_sem_down_timeout(startup_sem, 10000)) {
 				log_err("fio: job startup hung? exiting.\n");
 				fio_terminate_threads(TERMINATE_ALL);
-				fio_abort = 1;
+				fio_abort = true;
 				nr_started--;
 				free(fd);
 				break;
@@ -2465,6 +2496,8 @@ int fio_backend(struct sk_out *sk_out)
 	}
 
 	startup_sem = fio_sem_init(FIO_SEM_LOCKED);
+	if (!sk_out)
+		is_local_backend = true;
 	if (startup_sem == NULL)
 		return 1;
 

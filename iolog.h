@@ -42,7 +42,7 @@ struct io_sample {
 	uint64_t time;
 	union io_sample_data data;
 	uint32_t __ddir;
-	uint32_t bs;
+	uint64_t bs;
 };
 
 struct io_sample_offset {
@@ -244,6 +244,7 @@ extern void write_iolog_close(struct thread_data *);
 extern int iolog_compress_init(struct thread_data *, struct sk_out *);
 extern void iolog_compress_exit(struct thread_data *);
 extern size_t log_chunk_sizes(struct io_log *);
+extern int init_io_u_buffers(struct thread_data *);
 
 #ifdef CONFIG_ZLIB
 extern int iolog_file_inflate(const char *);
