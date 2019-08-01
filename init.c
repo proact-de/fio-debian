@@ -1217,7 +1217,7 @@ static void init_flags(struct thread_data *td)
 
 static int setup_random_seeds(struct thread_data *td)
 {
-	unsigned long seed;
+	uint64_t seed;
 	unsigned int i;
 
 	if (!td->o.rand_repeatable && !fio_option_is_set(&td->o, rand_seed)) {
@@ -1438,7 +1438,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		   int recursed, int client_type)
 {
 	unsigned int i;
-	char fname[PATH_MAX];
+	char fname[PATH_MAX + 1];
 	int numjobs, file_alloced;
 	struct thread_options *o = &td->o;
 	char logname[PATH_MAX + 32];
@@ -1887,7 +1887,7 @@ static int __parse_jobs_ini(struct thread_data *td,
 		}
 	}
 
-	string = malloc(4096);
+	string = malloc(OPT_LEN_MAX);
 
 	/*
 	 * it's really 256 + small bit, 280 should suffice
@@ -1920,7 +1920,7 @@ static int __parse_jobs_ini(struct thread_data *td,
 			if (is_buf)
 				p = strsep(&file, "\n");
 			else
-				p = fgets(string, 4096, f);
+				p = fgets(string, OPT_LEN_MAX, f);
 			if (!p)
 				break;
 		}
@@ -1989,7 +1989,7 @@ static int __parse_jobs_ini(struct thread_data *td,
 				if (is_buf)
 					p = strsep(&file, "\n");
 				else
-					p = fgets(string, 4096, f);
+					p = fgets(string, OPT_LEN_MAX, f);
 				if (!p)
 					break;
 				dprint(FD_PARSE, "%s", p);
@@ -2040,7 +2040,8 @@ static int __parse_jobs_ini(struct thread_data *td,
 					strncpy(full_fn,
 						file, (ts - file) + 1);
 					strncpy(full_fn + (ts - file) + 1,
-						filename, strlen(filename));
+						filename,
+						len - (ts - file) - 1);
 					full_fn[len - 1] = 0;
 					filename = full_fn;
 				}
@@ -2907,6 +2908,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			log_err("%s: unrecognized option '%s'\n", argv[0],
 							argv[optind - 1]);
 			show_closest_option(argv[optind - 1]);
+			/* fall through */
 		default:
 			do_exit++;
 			exit_val = 1;
