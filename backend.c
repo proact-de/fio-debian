@@ -237,6 +237,9 @@ static void cleanup_pending_aio(struct thread_data *td)
 {
 	int r;
 
+	if (td->error)
+		return;
+
 	/*
 	 * get immediately available events, if any
 	 */
@@ -1539,7 +1542,7 @@ static void *thread_main(void *data)
 	struct sk_out *sk_out = fd->sk_out;
 	uint64_t bytes_done[DDIR_RWDIR_CNT];
 	int deadlock_loop_cnt;
-	bool clear_state, did_some_io;
+	bool clear_state;
 	int ret;
 
 	sk_out_assign(sk_out);
@@ -1695,7 +1698,13 @@ static void *thread_main(void *data)
 	if (!init_iolog(td))
 		goto err;
 
+	if (td_io_init(td))
+		goto err;
+
 	if (init_io_u(td))
+		goto err;
+
+	if (td->io_ops->post_init && td->io_ops->post_init(td))
 		goto err;
 
 	if (o->verify_async && verify_async_init(td))
@@ -1723,9 +1732,6 @@ static void *thread_main(void *data)
 		goto err;
 
 	if (!o->create_serialize && setup_files(td))
-		goto err;
-
-	if (td_io_init(td))
 		goto err;
 
 	if (!init_random_map(td))
@@ -1760,7 +1766,6 @@ static void *thread_main(void *data)
 
 	memset(bytes_done, 0, sizeof(bytes_done));
 	clear_state = false;
-	did_some_io = false;
 
 	while (keep_running(td)) {
 		uint64_t verify_bytes;
@@ -1838,9 +1843,6 @@ static void *thread_main(void *data)
 		    td_ioengine_flagged(td, FIO_UNIDIR))
 			continue;
 
-		if (ddir_rw_sum(bytes_done))
-			did_some_io = true;
-
 		clear_io_state(td, 0);
 
 		fio_gettime(&td->start, NULL);
@@ -1860,19 +1862,6 @@ static void *thread_main(void *data)
 		if (td->error || td->terminate)
 			break;
 	}
-
-	/*
-	 * If td ended up with no I/O when it should have had,
-	 * then something went wrong unless FIO_NOIO or FIO_DISKLESSIO.
-	 * (Are we not missing other flags that can be ignored ?)
-	 */
-	if ((td->o.size || td->o.io_size) && !ddir_rw_sum(bytes_done) &&
-	    !did_some_io && !td->o.create_only &&
-	    !(td_ioengine_flagged(td, FIO_NOIO) ||
-	      td_ioengine_flagged(td, FIO_DISKLESSIO)))
-		log_err("%s: No I/O performed by %s, "
-			 "perhaps try --debug=io option for details?\n",
-			 td->o.name, td->io_ops->name);
 
 	/*
 	 * Acquire this lock if we were doing overlap checking in

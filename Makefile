@@ -59,6 +59,12 @@ ifdef CONFIG_LIBHDFS
   SOURCE += engines/libhdfs.c
 endif
 
+ifdef CONFIG_LIBISCSI
+  CFLAGS += $(LIBISCSI_CFLAGS)
+  LIBS += $(LIBISCSI_LIBS)
+  SOURCE += engines/libiscsi.c
+endif
+
 ifdef CONFIG_64BIT
   CFLAGS += -DBITS_PER_LONG=64
 endif
@@ -151,7 +157,7 @@ endif
 
 ifeq ($(CONFIG_TARGET_OS), Linux)
   SOURCE += diskutil.c fifo.c blktrace.c cgroup.c trim.c engines/sg.c \
-		oslib/linux-dev-lookup.c
+		oslib/linux-dev-lookup.c engines/io_uring.c
   LIBS += -lpthread -ldl
   LDFLAGS += -rdynamic
 endif
@@ -263,6 +269,9 @@ T_VS_PROGS = t/fio-verify-state
 T_PIPE_ASYNC_OBJS = t/read-to-pipe-async.o
 T_PIPE_ASYNC_PROGS = t/read-to-pipe-async
 
+T_IOU_RING_OBJS = t/io_uring.o
+T_IOU_RING_PROGS = t/io_uring
+
 T_MEMLOCK_OBJS = t/memlock.o
 T_MEMLOCK_PROGS = t/memlock
 
@@ -281,6 +290,7 @@ T_OBJS += $(T_VS_OBJS)
 T_OBJS += $(T_PIPE_ASYNC_OBJS)
 T_OBJS += $(T_MEMLOCK_OBJS)
 T_OBJS += $(T_TT_OBJS)
+T_OBJS += $(T_IOU_RING_OBJS)
 
 ifneq (,$(findstring CYGWIN,$(CONFIG_TARGET_OS)))
     T_DEDUPE_OBJS += os/windows/posix.o lib/hweight.o
@@ -439,6 +449,10 @@ cairo_text_helpers.o: cairo_text_helpers.c cairo_text_helpers.h
 
 printing.o: printing.c printing.h
 	$(QUIET_CC)$(CC) $(CFLAGS) $(GTK_CFLAGS) $(CPPFLAGS) -c $<
+
+t/io_uring.o: os/linux/io_uring.h
+t/io_uring: $(T_IOU_RING_OBJS)
+	$(QUIET_LINK)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_IOU_RING_OBJS) $(LIBS)
 
 t/read-to-pipe-async: $(T_PIPE_ASYNC_OBJS)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $(T_PIPE_ASYNC_OBJS) $(LIBS)

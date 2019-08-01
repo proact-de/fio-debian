@@ -131,7 +131,7 @@ static struct ioengine_ops *__load_ioengine(const char *name)
 	/*
 	 * linux libaio has alias names, so convert to what we want
 	 */
-	if (!strncmp(engine, "linuxaio", 8) || !strncmp(engine, "aio", 3)) {
+	if (!strncmp(engine, "linuxaio", 8)) {
 		dprint(FD_IO, "converting ioengine name: %s -> libaio\n", name);
 		strcpy(engine, "libaio");
 	}
@@ -308,7 +308,9 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	io_u->error = 0;
 	io_u->resid = 0;
 
-	if (td_ioengine_flagged(td, FIO_SYNCIO)) {
+	if (td_ioengine_flagged(td, FIO_SYNCIO) ||
+		(td_ioengine_flagged(td, FIO_ASYNCIO_SYNC_TRIM) && 
+		io_u->ddir == DDIR_TRIM)) {
 		if (fio_fill_issue_time(td))
 			fio_gettime(&io_u->issue_time, NULL);
 
@@ -329,10 +331,7 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	}
 
 	ret = td->io_ops->queue(td, io_u);
-	if (ret != FIO_Q_BUSY && io_u->post_submit) {
-		io_u->post_submit(io_u, io_u->error == 0);
-		io_u->post_submit = NULL;
-	}
+	zbd_queue_io_u(io_u, ret);
 
 	unlock_file(td, io_u->file);
 
@@ -374,6 +373,7 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	if (!td->io_ops->commit) {
 		io_u_mark_submit(td, 1);
 		io_u_mark_complete(td, 1);
+		zbd_put_io_u(io_u);
 	}
 
 	if (ret == FIO_Q_COMPLETED) {
@@ -391,7 +391,9 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 			td_io_commit(td);
 	}
 
-	if (!td_ioengine_flagged(td, FIO_SYNCIO)) {
+	if (!td_ioengine_flagged(td, FIO_SYNCIO) &&
+		(!td_ioengine_flagged(td, FIO_ASYNCIO_SYNC_TRIM) ||
+		 io_u->ddir != DDIR_TRIM)) {
 		if (fio_fill_issue_time(td))
 			fio_gettime(&io_u->issue_time, NULL);
 
