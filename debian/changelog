@@ -12,6 +12,8 @@ fio (3.15-1) UNRELEASED; urgency=medium
 
   [ Sven Hoexter ]
   * Bump Standards-Version to 4.4.1, no changes required.
+  * Export CROSS_COMPILE when required to allow cross compilation.
+    Patch provided by Helmut Grohne. Closes: #929579
 
  -- Sven Hoexter <hoexter@debian.org>  Sun, 20 Oct 2019 19:40:23 +0200
 

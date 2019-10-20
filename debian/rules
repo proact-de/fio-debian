@@ -9,11 +9,17 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
+include /usr/share/dpkg/architecture.mk
+
 export DEB_LDFLAGS_MAINT_PREPEND := -Wl,-z,defs -Wl,--as-needed
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 export V = 1
+
+ifneq ($(DEB_BUILD_ARCH),$(DEB_HOST_ARCH))
+export CROSS_COMPILE=$(DEB_HOST_GNU_TYPE)-
+endif
 
 %:
 	dh $@
