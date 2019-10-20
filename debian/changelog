@@ -1,4 +1,4 @@
-fio (3.15-1) unstable; urgency=medium
+fio (3.15-1) UNRELEASED; urgency=medium
 
   [ Martin Steigerwald ]
   * Imported new upstream version 3.15:
@@ -10,7 +10,10 @@ fio (3.15-1) unstable; urgency=medium
   * patches: Refreshed.
   * control: Bumped standards version to 4.4.0.1, no changes needed.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Thu, 01 Aug 2019 11:27:25 +0200
+  [ Sven Hoexter ]
+  * Bump Standards-Version to 4.4.1, no changes required.
+
+ -- Sven Hoexter <hoexter@debian.org>  Sun, 20 Oct 2019 19:40:23 +0200
 
 fio (3.12-2) unstable; urgency=medium
 
