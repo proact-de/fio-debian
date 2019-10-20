@@ -1,4 +1,4 @@
-fio (3.15-1) UNRELEASED; urgency=medium
+fio (3.15-1) unstable; urgency=medium
 
   [ Martin Steigerwald ]
   * Imported new upstream version 3.15:
@@ -15,7 +15,7 @@ fio (3.15-1) UNRELEASED; urgency=medium
   * Export CROSS_COMPILE when required to allow cross compilation.
     Patch provided by Helmut Grohne. Closes: #929579
 
- -- Sven Hoexter <hoexter@debian.org>  Sun, 20 Oct 2019 19:40:23 +0200
+ -- Sven Hoexter <hoexter@debian.org>  Sun, 20 Oct 2019 19:48:57 +0200
 
 fio (3.12-2) unstable; urgency=medium
 
