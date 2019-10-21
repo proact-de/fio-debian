@@ -557,10 +557,10 @@ static unsigned long long get_next_buflen(struct thread_data *td, struct io_u *i
 			for (i = 0; i < td->o.bssplit_nr[ddir]; i++) {
 				struct bssplit *bsp = &td->o.bssplit[ddir][i];
 
+				if (!bsp->perc)
+					continue;
 				buflen = bsp->bs;
 				perc += bsp->perc;
-				if (!perc)
-					break;
 				if ((r / perc <= frand_max / 100ULL) &&
 				    io_u_fits(td, io_u, buflen))
 					break;
@@ -901,6 +901,8 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 
 	if (td->o.zone_mode == ZONE_MODE_STRIDED)
 		setup_strided_zone_mode(td, io_u);
+	else if (td->o.zone_mode == ZONE_MODE_ZBD)
+		setup_zbd_zone_mode(td, io_u);
 
 	/*
 	 * No log, let the seq/rand engine retrieve the next buflen and

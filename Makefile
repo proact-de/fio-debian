@@ -65,6 +65,12 @@ ifdef CONFIG_LIBISCSI
   SOURCE += engines/libiscsi.c
 endif
 
+ifdef CONFIG_LIBNBD
+  CFLAGS += $(LIBNBD_CFLAGS)
+  LIBS += $(LIBNBD_LIBS)
+  SOURCE += engines/nbd.c
+endif
+
 ifdef CONFIG_64BIT
   CFLAGS += -DBITS_PER_LONG=64
 endif
@@ -525,6 +531,21 @@ doc: tools/plot/fio2gnuplot.1
 test: fio
 	./fio --minimal --thread --exitall_on_error --runtime=1s --name=nulltest --ioengine=null --rw=randrw --iodepth=2 --norandommap --random_generator=tausworthe64 --size=16T --name=verifyfstest --filename=fiotestfile.tmp --unlink=1 --rw=write --verify=crc32c --verify_state_save=0 --size=16K
 
+fulltest:
+	sudo modprobe null_blk &&				 	\
+	if [ ! -e /usr/include/libzbc/zbc.h ]; then			\
+	  git clone https://github.com/hgst/libzbc &&		 	\
+	  (cd libzbc &&						 	\
+	   ./autogen.sh &&					 	\
+	   ./configure --prefix=/usr &&				 	\
+	   make -j &&						 	\
+	   sudo make install)						\
+	fi &&					 			\
+	sudo t/zbd/run-tests-against-regular-nullb &&		 	\
+	if [ -e /sys/module/null_blk/parameters/zoned ]; then		\
+		sudo t/zbd/run-tests-against-zoned-nullb;	 	\
+	fi
+
 install: $(PROGS) $(SCRIPTS) tools/plot/fio2gnuplot.1 FORCE
 	$(INSTALL) -m 755 -d $(DESTDIR)$(bindir)
 	$(INSTALL) $(PROGS) $(SCRIPTS) $(DESTDIR)$(bindir)
@@ -535,3 +556,5 @@ install: $(PROGS) $(SCRIPTS) tools/plot/fio2gnuplot.1 FORCE
 	$(INSTALL) -m 644 $(SRCDIR)/tools/hist/fiologparser_hist.py.1 $(DESTDIR)$(mandir)/man1
 	$(INSTALL) -m 755 -d $(DESTDIR)$(sharedir)
 	$(INSTALL) -m 644 $(SRCDIR)/tools/plot/*gpm $(DESTDIR)$(sharedir)/
+
+.PHONY: test fulltest
