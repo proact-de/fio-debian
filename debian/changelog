@@ -1,11 +1,11 @@
-fio (3.16-1) UNRELEASED; urgency=medium
+fio (3.16-1) unstable; urgency=medium
 
   [ Sven Hoexter ]
-  * Import new upstream version 3.16
+  * Import new upstream version 3.16. Closes: #942537
   * Add debian/patches/fix-compilation-3.16 to fix the compilation of
     3.16. Picked from upstream master 5b215853ed4b438b5b2d4ac3e56d5f0d19e145d9.
 
- -- Sven Hoexter <hoexter@debian.org>  Mon, 21 Oct 2019 08:19:33 +0200
+ -- Sven Hoexter <hoexter@debian.org>  Mon, 21 Oct 2019 09:50:07 +0200
 
 fio (3.15-1) unstable; urgency=medium
 
