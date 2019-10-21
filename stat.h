@@ -251,32 +251,39 @@ struct thread_stat {
 	uint64_t cachemiss;
 } __attribute__((packed));
 
-struct jobs_eta {
-	uint32_t nr_running;
-	uint32_t nr_ramp;
+#define JOBS_ETA {							\
+	uint32_t nr_running;						\
+	uint32_t nr_ramp;						\
+									\
+	uint32_t nr_pending;						\
+	uint32_t nr_setting_up;						\
+									\
+	uint64_t m_rate[DDIR_RWDIR_CNT];				\
+	uint64_t t_rate[DDIR_RWDIR_CNT];				\
+	uint64_t rate[DDIR_RWDIR_CNT];					\
+	uint32_t m_iops[DDIR_RWDIR_CNT];				\
+	uint32_t t_iops[DDIR_RWDIR_CNT];				\
+	uint32_t iops[DDIR_RWDIR_CNT];					\
+	uint32_t pad;							\
+	uint64_t elapsed_sec;						\
+	uint64_t eta_sec;						\
+	uint32_t is_pow2;						\
+	uint32_t unit_base;						\
+									\
+	uint32_t sig_figs;						\
+									\
+	uint32_t files_open;						\
+									\
+	/*								\
+	 * Network 'copy' of run_str[]					\
+	 */								\
+	uint32_t nr_threads;						\
+	uint32_t pad2;							\
+	uint8_t run_str[];						\
+}
 
-	uint32_t nr_pending;
-	uint32_t nr_setting_up;
-
-	uint64_t m_rate[DDIR_RWDIR_CNT], t_rate[DDIR_RWDIR_CNT];
-	uint64_t rate[DDIR_RWDIR_CNT];
-	uint32_t m_iops[DDIR_RWDIR_CNT], t_iops[DDIR_RWDIR_CNT];
-	uint32_t iops[DDIR_RWDIR_CNT];
-	uint64_t elapsed_sec;
-	uint64_t eta_sec;
-	uint32_t is_pow2;
-	uint32_t unit_base;
-
-	uint32_t sig_figs;
-
-	uint32_t files_open;
-
-	/*
-	 * Network 'copy' of run_str[]
-	 */
-	uint32_t nr_threads;
-	uint8_t run_str[];
-} __attribute__((packed));
+struct jobs_eta JOBS_ETA;
+struct jobs_eta_packed JOBS_ETA __attribute__((packed));
 
 struct io_u_plat_entry {
 	struct flist_head list;

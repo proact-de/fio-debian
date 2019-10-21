@@ -1434,6 +1434,22 @@ static int str_offset_cb(void *data, unsigned long long *__val)
 	return 0;
 }
 
+static int str_offset_increment_cb(void *data, unsigned long long *__val)
+{
+	struct thread_data *td = cb_data_to_td(data);
+	unsigned long long v = *__val;
+
+	if (parse_is_percent(v)) {
+		td->o.offset_increment = 0;
+		td->o.offset_increment_percent = -1ULL - v;
+		dprint(FD_PARSE, "SET offset_increment_percent %d\n",
+					td->o.offset_increment_percent);
+	} else
+		td->o.offset_increment = v;
+
+	return 0;
+}
+
 static int str_size_cb(void *data, unsigned long long *__val)
 {
 	struct thread_data *td = cb_data_to_td(data);
@@ -1899,6 +1915,9 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .help = "HTTP (WebDAV/S3) IO engine",
 			  },
 #endif
+			  { .ival = "nbd",
+			    .help = "Network Block Device (NBD) IO engine"
+			  },
 		},
 	},
 	{
@@ -2081,6 +2100,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.name	= "offset_increment",
 		.lname	= "IO offset increment",
 		.type	= FIO_OPT_STR_VAL,
+		.cb	= str_offset_increment_cb,
 		.off1	= offsetof(struct thread_options, offset_increment),
 		.help	= "What is the increment from one offset to the next",
 		.parent = "offset",
@@ -4899,8 +4919,7 @@ char *fio_option_dup_subs(const char *opt)
 		return NULL;
 	}
 
-	in[OPT_LEN_MAX] = '\0';
-	strncpy(in, opt, OPT_LEN_MAX);
+	snprintf(in, sizeof(in), "%s", opt);
 
 	while (*inptr && nchr > 0) {
 		if (inptr[0] == '$' && inptr[1] == '{') {
