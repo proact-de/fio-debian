@@ -2,6 +2,7 @@ fio (3.19-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.19.
   * patches:
+    * Refreshed.
     * Removed fix-compilation-3.16, applied upstream.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 08 Apr 2020 13:50:21 +0200
