@@ -644,7 +644,7 @@ static enum fio_ddir rate_ddir(struct thread_data *td, enum fio_ddir ddir)
 	uint64_t now;
 
 	assert(ddir_rw(ddir));
-	now = utime_since_now(&td->start);
+	now = utime_since_now(&td->epoch);
 
 	/*
 	 * if rate_next_io_time is in the past, need to catch up to rate
@@ -850,7 +850,7 @@ static void setup_strided_zone_mode(struct thread_data *td, struct io_u *io_u)
 	/*
 	 * See if it's time to switch to a new zone
 	 */
-	if (td->zone_bytes >= td->o.zone_size && td->o.zone_skip) {
+	if (td->zone_bytes >= td->o.zone_size) {
 		td->zone_bytes = 0;
 		f->file_offset += td->o.zone_range + td->o.zone_skip;
 
@@ -1541,7 +1541,7 @@ again:
 		assert(io_u->flags & IO_U_F_FREE);
 		io_u_clear(td, io_u, IO_U_F_FREE | IO_U_F_NO_FILE_PUT |
 				 IO_U_F_TRIMMED | IO_U_F_BARRIER |
-				 IO_U_F_VER_LIST);
+				 IO_U_F_VER_LIST | IO_U_F_PRIORITY);
 
 		io_u->error = 0;
 		io_u->acct_ddir = -1;
@@ -1830,7 +1830,7 @@ static void account_io_completion(struct thread_data *td, struct io_u *io_u,
 		unsigned long long tnsec;
 
 		tnsec = ntime_since(&io_u->start_time, &icd->time);
-		add_lat_sample(td, idx, tnsec, bytes, io_u->offset);
+		add_lat_sample(td, idx, tnsec, bytes, io_u->offset, io_u_is_prio(io_u));
 
 		if (td->flags & TD_F_PROFILE_OPS) {
 			struct prof_io_ops *ops = &td->prof_io_ops;
@@ -1849,7 +1849,7 @@ static void account_io_completion(struct thread_data *td, struct io_u *io_u,
 
 	if (ddir_rw(idx)) {
 		if (!td->o.disable_clat) {
-			add_clat_sample(td, idx, llnsec, bytes, io_u->offset);
+			add_clat_sample(td, idx, llnsec, bytes, io_u->offset, io_u_is_prio(io_u));
 			io_u_mark_latency(td, llnsec);
 		}
 
@@ -2091,7 +2091,7 @@ void io_u_queued(struct thread_data *td, struct io_u *io_u)
 			td = td->parent;
 
 		add_slat_sample(td, io_u->ddir, slat_time, io_u->xfer_buflen,
-				io_u->offset);
+				io_u->offset, io_u_is_prio(io_u));
 	}
 }
 
@@ -2182,7 +2182,7 @@ void io_u_fill_buffer(struct thread_data *td, struct io_u *io_u,
 static int do_sync_file_range(const struct thread_data *td,
 			      struct fio_file *f)
 {
-	off64_t offset, nbytes;
+	uint64_t offset, nbytes;
 
 	offset = f->first_write;
 	nbytes = f->last_write - f->first_write;

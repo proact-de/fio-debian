@@ -95,6 +95,18 @@ static void fallocate_file(struct thread_data *td, struct fio_file *f)
 		break;
 		}
 #endif /* CONFIG_LINUX_FALLOCATE */
+	case FIO_FALLOCATE_TRUNCATE: {
+		int r;
+
+		dprint(FD_FILE, "ftruncate file %s size %llu\n",
+				f->file_name,
+				(unsigned long long) f->real_file_size);
+		r = ftruncate(f->fd, f->real_file_size);
+		if (r != 0)
+			td_verror(td, errno, "ftruncate");
+
+		break;
+	}
 	default:
 		log_err("fio: unknown fallocate mode: %d\n", td->o.fallocate_mode);
 		assert(0);
@@ -901,33 +913,71 @@ uint64_t get_start_offset(struct thread_data *td, struct fio_file *f)
 	return offset;
 }
 
+/*
+ * Find longest path component that exists and return its length
+ */
+int longest_existing_path(char *path) {
+	char buf[PATH_MAX];
+	bool done;
+	char *buf_pos;
+	int offset;
+#ifdef WIN32
+	DWORD dwAttr;
+#else
+	struct stat sb;
+#endif
+
+	sprintf(buf, "%s", path);
+	done = false;
+	while (!done) {
+		buf_pos = strrchr(buf, FIO_OS_PATH_SEPARATOR);
+		if (!buf_pos) {
+			done = true;
+			offset = 0;
+			break;
+		}
+
+		*(buf_pos + 1) = '\0';
+
+#ifdef WIN32
+		dwAttr = GetFileAttributesA(buf);
+		if (dwAttr != INVALID_FILE_ATTRIBUTES) {
+			done = true;
+		}
+#else
+		if (stat(buf, &sb) == 0)
+			done = true;
+#endif
+		if (done)
+			offset = buf_pos - buf;
+		else
+			*buf_pos = '\0';
+	}
+
+	return offset;
+}
+
 static bool create_work_dirs(struct thread_data *td, const char *fname)
 {
 	char path[PATH_MAX];
 	char *start, *end;
+	int offset;
 
-	if (td->o.directory) {
-		snprintf(path, PATH_MAX, "%s%c%s", td->o.directory,
-			 FIO_OS_PATH_SEPARATOR, fname);
-		start = strstr(path, fname);
-	} else {
-		snprintf(path, PATH_MAX, "%s", fname);
-		start = path;
-	}
+	snprintf(path, PATH_MAX, "%s", fname);
+	start = path;
 
-	end = start;
+	offset = longest_existing_path(path);
+	end = start + offset;
 	while ((end = strchr(end, FIO_OS_PATH_SEPARATOR)) != NULL) {
-		if (end == start)
-			break;
+		if (end == start) {
+			end++;
+			continue;
+		}
 		*end = '\0';
 		errno = 0;
-#ifdef CONFIG_HAVE_MKDIR_TWO
-		if (mkdir(path, 0600) && errno != EEXIST) {
-#else
-		if (mkdir(path) && errno != EEXIST) {
-#endif
-			log_err("fio: failed to create dir (%s): %d\n",
-				start, errno);
+		if (fio_mkdir(path, 0700) && errno != EEXIST) {
+			log_err("fio: failed to create dir (%s): %s\n",
+				start, strerror(errno));
 			return false;
 		}
 		*end = FIO_OS_PATH_SEPARATOR;
@@ -1047,7 +1097,7 @@ int setup_files(struct thread_data *td)
 			 * doesn't divide nicely with the min blocksize,
 			 * make the first files bigger.
 			 */
-			f->io_size = fs - f->file_offset;
+			f->io_size = fs;
 			if (nr_fs_extra) {
 				nr_fs_extra--;
 				f->io_size += bs;
@@ -1104,13 +1154,15 @@ int setup_files(struct thread_data *td)
 		}
 
 		if (f->filetype == FIO_TYPE_FILE &&
-		    (f->io_size + f->file_offset) > f->real_file_size &&
-		    !td_ioengine_flagged(td, FIO_DISKLESSIO)) {
-			if (!o->create_on_open) {
+		    (f->io_size + f->file_offset) > f->real_file_size) {
+			if (!td_ioengine_flagged(td, FIO_DISKLESSIO) &&
+			    !o->create_on_open) {
 				need_extend++;
 				extend_size += (f->io_size + f->file_offset);
 				fio_file_set_extend(f);
-			} else
+			} else if (!td_ioengine_flagged(td, FIO_DISKLESSIO) ||
+				   (td_ioengine_flagged(td, FIO_DISKLESSIO) &&
+				    td_ioengine_flagged(td, FIO_FAKEIO)))
 				f->real_file_size = f->io_size + f->file_offset;
 		}
 	}
@@ -1273,7 +1325,9 @@ static bool init_rand_distribution(struct thread_data *td)
 	unsigned int i;
 	int state;
 
-	if (td->o.random_distribution == FIO_RAND_DIST_RANDOM)
+	if (td->o.random_distribution == FIO_RAND_DIST_RANDOM ||
+	    td->o.random_distribution == FIO_RAND_DIST_ZONED ||
+	    td->o.random_distribution == FIO_RAND_DIST_ZONED_ABS)
 		return false;
 
 	state = td_bump_runstate(td, TD_SETTING_UP);
@@ -1336,6 +1390,9 @@ bool init_random_map(struct thread_data *td)
 	for_each_file(td, f, i) {
 		uint64_t fsize = min(f->real_file_size, f->io_size);
 
+		if (td->o.zone_mode == ZONE_MODE_STRIDED)
+			fsize = td->o.zone_range;
+
 		blocks = fsize / (unsigned long long) td->o.rw_min_bs;
 
 		if (check_rand_gen_limits(td, f, blocks))
@@ -1349,6 +1406,9 @@ bool init_random_map(struct thread_data *td)
 			if (!lfsr_init(&f->lfsr, blocks, seed, 0)) {
 				fio_file_set_lfsr(f);
 				continue;
+			} else {
+				log_err("fio: failed initializing LFSR\n");
+				return false;
 			}
 		} else if (!td->o.norandommap) {
 			f->io_axmap = axmap_new(blocks);

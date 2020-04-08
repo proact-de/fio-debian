@@ -236,7 +236,8 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->loops = le32_to_cpu(top->loops);
 	o->mem_type = le32_to_cpu(top->mem_type);
 	o->mem_align = le32_to_cpu(top->mem_align);
-	o->stonewall = le32_to_cpu(top->stonewall);
+	o->exit_what = le16_to_cpu(top->exit_what);
+	o->stonewall = le16_to_cpu(top->stonewall);
 	o->new_group = le32_to_cpu(top->new_group);
 	o->numjobs = le32_to_cpu(top->numjobs);
 	o->cpus_allowed_policy = le32_to_cpu(top->cpus_allowed_policy);
@@ -270,6 +271,7 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->trim_zero = le32_to_cpu(top->trim_zero);
 	o->clat_percentiles = le32_to_cpu(top->clat_percentiles);
 	o->lat_percentiles = le32_to_cpu(top->lat_percentiles);
+	o->slat_percentiles = le32_to_cpu(top->slat_percentiles);
 	o->percentile_precision = le32_to_cpu(top->percentile_precision);
 	o->sig_figs = le32_to_cpu(top->sig_figs);
 	o->continue_on_error = le32_to_cpu(top->continue_on_error);
@@ -433,7 +435,8 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->loops = cpu_to_le32(o->loops);
 	top->mem_type = cpu_to_le32(o->mem_type);
 	top->mem_align = cpu_to_le32(o->mem_align);
-	top->stonewall = cpu_to_le32(o->stonewall);
+	top->exit_what = cpu_to_le16(o->exit_what);
+	top->stonewall = cpu_to_le16(o->stonewall);
 	top->new_group = cpu_to_le32(o->new_group);
 	top->numjobs = cpu_to_le32(o->numjobs);
 	top->cpus_allowed_policy = cpu_to_le32(o->cpus_allowed_policy);
@@ -467,6 +470,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->trim_zero = cpu_to_le32(o->trim_zero);
 	top->clat_percentiles = cpu_to_le32(o->clat_percentiles);
 	top->lat_percentiles = cpu_to_le32(o->lat_percentiles);
+	top->slat_percentiles = cpu_to_le32(o->slat_percentiles);
 	top->percentile_precision = cpu_to_le32(o->percentile_precision);
 	top->sig_figs = cpu_to_le32(o->sig_figs);
 	top->continue_on_error = cpu_to_le32(o->continue_on_error);

@@ -100,7 +100,7 @@ static int io_uring_register_buffers(struct submitter *s)
 	if (do_nop)
 		return 0;
 
-	return syscall(__NR_sys_io_uring_register, s->ring_fd,
+	return syscall(__NR_io_uring_register, s->ring_fd,
 			IORING_REGISTER_BUFFERS, s->iovecs, depth);
 }
 
@@ -117,26 +117,28 @@ static int io_uring_register_files(struct submitter *s)
 		s->files[i].fixed_fd = i;
 	}
 
-	return syscall(__NR_sys_io_uring_register, s->ring_fd,
+	return syscall(__NR_io_uring_register, s->ring_fd,
 			IORING_REGISTER_FILES, s->fds, s->nr_files);
 }
 
 static int io_uring_setup(unsigned entries, struct io_uring_params *p)
 {
-	return syscall(__NR_sys_io_uring_setup, entries, p);
+	return syscall(__NR_io_uring_setup, entries, p);
 }
 
 static int io_uring_enter(struct submitter *s, unsigned int to_submit,
 			  unsigned int min_complete, unsigned int flags)
 {
-	return syscall(__NR_sys_io_uring_enter, s->ring_fd, to_submit,
-			min_complete, flags, NULL, 0);
+	return syscall(__NR_io_uring_enter, s->ring_fd, to_submit, min_complete,
+			flags, NULL, 0);
 }
 
+#ifndef CONFIG_HAVE_GETTID
 static int gettid(void)
 {
 	return syscall(__NR_gettid);
 }
+#endif
 
 static unsigned file_depth(struct submitter *s)
 {
@@ -214,8 +216,6 @@ static int prep_more_ios(struct submitter *s, int max_ios)
 	} while (prepped < max_ios);
 
 	if (*ring->tail != tail) {
-		/* order tail store with writes to sqes above */
-		write_barrier();
 		*ring->tail = tail;
 		write_barrier();
 	}

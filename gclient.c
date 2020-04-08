@@ -330,7 +330,7 @@ static void gfio_update_thread_status_all(struct gui *ui, char *status_message,
 	static char message[100];
 	const char *m = message;
 
-	strncpy(message, sizeof(message), "%s", status_message);
+	snprintf(message, sizeof(message), "%s", status_message);
 	gtk_progress_bar_set_text(GTK_PROGRESS_BAR(ui->thread_status_pb), m);
 	gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ui->thread_status_pb), perc / 100.0);
 	gtk_widget_queue_draw(ui->window);
@@ -1097,10 +1097,9 @@ static struct graph *setup_clat_graph(char *title, unsigned long long *ovals,
 
 static void gfio_show_clat_percentiles(struct gfio_client *gc,
 				       GtkWidget *vbox, struct thread_stat *ts,
-				       int ddir)
+				       int ddir, uint64_t *io_u_plat,
+				       unsigned long long nr, const char *type)
 {
-	uint64_t *io_u_plat = ts->io_u_plat[ddir];
-	unsigned long long nr = ts->clat_stat[ddir].samples;
 	fio_fp64_t *plist = ts->percentile_list;
 	unsigned int len, scale_down;
 	unsigned long long *ovals, minv, maxv;
@@ -1128,10 +1127,7 @@ static void gfio_show_clat_percentiles(struct gfio_client *gc,
 		base = "nsec";
         }
 
-	if (ts->clat_percentiles)
-		sprintf(tmp, "Completion percentiles (%s)", base);
-	else
-		sprintf(tmp, "Latency percentiles (%s)", base);
+	sprintf(tmp, "%s latency percentiles (%s)", type, base);
 
 	tree_view = gfio_output_clat_percentiles(ovals, plist, len, base, scale_down);
 	ge->clat_graph = setup_clat_graph(tmp, ovals, plist, len, 700.0, 300.0);
@@ -1159,18 +1155,21 @@ out:
 #define GFIO_CLAT	1
 #define GFIO_SLAT	2
 #define GFIO_LAT	4
+#define GFIO_HILAT	8
+#define GFIO_LOLAT	16
 
 static void gfio_show_ddir_status(struct gfio_client *gc, GtkWidget *mbox,
 				  struct group_run_stats *rs,
 				  struct thread_stat *ts, int ddir)
 {
 	const char *ddir_label[3] = { "Read", "Write", "Trim" };
+	const char *hilat, *lolat;
 	GtkWidget *frame, *label, *box, *vbox, *main_vbox;
-	unsigned long long min[3], max[3];
+	unsigned long long min[5], max[5];
 	unsigned long runt;
 	unsigned long long bw, iops;
 	unsigned int flags = 0;
-	double mean[3], dev[3];
+	double mean[5], dev[5];
 	char *io_p, *io_palt, *bw_p, *bw_palt, *iops_p;
 	char tmp[128];
 	int i2p;
@@ -1269,6 +1268,14 @@ static void gfio_show_ddir_status(struct gfio_client *gc, GtkWidget *mbox,
 		flags |= GFIO_CLAT;
 	if (calc_lat(&ts->lat_stat[ddir], &min[2], &max[2], &mean[2], &dev[2]))
 		flags |= GFIO_LAT;
+	if (calc_lat(&ts->clat_high_prio_stat[ddir], &min[3], &max[3], &mean[3], &dev[3])) {
+		flags |= GFIO_HILAT;
+		if (calc_lat(&ts->clat_low_prio_stat[ddir], &min[4], &max[4], &mean[4], &dev[4]))
+			flags |= GFIO_LOLAT;
+		/* we only want to print low priority statistics if other IOs were
+		 * submitted with the priority bit set
+		 */
+	}
 
 	if (flags) {
 		frame = gtk_frame_new("Latency");
@@ -1277,16 +1284,65 @@ static void gfio_show_ddir_status(struct gfio_client *gc, GtkWidget *mbox,
 		vbox = gtk_vbox_new(FALSE, 3);
 		gtk_container_add(GTK_CONTAINER(frame), vbox);
 
+		if (ts->lat_percentiles) {
+			hilat = "High priority total latency";
+			lolat = "Low priority total latency";
+		} else {
+			hilat = "High priority completion latency";
+			lolat = "Low priority completion latency";
+		}
+
 		if (flags & GFIO_SLAT)
 			gfio_show_lat(vbox, "Submission latency", min[0], max[0], mean[0], dev[0]);
 		if (flags & GFIO_CLAT)
 			gfio_show_lat(vbox, "Completion latency", min[1], max[1], mean[1], dev[1]);
 		if (flags & GFIO_LAT)
 			gfio_show_lat(vbox, "Total latency", min[2], max[2], mean[2], dev[2]);
+		if (flags & GFIO_HILAT)
+			gfio_show_lat(vbox, hilat, min[3], max[3], mean[3], dev[3]);
+		if (flags & GFIO_LOLAT)
+			gfio_show_lat(vbox, lolat, min[4], max[4], mean[4], dev[4]);
 	}
 
-	if (ts->clat_percentiles)
-		gfio_show_clat_percentiles(gc, main_vbox, ts, ddir);
+	if (ts->slat_percentiles && flags & GFIO_SLAT)
+		gfio_show_clat_percentiles(gc, main_vbox, ts, ddir,
+				ts->io_u_plat[FIO_SLAT][ddir],
+				ts->slat_stat[ddir].samples,
+				"Submission");
+	if (ts->clat_percentiles && flags & GFIO_CLAT) {
+		gfio_show_clat_percentiles(gc, main_vbox, ts, ddir,
+				ts->io_u_plat[FIO_CLAT][ddir],
+				ts->clat_stat[ddir].samples,
+				"Completion");
+		if (!ts->lat_percentiles) {
+			if (flags & GFIO_HILAT)
+				gfio_show_clat_percentiles(gc, main_vbox, ts, ddir,
+						ts->io_u_plat_high_prio[ddir],
+						ts->clat_high_prio_stat[ddir].samples,
+						"High priority completion");
+			if (flags & GFIO_LOLAT)
+				gfio_show_clat_percentiles(gc, main_vbox, ts, ddir,
+						ts->io_u_plat_low_prio[ddir],
+						ts->clat_low_prio_stat[ddir].samples,
+						"Low priority completion");
+		}
+	}
+	if (ts->lat_percentiles && flags & GFIO_LAT) {
+		gfio_show_clat_percentiles(gc, main_vbox, ts, ddir,
+				ts->io_u_plat[FIO_LAT][ddir],
+				ts->lat_stat[ddir].samples,
+				"Total");
+		if (flags & GFIO_HILAT)
+			gfio_show_clat_percentiles(gc, main_vbox, ts, ddir,
+					ts->io_u_plat_high_prio[ddir],
+					ts->clat_high_prio_stat[ddir].samples,
+					"High priority total");
+		if (flags & GFIO_LOLAT)
+			gfio_show_clat_percentiles(gc, main_vbox, ts, ddir,
+					ts->io_u_plat_low_prio[ddir],
+					ts->clat_low_prio_stat[ddir].samples,
+					"Low priority total");
+	}
 
 	free(io_p);
 	free(bw_p);
