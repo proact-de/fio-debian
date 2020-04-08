@@ -9,6 +9,7 @@ fio (3.19-1) UNRELEASED; urgency=medium
     and libpmemblk-dev to build dependencies. Thanks to Adam Borowski
     for bug report and patch (Closes: #950848).
   * watch: Use HTTPS URL.
+  * control: Bumped standards-version to 4.5.0.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 08 Apr 2020 13:50:21 +0200
 
