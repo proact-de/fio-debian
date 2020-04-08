@@ -5,6 +5,9 @@ fio (3.19-1) UNRELEASED; urgency=medium
     * Refreshed.
     * fix-compilation-3.16: Removed, applied upstream.
     * genfio-interpreter: Removed, changed accordingly by upstream.
+  * Enable persistent memory based engines in fio by adding libpmem-dev
+    and libpmemblk-dev to build dependencies. Thanks to Adam Borowski
+    for bug report and patch (Closes: #950848).
  
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 08 Apr 2020 13:50:21 +0200
 
