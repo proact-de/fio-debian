@@ -2,4 +2,3 @@ makefile-manpagepath
 makefile-hardening
 fio2gnuplot-manpage
 configure-no-configlog
-genfio-interpreter

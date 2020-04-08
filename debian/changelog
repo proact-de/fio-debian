@@ -3,8 +3,9 @@ fio (3.19-1) UNRELEASED; urgency=medium
   * Imported new upstream version 3.19.
   * patches:
     * Refreshed.
-    * Removed fix-compilation-3.16, applied upstream.
-
+    * fix-compilation-3.16: Removed, applied upstream.
+    * genfio-interpreter: Removed, changed accordingly by upstream.
+ 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 08 Apr 2020 13:50:21 +0200
 
 fio (3.16-1) unstable; urgency=medium
