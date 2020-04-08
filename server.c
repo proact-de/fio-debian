@@ -975,7 +975,7 @@ static int handle_trigger_cmd(struct fio_net_cmd *cmd, struct flist_head *job_li
 	} else
 		fio_net_queue_cmd(FIO_NET_CMD_VTRIGGER, rep, sz, NULL, SK_F_FREE | SK_F_INLINE);
 
-	fio_terminate_threads(TERMINATE_ALL);
+	fio_terminate_threads(TERMINATE_ALL, TERMINATE_ALL);
 	fio_server_check_jobs(job_list);
 	exec_trigger(buf);
 	return 0;
@@ -992,7 +992,7 @@ static int handle_command(struct sk_out *sk_out, struct flist_head *job_list,
 
 	switch (cmd->opcode) {
 	case FIO_NET_CMD_QUIT:
-		fio_terminate_threads(TERMINATE_ALL);
+		fio_terminate_threads(TERMINATE_ALL, TERMINATE_ALL);
 		ret = 0;
 		break;
 	case FIO_NET_CMD_EXIT:
@@ -1262,7 +1262,7 @@ static int handle_connection(struct sk_out *sk_out)
 	_exit(ret);
 }
 
-/* get the address on this host bound by the input socket, 
+/* get the address on this host bound by the input socket,
  * whether it is ipv6 or ipv4 */
 
 static int get_my_addr_str(int sk)
@@ -1463,7 +1463,7 @@ static void convert_gs(struct group_run_stats *dst, struct group_run_stats *src)
 void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 {
 	struct cmd_ts_pdu p;
-	int i, j;
+	int i, j, k;
 	void *ss_buf;
 	uint64_t *ss_iops, *ss_bw;
 
@@ -1490,6 +1490,7 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 		convert_io_stat(&p.ts.bw_stat[i], &ts->bw_stat[i]);
 		convert_io_stat(&p.ts.iops_stat[i], &ts->iops_stat[i]);
 	}
+	convert_io_stat(&p.ts.sync_stat, &ts->sync_stat);
 
 	p.ts.usr_time		= cpu_to_le64(ts->usr_time);
 	p.ts.sys_time		= cpu_to_le64(ts->sys_time);
@@ -1498,6 +1499,7 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 	p.ts.majf		= cpu_to_le64(ts->majf);
 	p.ts.clat_percentiles	= cpu_to_le32(ts->clat_percentiles);
 	p.ts.lat_percentiles	= cpu_to_le32(ts->lat_percentiles);
+	p.ts.slat_percentiles	= cpu_to_le32(ts->slat_percentiles);
 	p.ts.percentile_precision = cpu_to_le64(ts->percentile_precision);
 
 	for (i = 0; i < FIO_IO_U_LIST_MAX_LEN; i++) {
@@ -1520,12 +1522,18 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 	for (i = 0; i < FIO_IO_U_LAT_M_NR; i++)
 		p.ts.io_u_lat_m[i]	= cpu_to_le64(ts->io_u_lat_m[i]);
 
-	for (i = 0; i < DDIR_RWDIR_CNT; i++)
-		for (j = 0; j < FIO_IO_U_PLAT_NR; j++)
-			p.ts.io_u_plat[i][j] = cpu_to_le64(ts->io_u_plat[i][j]);
+	for (i = 0; i < FIO_LAT_CNT; i++)
+		for (j = 0; j < DDIR_RWDIR_CNT; j++)
+			for (k = 0; k < FIO_IO_U_PLAT_NR; k++)
+				p.ts.io_u_plat[i][j][k] = cpu_to_le64(ts->io_u_plat[i][j][k]);
+
+	for (j = 0; j < FIO_IO_U_PLAT_NR; j++)
+		p.ts.io_u_sync_plat[j] = cpu_to_le64(ts->io_u_sync_plat[j]);
+
+	for (i = 0; i < DDIR_RWDIR_SYNC_CNT; i++)
+		p.ts.total_io_u[i]	= cpu_to_le64(ts->total_io_u[i]);
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
-		p.ts.total_io_u[i]	= cpu_to_le64(ts->total_io_u[i]);
 		p.ts.short_io_u[i]	= cpu_to_le64(ts->short_io_u[i]);
 		p.ts.drop_io_u[i]	= cpu_to_le64(ts->drop_io_u[i]);
 	}
@@ -1567,6 +1575,15 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 
 	p.ts.cachehit		= cpu_to_le64(ts->cachehit);
 	p.ts.cachemiss		= cpu_to_le64(ts->cachemiss);
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		for (j = 0; j < FIO_IO_U_PLAT_NR; j++) {
+			p.ts.io_u_plat_high_prio[i][j] = cpu_to_le64(ts->io_u_plat_high_prio[i][j]);
+			p.ts.io_u_plat_low_prio[i][j] = cpu_to_le64(ts->io_u_plat_low_prio[i][j]);
+		}
+		convert_io_stat(&p.ts.clat_high_prio_stat[i], &ts->clat_high_prio_stat[i]);
+		convert_io_stat(&p.ts.clat_low_prio_stat[i], &ts->clat_low_prio_stat[i]);
+	}
 
 	convert_gs(&p.rs, rs);
 
@@ -1992,7 +2009,7 @@ int fio_send_iolog(struct thread_data *td, struct io_log *log, const char *name)
 
 			s->time		= cpu_to_le64(s->time);
 			s->data.val	= cpu_to_le64(s->data.val);
-			s->__ddir	= cpu_to_le32(s->__ddir);
+			s->__ddir	= __cpu_to_le32(s->__ddir);
 			s->bs		= cpu_to_le64(s->bs);
 
 			if (log->log_offset) {
@@ -2148,7 +2165,8 @@ static int fio_init_server_ip(void)
 	/*
 	 * Not fatal if fails, so just ignore it if that happens
 	 */
-	setsockopt(sk, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+	if (setsockopt(sk, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+	}
 #endif
 
 	if (use_ipv6) {
