@@ -1,3 +1,9 @@
+fio (3.19-2) unstable; urgency=medium
+
+  * Re-Release for a source only upload. Package is unchanged.
+
+ -- Sven Hoexter <hoexter@debian.org>  Sat, 11 Apr 2020 13:17:44 +0200
+
 fio (3.19-1) unstable; urgency=medium
 
   * Imported new upstream version 3.19.
