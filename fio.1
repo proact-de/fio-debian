@@ -804,7 +804,11 @@ so. Default: false.
 When running a random write test across an entire drive many more zones will be
 open than in a typical application workload. Hence this command line option
 that allows to limit the number of open zones. The number of open zones is
-defined as the number of zones to which write commands are issued.
+defined as the number of zones to which write commands are issued by all
+threads/processes.
+.TP
+.BI job_max_open_zones \fR=\fPint
+Limit on the number of simultaneously opened zones per single thread/process.
 .TP
 .BI zone_reset_threshold \fR=\fPfloat
 A number between zero and one that indicates the ratio of logical blocks with
@@ -1629,6 +1633,12 @@ I/O. Requires \fBfilename\fR option to specify either block or
 character devices. This engine supports trim operations. The
 sg engine includes engine specific options.
 .TP
+.B libzbc
+Synchronous I/O engine for SMR hard-disks using the \fBlibzbc\fR
+library. The target can be either an sg character device or
+a block device file. This engine supports the zonemode=zbd zone
+operations.
+.TP
 .B null
 Doesn't transfer any data, just pretends to. This is mainly used to
 exercise fio itself and for debugging/testing purposes.
@@ -1800,7 +1810,8 @@ Set the percentage of I/O that will be issued with higher priority by setting
 the priority bit. Non-read I/O is likely unaffected by ``cmdprio_percentage``.
 This option cannot be used with the `prio` or `prioclass` options. For this
 option to set the priority bit properly, NCQ priority must be supported and
-enabled and `direct=1' option must be used.
+enabled and `direct=1' option must be used. fio must also be run as the root
+user.
 .TP
 .BI (io_uring)fixedbufs
 If fio is asked to do direct IO, then Linux will map pages for each IO call, and
@@ -2268,6 +2279,11 @@ The percentage of I/Os that must fall within the criteria specified by
 \fBlatency_target\fR and \fBlatency_window\fR. If not set, this
 defaults to 100.0, meaning that all I/Os must be equal or below to the value
 set by \fBlatency_target\fR.
+.TP
+.BI latency_run \fR=\fPbool
+Used with \fBlatency_target\fR. If false (default), fio will find the highest
+queue depth that meets \fBlatency_target\fR and exit. If true, fio will continue
+running and try to meet \fBlatency_target\fR by adjusting queue depth.
 .TP
 .BI max_latency \fR=\fPtime
 If set, fio will exit the job with an ETIMEDOUT error if it exceeds this
