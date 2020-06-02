@@ -4,9 +4,9 @@ fio (3.20-1) UNRELEASED; urgency=medium
   * patches: Refreshed.
   * Bumped debhelper compat level from 11 to 13:
     * Adapted paths to files reported by 'dh_missing'.
-    * Added some new files reported by 'dh_missing'. 
+    * Added some new files reported by 'dh_missing'.
   * Allow build without root privileges. Produces the same binaries
-    according to diffoscope. 
+    according to diffoscope.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 02 Jun 2020 14:38:32 +0200
 
