@@ -30,7 +30,5 @@ override_dh_auto_configure:
 override_dh_installsystemd:
 	dh_installsystemd --no-start --no-enable
 
-# dh_installinit --no-start --no-enable gives update-rc.d: error: no runlevel symlinks to modify, aborting!
-# https://bugs.debian.org/894084
 override_dh_installinit:
 	dh_installinit --no-start --no-enable
