@@ -134,8 +134,8 @@ static bool __check_min_rate(struct thread_data *td, struct timespec *now,
 	unsigned long long bytes = 0;
 	unsigned long iops = 0;
 	unsigned long spent;
-	unsigned long rate;
-	unsigned int ratemin = 0;
+	unsigned long long rate;
+	unsigned long long ratemin = 0;
 	unsigned int rate_iops = 0;
 	unsigned int rate_iops_min = 0;
 
@@ -169,7 +169,7 @@ static bool __check_min_rate(struct thread_data *td, struct timespec *now,
 			 * check bandwidth specified rate
 			 */
 			if (bytes < td->rate_bytes[ddir]) {
-				log_err("%s: rate_min=%uB/s not met, only transferred %lluB\n",
+				log_err("%s: rate_min=%lluB/s not met, only transferred %lluB\n",
 					td->o.name, ratemin, bytes);
 				return true;
 			} else {
@@ -180,7 +180,7 @@ static bool __check_min_rate(struct thread_data *td, struct timespec *now,
 
 				if (rate < ratemin ||
 				    bytes < td->rate_bytes[ddir]) {
-					log_err("%s: rate_min=%uB/s not met, got %luB/s\n",
+					log_err("%s: rate_min=%lluB/s not met, got %lluB/s\n",
 						td->o.name, ratemin, rate);
 					return true;
 				}
@@ -201,7 +201,7 @@ static bool __check_min_rate(struct thread_data *td, struct timespec *now,
 
 				if (rate < rate_iops_min ||
 				    iops < td->rate_blocks[ddir]) {
-					log_err("%s: rate_iops_min=%u not met, got %lu IOPS\n",
+					log_err("%s: rate_iops_min=%u not met, got %llu IOPS\n",
 						td->o.name, rate_iops_min, rate);
 					return true;
 				}
@@ -237,15 +237,10 @@ static void cleanup_pending_aio(struct thread_data *td)
 {
 	int r;
 
-	if (td->error)
-		return;
-
 	/*
 	 * get immediately available events, if any
 	 */
 	r = io_u_queued_complete(td, 0);
-	if (r < 0)
-		return;
 
 	/*
 	 * now cancel remaining active events
@@ -1010,12 +1005,6 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 		 */
 		if (td->o.verify != VERIFY_NONE && io_u->ddir == DDIR_READ &&
 		    ((io_u->flags & IO_U_F_VER_LIST) || !td_rw(td))) {
-
-			if (!td->o.verify_pattern_bytes) {
-				io_u->rand_seed = __rand(&td->verify_state);
-				if (sizeof(int) != sizeof(long *))
-					io_u->rand_seed *= __rand(&td->verify_state);
-			}
 
 			if (verify_state_should_stop(td, io_u)) {
 				put_io_u(td, io_u);

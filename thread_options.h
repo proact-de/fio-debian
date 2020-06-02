@@ -324,6 +324,7 @@ struct thread_options {
 	unsigned long long latency_target;
 	unsigned long long latency_window;
 	fio_fp64_t latency_percentile;
+	uint32_t latency_run;
 
 	unsigned int sig_figs;
 
@@ -342,6 +343,7 @@ struct thread_options {
 	/* Parameters that affect zonemode=zbd */
 	unsigned int read_beyond_wp;
 	int max_open_zones;
+	unsigned int job_max_open_zones;
 	fio_fp64_t zrt;
 	fio_fp64_t zrf;
 };
@@ -612,6 +614,7 @@ struct thread_options_pack {
 	uint64_t latency_window;
 	uint64_t max_latency;
 	fio_fp64_t latency_percentile;
+	uint32_t latency_run;
 
 	uint32_t sig_figs;
 

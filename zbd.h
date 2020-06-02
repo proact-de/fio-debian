@@ -7,22 +7,12 @@
 #ifndef FIO_ZBD_H
 #define FIO_ZBD_H
 
-#include <inttypes.h>
-#include "fio.h"	/* FIO_MAX_OPEN_ZBD_ZONES */
-#ifdef CONFIG_LINUX_BLKZONED
-#include <linux/blkzoned.h>
-#endif
+#include "io_u.h"
+#include "ioengines.h"
+#include "oslib/blkzoned.h"
+#include "zbd_types.h"
 
 struct fio_file;
-
-/*
- * Zoned block device models.
- */
-enum blk_zoned_model {
-	ZBD_DM_NONE,	/* Regular block device */
-	ZBD_DM_HOST_AWARE,	/* Host-aware zoned block device */
-	ZBD_DM_HOST_MANAGED,	/* Host-managed zoned block device */
-};
 
 enum io_u_action {
 	io_u_accept	= 0,
@@ -42,21 +32,21 @@ enum io_u_action {
  * @reset_zone: whether or not this zone should be reset before writing to it
  */
 struct fio_zone_info {
-#ifdef CONFIG_LINUX_BLKZONED
 	pthread_mutex_t		mutex;
 	uint64_t		start;
 	uint64_t		wp;
 	uint32_t		verify_block;
-	enum blk_zone_type	type:2;
-	enum blk_zone_cond	cond:4;
+	enum zbd_zone_type	type:2;
+	enum zbd_zone_cond	cond:4;
 	unsigned int		open:1;
 	unsigned int		reset_zone:1;
-#endif
 };
 
 /**
  * zoned_block_device_info - zoned block device characteristics
  * @model: Device model.
+ * @max_open_zones: global limit on the number of simultaneously opened
+ *	sequential write zones.
  * @mutex: Protects the modifiable members in this structure (refcount and
  *		num_open_zones).
  * @zone_size: size of a single zone in units of 512 bytes
@@ -76,7 +66,8 @@ struct fio_zone_info {
  * will be smaller than 'zone_size'.
  */
 struct zoned_block_device_info {
-	enum blk_zoned_model	model;
+	enum zbd_zoned_model	model;
+	uint32_t		max_open_zones;
 	pthread_mutex_t		mutex;
 	uint64_t		zone_size;
 	uint64_t		sectors_with_data;
@@ -85,18 +76,25 @@ struct zoned_block_device_info {
 	uint32_t		refcount;
 	uint32_t		num_open_zones;
 	uint32_t		write_cnt;
-	uint32_t		open_zones[FIO_MAX_OPEN_ZBD_ZONES];
+	uint32_t		open_zones[ZBD_MAX_OPEN_ZONES];
 	struct fio_zone_info	zone_info[0];
 };
 
-#ifdef CONFIG_LINUX_BLKZONED
+int zbd_setup_files(struct thread_data *td);
 void zbd_free_zone_info(struct fio_file *f);
-int zbd_init(struct thread_data *td);
 void zbd_file_reset(struct thread_data *td, struct fio_file *f);
 bool zbd_unaligned_write(int error_code);
 void setup_zbd_zone_mode(struct thread_data *td, struct io_u *io_u);
+enum fio_ddir zbd_adjust_ddir(struct thread_data *td, struct io_u *io_u,
+			      enum fio_ddir ddir);
 enum io_u_action zbd_adjust_block(struct thread_data *td, struct io_u *io_u);
 char *zbd_write_status(const struct thread_stat *ts);
+
+static inline void zbd_close_file(struct fio_file *f)
+{
+	if (f->zbd_info)
+		zbd_free_zone_info(f);
+}
 
 static inline void zbd_queue_io_u(struct io_u *io_u, enum fio_q_status status)
 {
@@ -114,46 +112,5 @@ static inline void zbd_put_io_u(struct io_u *io_u)
 		io_u->zbd_put_io = NULL;
 	}
 }
-
-#else
-static inline void zbd_free_zone_info(struct fio_file *f)
-{
-}
-
-static inline int zbd_init(struct thread_data *td)
-{
-	return 0;
-}
-
-static inline void zbd_file_reset(struct thread_data *td, struct fio_file *f)
-{
-}
-
-static inline bool zbd_unaligned_write(int error_code)
-{
-	return false;
-}
-
-static inline enum io_u_action zbd_adjust_block(struct thread_data *td,
-						struct io_u *io_u)
-{
-	return io_u_accept;
-}
-
-static inline char *zbd_write_status(const struct thread_stat *ts)
-{
-	return NULL;
-}
-
-static inline void zbd_queue_io_u(struct io_u *io_u,
-				  enum fio_q_status status) {}
-static inline void zbd_put_io_u(struct io_u *io_u) {}
-
-static inline void setup_zbd_zone_mode(struct thread_data *td,
-					struct io_u *io_u)
-{
-}
-
-#endif
 
 #endif /* FIO_ZBD_H */

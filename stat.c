@@ -2354,8 +2354,6 @@ void __show_running_run_stats(void)
 	fio_sem_up(stat_sem);
 }
 
-static bool status_interval_init;
-static struct timespec status_time;
 static bool status_file_disabled;
 
 #define FIO_STATUS_FILE		"fio-dump-status"
@@ -2398,16 +2396,6 @@ static int check_status_file(void)
 
 void check_for_running_stats(void)
 {
-	if (status_interval) {
-		if (!status_interval_init) {
-			fio_gettime(&status_time, NULL);
-			status_interval_init = true;
-		} else if (mtime_since_now(&status_time) >= status_interval) {
-			show_running_run_stats();
-			fio_gettime(&status_time, NULL);
-			return;
-		}
-	}
 	if (check_status_file()) {
 		show_running_run_stats();
 		return;
@@ -2749,7 +2737,7 @@ static unsigned long add_log_sample(struct thread_data *td,
 			return diff;
 	}
 
-	_add_stat_to_log(iolog, elapsed, td->o.log_max != 0, priority_bit);
+	__add_stat_to_log(iolog, ddir, elapsed, td->o.log_max != 0, priority_bit);
 
 	iolog->avg_last[ddir] = elapsed - (this_window - iolog->avg_msec);
 	return iolog->avg_msec;

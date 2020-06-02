@@ -13,6 +13,7 @@
 #include "lib/pattern.h"
 #include "options.h"
 #include "optgroup.h"
+#include "zbd.h"
 
 char client_sockaddr_str[INET6_ADDRSTRLEN] = { 0 };
 
@@ -3359,12 +3360,22 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	},
 	{
 		.name	= "max_open_zones",
-		.lname	= "Maximum number of open zones",
+		.lname	= "Per device/file maximum number of open zones",
 		.type	= FIO_OPT_INT,
 		.off1	= offsetof(struct thread_options, max_open_zones),
-		.maxval	= FIO_MAX_OPEN_ZBD_ZONES,
-		.help	= "Limit random writes to SMR drives to the specified"
-			  " number of sequential zones",
+		.maxval	= ZBD_MAX_OPEN_ZONES,
+		.help	= "Limit on the number of simultaneously opened sequential write zones with zonemode=zbd",
+		.def	= "0",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_INVALID,
+	},
+	{
+		.name	= "job_max_open_zones",
+		.lname	= "Job maximum number of open zones",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct thread_options, job_max_open_zones),
+		.maxval	= ZBD_MAX_OPEN_ZONES,
+		.help	= "Limit on the number of simultaneously opened sequential write zones with zonemode=zbd by one thread/process",
 		.def	= "0",
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_INVALID,
@@ -3536,7 +3547,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	{
 		.name	= "rate",
 		.lname	= "I/O rate",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_ULL,
 		.off1	= offsetof(struct thread_options, rate[DDIR_READ]),
 		.off2	= offsetof(struct thread_options, rate[DDIR_WRITE]),
 		.off3	= offsetof(struct thread_options, rate[DDIR_TRIM]),
@@ -3548,7 +3559,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.name	= "rate_min",
 		.alias	= "ratemin",
 		.lname	= "I/O min rate",
-		.type	= FIO_OPT_INT,
+		.type	= FIO_OPT_ULL,
 		.off1	= offsetof(struct thread_options, ratemin[DDIR_READ]),
 		.off2	= offsetof(struct thread_options, ratemin[DDIR_WRITE]),
 		.off3	= offsetof(struct thread_options, ratemin[DDIR_TRIM]),
@@ -3668,6 +3679,16 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.maxlen	= 1,
 		.minfp	= 0.0,
 		.maxfp	= 100.0,
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_LATPROF,
+	},
+	{
+		.name	= "latency_run",
+		.lname	= "Latency Run",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct thread_options, latency_run),
+		.help	= "Keep adjusting queue depth to match latency_target",
+		.def	= "0",
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_LATPROF,
 	},

@@ -172,8 +172,6 @@ struct zone_split_index {
 	uint64_t size_prev;
 };
 
-#define FIO_MAX_OPEN_ZBD_ZONES 128
-
 /*
  * This describes a single thread/process executing a fio job.
  */
@@ -262,6 +260,7 @@ struct thread_data {
 	struct frand_state prio_state;
 
 	struct zone_split_index **zone_state_index;
+	unsigned int num_open_zones;
 
 	unsigned int verify_batch;
 	unsigned int trim_batch;
@@ -321,7 +320,7 @@ struct thread_data {
 	 */
 	uint64_t rate_bps[DDIR_RWDIR_CNT];
 	uint64_t rate_next_io_time[DDIR_RWDIR_CNT];
-	unsigned long rate_bytes[DDIR_RWDIR_CNT];
+	unsigned long long rate_bytes[DDIR_RWDIR_CNT];
 	unsigned long rate_blocks[DDIR_RWDIR_CNT];
 	unsigned long long rate_io_issue_bytes[DDIR_RWDIR_CNT];
 	struct timespec lastrate[DDIR_RWDIR_CNT];
@@ -379,6 +378,7 @@ struct thread_data {
 	unsigned int latency_qd_high;
 	unsigned int latency_qd_low;
 	unsigned int latency_failed;
+	unsigned int latency_stable_count;
 	uint64_t latency_ios;
 	int latency_end_run;
 
