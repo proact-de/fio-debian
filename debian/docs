@@ -3,7 +3,7 @@ HOWTO
 MORAL-LICENSE
 REPORTING-BUGS
 examples/
-tools/hist/fiologparser_hist.py
-tools/hist/fiologparser_hist.py.1
+usr/bin/fiologparser_hist.py
 tools/hist/half-bins.py
-tools/fiologparser.py
+usr/bin/fiologparser.py
+usr/bin/fio-histo-log-pctiles.py

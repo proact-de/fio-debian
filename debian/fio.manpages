@@ -1,3 +1,4 @@
-fio.1
-tools/fio_generate_plots.1
-tools/plot/fio2gnuplot.1
+usr/share/man/man1/fio.1
+usr/share/man/man1/fio_generate_plots.1
+usr/share/man/man1/fio2gnuplot.1
+usr/share/man/man1/fiologparser_hist.py.1
