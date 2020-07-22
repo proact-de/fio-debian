@@ -11,7 +11,7 @@ Vcs-Browser: https://salsa.debian.org/debian/fio
 
 Package: fio
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, python2.7
+Depends: ${shlibs:Depends}, ${misc:Depends}, python
 Suggests: gnuplot, gfio, python-scipy
 Description: flexible I/O tester
  fio is a tool that will spawn a number of threads or processes doing a
