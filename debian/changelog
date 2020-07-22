@@ -1,6 +1,10 @@
 fio (3.21-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.21.
+    * Fixes: ftbfs with GCC-10 (Closes: #957204).
+    * Fixes: fio: Python2 removal in sid/bullseye (Closes: #957204).
+  * control: Switched Python dependency to python3 as all scripts work with
+    Python 3 now.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 22 Jul 2020 11:45:09 +0200
 
