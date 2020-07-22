@@ -75,6 +75,25 @@ static struct ioengine_ops *find_ioengine(const char *name)
 	return NULL;
 }
 
+#ifdef CONFIG_DYNAMIC_ENGINES
+static void *dlopen_external(struct thread_data *td, const char *engine)
+{
+	char engine_path[PATH_MAX];
+	void *dlhandle;
+
+	sprintf(engine_path, "%s/lib%s.so", FIO_EXT_ENG_DIR, engine);
+
+	dlhandle = dlopen(engine_path, RTLD_LAZY);
+	if (!dlhandle)
+		log_info("Engine %s not found; Either name is invalid, was not built, or fio-engine-%s package is missing.\n",
+			 engine, engine);
+
+	return dlhandle;
+}
+#else
+#define dlopen_external(td, engine) (NULL)
+#endif
+
 static struct ioengine_ops *dlopen_ioengine(struct thread_data *td,
 					    const char *engine_lib)
 {
@@ -86,8 +105,11 @@ static struct ioengine_ops *dlopen_ioengine(struct thread_data *td,
 	dlerror();
 	dlhandle = dlopen(engine_lib, RTLD_LAZY);
 	if (!dlhandle) {
-		td_vmsg(td, -1, dlerror(), "dlopen");
-		return NULL;
+		dlhandle = dlopen_external(td, engine_lib);
+		if (!dlhandle) {
+			td_vmsg(td, -1, dlerror(), "dlopen");
+			return NULL;
+		}
 	}
 
 	/*
@@ -291,8 +313,10 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	 * started the overlap check because the IO_U_F_FLIGHT
 	 * flag is now set
 	 */
-	if (td_offload_overlap(td))
-		pthread_mutex_unlock(&overlap_check);
+	if (td_offload_overlap(td)) {
+		int res = pthread_mutex_unlock(&overlap_check);
+		assert(res == 0);
+	}
 
 	assert(fio_file_open(io_u->file));
 

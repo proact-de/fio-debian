@@ -58,6 +58,8 @@
 
 #define OS_MAP_ANON		MAP_ANONYMOUS
 
+#define FIO_EXT_ENG_DIR	"/usr/lib/fio"
+
 typedef cpu_set_t os_cpu_mask_t;
 
 #ifdef CONFIG_3ARG_AFFINITY
@@ -324,6 +326,9 @@ static inline int fio_set_sched_idle(void)
 #endif
 #ifndef RWF_SYNC
 #define RWF_SYNC	0x00000004
+#endif
+#ifndef RWF_NOWAIT
+#define RWF_NOWAIT	0x00000008
 #endif
 
 #ifndef RWF_UNCACHED

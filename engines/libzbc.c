@@ -47,7 +47,7 @@ static int libzbc_open_dev(struct thread_data *td, struct fio_file *f,
 			   struct libzbc_data **p_ld)
 {
 	struct libzbc_data *ld = td->io_ops_data;
-        int ret, flags = OS_O_DIRECT;
+	int ret, flags = OS_O_DIRECT;
 
 	if (ld) {
 		/* Already open */
@@ -61,7 +61,7 @@ static int libzbc_open_dev(struct thread_data *td, struct fio_file *f,
 		return -EINVAL;
 	}
 
-        if (td_write(td)) {
+	if (td_write(td)) {
 		if (!read_only)
 			flags |= O_RDWR;
 	} else if (td_read(td)) {
@@ -71,17 +71,15 @@ static int libzbc_open_dev(struct thread_data *td, struct fio_file *f,
 			flags |= O_RDONLY;
 	} else if (td_trim(td)) {
 		td_verror(td, EINVAL, "libzbc does not support trim");
-                log_err("%s: libzbc does not support trim\n",
-                        f->file_name);
-                return -EINVAL;
+		log_err("%s: libzbc does not support trim\n", f->file_name);
+		return -EINVAL;
 	}
 
-        if (td->o.oatomic) {
+	if (td->o.oatomic) {
 		td_verror(td, EINVAL, "libzbc does not support O_ATOMIC");
-                log_err("%s: libzbc does not support O_ATOMIC\n",
-                        f->file_name);
-                return -EINVAL;
-        }
+		log_err("%s: libzbc does not support O_ATOMIC\n", f->file_name);
+		return -EINVAL;
+	}
 
 	ld = calloc(1, sizeof(*ld));
 	if (!ld)
@@ -92,15 +90,12 @@ static int libzbc_open_dev(struct thread_data *td, struct fio_file *f,
 	if (ret) {
 		log_err("%s: zbc_open() failed, err=%d\n",
 			f->file_name, ret);
-		return ret;
+		goto err;
 	}
 
 	ret = libzbc_get_dev_info(ld, f);
-	if (ret) {
-		zbc_close(ld->zdev);
-		free(ld);
-		return ret;
-	}
+	if (ret)
+		goto err_close;
 
 	td->io_ops_data = ld;
 out:
@@ -108,6 +103,12 @@ out:
 		*p_ld = ld;
 
 	return 0;
+
+err_close:
+	zbc_close(ld->zdev);
+err:
+	free(ld);
+	return ret;
 }
 
 static int libzbc_close_dev(struct thread_data *td)
@@ -396,7 +397,7 @@ static enum fio_q_status libzbc_queue(struct thread_data *td, struct io_u *io_u)
 	return FIO_Q_COMPLETED;
 }
 
-static struct ioengine_ops ioengine = {
+FIO_STATIC struct ioengine_ops ioengine = {
 	.name			= "libzbc",
 	.version		= FIO_IOOPS_VERSION,
 	.open_file		= libzbc_open_file,

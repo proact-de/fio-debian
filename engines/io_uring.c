@@ -80,6 +80,7 @@ struct ioring_options {
 	unsigned int sqpoll_cpu;
 	unsigned int nonvectored;
 	unsigned int uncached;
+	unsigned int nowait;
 };
 
 static const int ddir_to_op[2][2] = {
@@ -186,6 +187,15 @@ static struct fio_option options[] = {
 		.group	= FIO_OPT_G_IOURING,
 	},
 	{
+		.name	= "nowait",
+		.lname	= "RWF_NOWAIT",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct ioring_options, nowait),
+		.help	= "Use RWF_NOWAIT for reads/writes",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
 		.name	= NULL,
 	},
 };
@@ -235,6 +245,8 @@ static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 		}
 		if (!td->o.odirect && o->uncached)
 			sqe->rw_flags = RWF_UNCACHED;
+		if (o->nowait)
+			sqe->rw_flags |= RWF_NOWAIT;
 		if (ld->ioprio_class_set)
 			sqe->ioprio = td->o.ioprio_class << 13;
 		if (ld->ioprio_set)
@@ -289,15 +301,15 @@ static int fio_ioring_cqring_reap(struct thread_data *td, unsigned int events,
 
 	head = *ring->head;
 	do {
-		read_barrier();
-		if (head == *ring->tail)
+		if (head == atomic_load_acquire(ring->tail))
 			break;
 		reaped++;
 		head++;
 	} while (reaped + events < max);
 
-	*ring->head = head;
-	write_barrier();
+	if (reaped)
+		atomic_store_release(ring->head, head);
+
 	return reaped;
 }
 
@@ -372,15 +384,13 @@ static enum fio_q_status fio_ioring_queue(struct thread_data *td,
 
 	tail = *ring->tail;
 	next_tail = tail + 1;
-	read_barrier();
-	if (next_tail == *ring->head)
+	if (next_tail == atomic_load_acquire(ring->head))
 		return FIO_Q_BUSY;
 
 	if (o->cmdprio_percentage)
 		fio_ioring_prio_prep(td, io_u);
 	ring->array[tail & ld->sq_ring_mask] = io_u->index;
-	*ring->tail = next_tail;
-	write_barrier();
+	atomic_store_release(ring->tail, next_tail);
 
 	ld->queued++;
 	return FIO_Q_QUEUED;

@@ -5,6 +5,9 @@ os:
 compiler:
   - clang
   - gcc
+arch:
+  - amd64
+  - arm64
 env:
   matrix:
     - BUILD_ARCH="x86"
@@ -17,41 +20,26 @@ matrix:
     - os: osx
       compiler: clang # Workaround travis setting CC=["clang", "gcc"]
       env: BUILD_ARCH="x86_64"
+      arch: amd64
     # Latest xcode image (needs periodic updating)
     - os: osx
       compiler: clang
       osx_image: xcode11.2
       env: BUILD_ARCH="x86_64"
+      arch: amd64
   exclude:
     - os: osx
       compiler: gcc
-  exclude:
     - os: linux
       compiler: clang
+      arch: amd64
       env: BUILD_ARCH="x86" # Only do the gcc x86 build to reduce clutter
+    - os: linux
+      env: BUILD_ARCH="x86"
+      arch: arm64
+
 before_install:
-  - EXTRA_CFLAGS="-Werror"
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then
-        pkgs=(libaio-dev libcunit1 libcunit1-dev libgoogle-perftools4 libibverbs-dev libiscsi-dev libnuma-dev librbd-dev librdmacm-dev libz-dev);
-        if [[ "$BUILD_ARCH" == "x86" ]]; then
-            pkgs=("${pkgs[@]/%/:i386}");
-            pkgs+=(gcc-multilib python-scipy);
-            EXTRA_CFLAGS="${EXTRA_CFLAGS} -m32";
-        else
-            pkgs+=(glusterfs-common python-scipy);
-        fi;
-        sudo apt-get -qq update;
-        sudo apt-get install --no-install-recommends -qq -y "${pkgs[@]}";
-    fi;
-  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then
-        brew update;
-        brew install cunit;
-        if [[ "$TRAVIS_OSX_IMAGE" == "xcode11.2" ]]; then
-            pip3 install scipy;
-        fi;
-        pip install scipy;
-    fi;
+  - ci/travis-install.sh
+
 script:
-  - ./configure --extra-cflags="${EXTRA_CFLAGS}" && make
-  - make test
-  - sudo python3 t/run-fio-tests.py --skip 6 1007 1008 --debug
+  - ci/travis-build.sh
