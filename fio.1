@@ -1857,6 +1857,22 @@ than normal.
 When hipri is set this determines the probability of a pvsync2 I/O being high
 priority. The default is 100%.
 .TP
+.BI (pvsync2,libaio,io_uring)nowait
+By default if a request cannot be executed immediately (e.g. resource starvation,
+waiting on locks) it is queued and the initiating process will be blocked until
+the required resource becomes free.
+This option sets the RWF_NOWAIT flag (supported from the 4.14 Linux kernel) and
+the call will return instantly with EAGAIN or a partial result rather than waiting.
+
+It is useful to also use \fBignore_error\fR=EAGAIN when using this option.
+Note: glibc 2.27, 2.28 have a bug in syscall wrappers preadv2, pwritev2.
+They return EOPNOTSUP instead of EAGAIN.
+
+For cached I/O, using this option usually means a request operates only with
+cached data. Currently the RWF_NOWAIT flag does not supported for cached write.
+For direct I/O, requests will only succeed if cache invalidation isn't required,
+file blocks are fully allocated and the disk request could be issued immediately.
+.TP
 .BI (cpuio)cpuload \fR=\fPint
 Attempt to use the specified percentage of CPU cycles. This is a mandatory
 option when using cpuio I/O engine.
@@ -3847,7 +3863,8 @@ Fio supports a variety of log file formats, for logging latencies, bandwidth,
 and IOPS. The logs share a common format, which looks like this:
 .RS
 .P
-time (msec), value, data direction, block size (bytes), offset (bytes)
+time (msec), value, data direction, block size (bytes), offset (bytes),
+command priority
 .RE
 .P
 `Time' for the log entry is always in milliseconds. The `value' logged depends
@@ -3880,6 +3897,9 @@ I/O is a TRIM
 The entry's `block size' is always in bytes. The `offset' is the position in bytes
 from the start of the file for that particular I/O. The logging of the offset can be
 toggled with \fBlog_offset\fR.
+.P
+`Command priority` is 0 for normal priority and 1 for high priority. This is controlled
+by the ioengine specific \fBcmdprio_percentage\fR.
 .P
 Fio defaults to logging every individual I/O but when windowed logging is set
 through \fBlog_avg_msec\fR, either the average (by default) or the maximum

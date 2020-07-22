@@ -19,6 +19,7 @@
 #include "oslib/asprintf.h"
 #include "smalloc.h"
 #include "verify.h"
+#include "pshared.h"
 #include "zbd.h"
 
 /**
@@ -353,7 +354,6 @@ static int init_zone_info(struct thread_data *td, struct fio_file *f)
 	struct fio_zone_info *p;
 	uint64_t zone_size = td->o.zone_size;
 	struct zoned_block_device_info *zbd_info = NULL;
-	pthread_mutexattr_t attr;
 	int i;
 
 	if (zone_size == 0) {
@@ -374,16 +374,14 @@ static int init_zone_info(struct thread_data *td, struct fio_file *f)
 	if (!zbd_info)
 		return -ENOMEM;
 
-	pthread_mutexattr_init(&attr);
-	pthread_mutexattr_setpshared(&attr, true);
-	pthread_mutex_init(&zbd_info->mutex, &attr);
-	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+	mutex_init_pshared(&zbd_info->mutex);
 	zbd_info->refcount = 1;
 	p = &zbd_info->zone_info[0];
 	for (i = 0; i < nr_zones; i++, p++) {
-		pthread_mutex_init(&p->mutex, &attr);
+		mutex_init_pshared_with_type(&p->mutex,
+					     PTHREAD_MUTEX_RECURSIVE);
 		p->start = i * zone_size;
-		p->wp = p->start + zone_size;
+		p->wp = p->start;
 		p->type = ZBD_ZONE_TYPE_SWR;
 		p->cond = ZBD_ZONE_COND_EMPTY;
 	}
@@ -395,7 +393,6 @@ static int init_zone_info(struct thread_data *td, struct fio_file *f)
 	f->zbd_info->zone_size_log2 = is_power_of_2(zone_size) ?
 		ilog2(zone_size) : 0;
 	f->zbd_info->nr_zones = nr_zones;
-	pthread_mutexattr_destroy(&attr);
 	return 0;
 }
 
@@ -415,11 +412,7 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 	struct fio_zone_info *p;
 	uint64_t zone_size, offset;
 	struct zoned_block_device_info *zbd_info = NULL;
-	pthread_mutexattr_t attr;
 	int i, j, ret = 0;
-
-	pthread_mutexattr_init(&attr);
-	pthread_mutexattr_setpshared(&attr, true);
 
 	zones = calloc(ZBD_REPORT_MAX_ZONES, sizeof(struct zbd_zone));
 	if (!zones)
@@ -454,14 +447,14 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 	ret = -ENOMEM;
 	if (!zbd_info)
 		goto out;
-	pthread_mutex_init(&zbd_info->mutex, &attr);
-	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+	mutex_init_pshared(&zbd_info->mutex);
 	zbd_info->refcount = 1;
 	p = &zbd_info->zone_info[0];
 	for (offset = 0, j = 0; j < nr_zones;) {
 		z = &zones[0];
 		for (i = 0; i < nrz; i++, j++, z++, p++) {
-			pthread_mutex_init(&p->mutex, &attr);
+			mutex_init_pshared_with_type(&p->mutex,
+						     PTHREAD_MUTEX_RECURSIVE);
 			p->start = z->start;
 			switch (z->cond) {
 			case ZBD_ZONE_COND_NOT_WP:
@@ -512,7 +505,6 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 out:
 	sfree(zbd_info);
 	free(zones);
-	pthread_mutexattr_destroy(&attr);
 	return ret;
 }
 
@@ -997,7 +989,7 @@ static struct fio_zone_info *zbd_convert_to_open_zone(struct thread_data *td,
 
 	assert(is_valid_offset(f, io_u->offset));
 
-	if (td->o.job_max_open_zones) {
+	if (td->o.max_open_zones || td->o.job_max_open_zones) {
 		/*
 		 * This statement accesses f->zbd_info->open_zones[] on purpose
 		 * without locking.
@@ -1026,7 +1018,7 @@ static struct fio_zone_info *zbd_convert_to_open_zone(struct thread_data *td,
 
 		zone_lock(td, f, z);
 		pthread_mutex_lock(&f->zbd_info->mutex);
-		if (td->o.job_max_open_zones == 0)
+		if (td->o.max_open_zones == 0 && td->o.job_max_open_zones == 0)
 			goto examine_zone;
 		if (f->zbd_info->num_open_zones == 0) {
 			pthread_mutex_unlock(&f->zbd_info->mutex);
@@ -1082,7 +1074,7 @@ examine_zone:
 	}
 	dprint(FD_ZBD, "%s(%s): closing zone %d\n", __func__, f->file_name,
 	       zone_idx);
-	if (td->o.job_max_open_zones)
+	if (td->o.max_open_zones || td->o.job_max_open_zones)
 		zbd_close_zone(td, f, open_zone_idx);
 	pthread_mutex_unlock(&f->zbd_info->mutex);
 
@@ -1373,7 +1365,7 @@ void setup_zbd_zone_mode(struct thread_data *td, struct io_u *io_u)
 }
 
 /**
- * zbd_adjust_ddir - Adjust an I/O direction for zonedmode=zbd.
+ * zbd_adjust_ddir - Adjust an I/O direction for zonemode=zbd.
  *
  * @td: FIO thread data.
  * @io_u: FIO I/O unit.

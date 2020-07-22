@@ -122,10 +122,7 @@ class FioExeTest(FioTest):
     def run(self):
         """Execute the binary or script described by this instance."""
 
-        if self.parameters:
-            command = [self.exe_path] + self.parameters
-        else:
-            command = [self.exe_path]
+        command = [self.exe_path] + self.parameters
         command_file = open(self.command_file, "w+")
         command_file.write("%s\n" % command)
         command_file.close()
@@ -423,14 +420,14 @@ class FioJobTest_t0009(FioJobTest):
             self.passed = False
 
 
-class FioJobTest_t0011(FioJobTest):
+class FioJobTest_iops_rate(FioJobTest):
     """Test consists of fio test job t0009
     Confirm that job0 iops == 1000
     and that job1_iops / job0_iops ~ 8
     With two runs of fio-3.16 I observed a ratio of 8.3"""
 
     def check_result(self):
-        super(FioJobTest_t0011, self).check_result()
+        super(FioJobTest_iops_rate, self).check_result()
 
         if not self.passed:
             return
@@ -441,13 +438,20 @@ class FioJobTest_t0011(FioJobTest):
         logging.debug("Test %d: iops1: %f", self.testnum, iops1)
         logging.debug("Test %d: ratio: %f", self.testnum, ratio)
 
-        if iops1 < 998 or iops1 > 1002:
+        if iops1 < 950 or iops1 > 1050:
             self.failure_reason = "{0} iops value mismatch,".format(self.failure_reason)
             self.passed = False
 
         if ratio < 7 or ratio > 9:
             self.failure_reason = "{0} iops ratio mismatch,".format(self.failure_reason)
             self.passed = False
+
+
+class FioJobTest_t0013(FioJobTest):
+    """Runs fio test job t0013"""
+
+    def check_result(self):
+        super(FioJobTest_t0013, self).check_result()
 
 
 class Requirements(object):
@@ -670,8 +674,30 @@ TEST_LIST = [
     },
     {
         'test_id':          11,
-        'test_class':       FioJobTest_t0011,
+        'test_class':       FioJobTest_iops_rate,
         'job':              't0011-5d2788d5.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'output_format':    'json',
+        'requirements':     [],
+    },
+    {
+        'test_id':          12,
+        'test_class':       FioJobTest_iops_rate,
+        'job':              't0012.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'output_format':    'json',
+        'requirements':     [],
+        'requirements':     [Requirements.not_macos],
+        # mac os does not support CPU affinity
+    },
+    {
+        'test_id':          13,
+        'test_class':       FioJobTest_t0013,
+        'job':              't0013.fio',
         'success':          SUCCESS_DEFAULT,
         'pre_job':          None,
         'pre_success':      None,
@@ -797,6 +823,8 @@ def parse_args():
                         help='provide debug output')
     parser.add_argument('-k', '--skip-req', action='store_true',
                         help='skip requirements checking')
+    parser.add_argument('-p', '--pass-through', action='append',
+                        help='pass-through an argument to an executable test')
     args = parser.parse_args()
 
     return args
@@ -810,6 +838,17 @@ def main():
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    pass_through = {}
+    if args.pass_through:
+        for arg in args.pass_through:
+            if not ':' in arg:
+                print("Invalid --pass-through argument '%s'" % arg)
+                print("Syntax for --pass-through is TESTNUMBER:ARGUMENT")
+                return
+            split = arg.split(":",1)
+            pass_through[int(split[0])] = split[1]
+        logging.debug("Pass-through arguments: %s" % pass_through)
 
     if args.fio_root:
         fio_root = args.fio_root
@@ -874,13 +913,12 @@ def main():
             if config['parameters']:
                 parameters = [p.format(fio_path=fio_path) for p in config['parameters']]
             else:
-                parameters = None
+                parameters = []
             if Path(exe_path).suffix == '.py' and platform.system() == "Windows":
-                if parameters:
-                    parameters.insert(0, exe_path)
-                else:
-                    parameters = [exe_path]
+                parameters.insert(0, exe_path)
                 exe_path = "python.exe"
+            if config['test_id'] in pass_through:
+                parameters += pass_through[config['test_id']].split()
             test = config['test_class'](exe_path, parameters,
                                         config['success'])
         else:

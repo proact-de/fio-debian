@@ -109,6 +109,20 @@ run_one_fio_job() {
 	    --thread=1 --direct=1
 }
 
+write_and_run_one_fio_job() {
+    local r
+    local write_offset="${1}"
+    local write_size="${2}"
+
+    shift 2
+    r=$(((RANDOM << 16) | RANDOM))
+    run_fio --filename="$dev" --randseed="$r"  --name="write_job" --rw=write \
+	    "$(ioengine "psync")" --bs="${logical_block_size}" \
+	    --zonemode=zbd --zonesize="${zone_size}" --thread=1 --direct=1 \
+	    --offset="${write_offset}" --size="${write_size}" \
+	    --name="$dev" --wait_for="write_job" "$@" --thread=1 --direct=1
+}
+
 # Run fio on the first four sequential zones of the disk.
 run_fio_on_seq() {
     local opts=()
@@ -170,13 +184,7 @@ test3() {
 	opts+=("--zonesize=${zone_size}")
     fi
     run_fio "${opts[@]}" >> "${logfile}.${test_number}" 2>&1 || return $?
-    grep -q 'READ:' "${logfile}.${test_number}"
-    rc=$?
-    if [ -n "$is_zbd" ]; then
-	[ $rc != 0 ]
-    else
-	[ $rc = 0 ]
-    fi
+    ! grep -q 'READ:' "${logfile}.${test_number}"
 }
 
 # Run fio with --read_beyond_wp=1 against an empty zone.
@@ -207,14 +215,18 @@ test5() {
     check_read $size || return $?
 }
 
-# Sequential read from sequential zones. Must be run after test5.
+# Sequential read from sequential zones.
 test6() {
     local size
 
     size=$((4 * zone_size))
-    run_fio_on_seq "$(ioengine "psync")" --iodepth=1 --rw=read	\
-		   --bs="$(max $((zone_size / 64)) "$logical_block_size")"\
-		   >>"${logfile}.${test_number}" 2>&1 || return $?
+    write_and_run_one_fio_job \
+	    $((first_sequential_zone_sector * 512)) "${size}" \
+	    --offset=$((first_sequential_zone_sector * 512)) \
+	    --size="${size}" --zonemode=zbd --zonesize="${zone_size}" \
+	    "$(ioengine "psync")" --iodepth=1 --rw=read \
+	    --bs="$(max $((zone_size / 64)) "$logical_block_size")" \
+	    >>"${logfile}.${test_number}" 2>&1 || return $?
     check_read $size || return $?
 }
 
@@ -337,41 +349,45 @@ test14() {
 # Sequential read on a mix of empty and full zones.
 test15() {
     local i off size
+    local w_off w_size
 
     for ((i=0;i<4;i++)); do
 	[ -n "$is_zbd" ] &&
 	    reset_zone "$dev" $((first_sequential_zone_sector +
 				 i*sectors_per_zone))
     done
-    off=$(((first_sequential_zone_sector + 2 * sectors_per_zone) * 512))
-    size=$((2 * zone_size))
-    run_one_fio_job "$(ioengine "psync")" --rw=write --bs=$((zone_size / 16))\
-		    --zonemode=zbd --zonesize="${zone_size}" --offset=$off \
-		    --size=$size >>"${logfile}.${test_number}" 2>&1 ||
-	return $?
-    check_written $size || return $?
+    w_off=$(((first_sequential_zone_sector + 2 * sectors_per_zone) * 512))
+    w_size=$((2 * zone_size))
     off=$((first_sequential_zone_sector * 512))
     size=$((4 * zone_size))
-    run_one_fio_job "$(ioengine "psync")" --rw=read --bs=$((zone_size / 16)) \
+    write_and_run_one_fio_job "${w_off}" "${w_size}" \
+		    "$(ioengine "psync")" --rw=read --bs=$((zone_size / 16)) \
 		    --zonemode=zbd --zonesize="${zone_size}" --offset=$off \
 		    --size=$((size)) >>"${logfile}.${test_number}" 2>&1 ||
 	return $?
-    if [ -n "$is_zbd" ]; then
-	check_read $((size / 2))
-    else
-	check_read $size
-    fi
+    check_written $((w_size)) || return $?
+    check_read $((size / 2))
 }
 
-# Random read on a mix of empty and full zones. Must be run after test15.
+# Random read on a mix of empty and full zones.
 test16() {
     local off size
+    local i w_off w_size
 
+    for ((i=0;i<4;i++)); do
+	[ -n "$is_zbd" ] &&
+	    reset_zone "$dev" $((first_sequential_zone_sector +
+				 i*sectors_per_zone))
+    done
+    w_off=$(((first_sequential_zone_sector + 2 * sectors_per_zone) * 512))
+    w_size=$((2 * zone_size))
     off=$((first_sequential_zone_sector * 512))
     size=$((4 * zone_size))
-    run_one_fio_job "$(ioengine "libaio")" --iodepth=64 --rw=randread --bs=16K \
+    write_and_run_one_fio_job "${w_off}" "${w_size}" \
+		    "$(ioengine "libaio")" --iodepth=64 --rw=randread --bs=16K \
 		    --zonemode=zbd --zonesize="${zone_size}" --offset=$off \
 		    --size=$size >>"${logfile}.${test_number}" 2>&1 || return $?
+    check_written $w_size || return $?
     check_read $size || return $?
 }
 
@@ -381,15 +397,9 @@ test17() {
 
     off=$(((disk_size / zone_size - 1) * zone_size))
     size=$((disk_size - off))
-    # Overwrite the last zone to avoid that reading from that zone fails.
     if [ -n "$is_zbd" ]; then
 	reset_zone "$dev" $((off / 512)) || return $?
     fi
-    run_one_fio_job "$(ioengine "psync")" --rw=write --offset="$off"	\
-		    --zonemode=zbd --zonesize="${zone_size}"		\
-		    --bs="$zone_size" --size="$zone_size"		\
-		    >>"${logfile}.${test_number}" 2>&1 || return $?
-    check_written "$zone_size" || return $?
     run_one_fio_job "$(ioengine "libaio")" --iodepth=8 --rw=randrw --bs=4K \
 		    --zonemode=zbd --zonesize="${zone_size}"		\
 		    --offset=$off --loops=2 --norandommap=1\
@@ -763,10 +773,8 @@ test46() {
 test47() {
     local bs
 
-    [ -z "$is_zbd" ] && return 0
     bs=$((logical_block_size))
-    run_one_fio_job "$(ioengine "psync")" --rw=write --bs=$bs \
-		    --zonemode=zbd --zoneskip=1		 \
+    run_fio_on_seq "$(ioengine "psync")" --rw=write --bs=$bs --zoneskip=1 \
 		    >> "${logfile}.${test_number}" 2>&1 && return 1
     grep -q 'zoneskip 1 is not a multiple of the device zone size' "${logfile}.${test_number}"
 }
@@ -929,20 +937,36 @@ logfile=$0.log
 
 passed=0
 failed=0
+if [ -t 1 ]; then
+    red="\e[1;31m"
+    green="\e[1;32m"
+    end="\e[m"
+else
+    red=""
+    green=""
+    end=""
+fi
 rc=0
+
+intr=0
+trap 'intr=1' SIGINT
+
 for test_number in "${tests[@]}"; do
     rm -f "${logfile}.${test_number}"
-    echo -n "Running test $test_number ... "
+    echo -n "Running test $(printf "%02d" $test_number) ... "
     if eval "test$test_number"; then
 	status="PASS"
+	cc_status="${green}${status}${end}"
 	((passed++))
     else
 	status="FAIL"
+	cc_status="${red}${status}${end}"
 	((failed++))
 	rc=1
     fi
-    echo "$status"
+    echo -e "$cc_status"
     echo "$status" >> "${logfile}.${test_number}"
+    [ $intr -ne 0 ] && exit 1
 done
 
 echo "$passed tests passed"
