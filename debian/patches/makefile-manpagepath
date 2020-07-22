@@ -3,7 +3,7 @@ Author: Martin Steigerwald <martin.steigerwald@proact.de>
 
 --- a/Makefile
 +++ b/Makefile
-@@ -374,7 +374,7 @@
+@@ -427,7 +427,7 @@
  mandir = /usr/share/man
  sharedir = /usr/share/fio
  else
