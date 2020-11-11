@@ -133,6 +133,23 @@ output_sym() {
   echo "#define $1" >> $config_host_h
 }
 
+check_min_lib_version() {
+  _feature=$3
+
+  if "${cross_prefix}"pkg-config --atleast-version="$2" "$1" > /dev/null 2>&1; then
+    return 0
+  fi
+  : "${_feature:=${1}}"
+  if "${cross_prefix}"pkg-config --version > /dev/null 2>&1; then
+    if eval "echo \$$_feature" = "yes" ; then
+      feature_not_found "$_feature" "$1 >= $2"
+    fi
+  else
+    print_config "$1" "missing pkg-config, can't check $_feature version"
+  fi
+  return 1
+}
+
 targetos=""
 cpu=""
 
@@ -144,6 +161,7 @@ libhdfs="no"
 pmemblk="no"
 devdax="no"
 pmem="no"
+cuda="no"
 disable_lex=""
 disable_pmem="no"
 disable_native="no"
@@ -151,6 +169,7 @@ march_set="no"
 libiscsi="no"
 libnbd="no"
 libaio_uring="no"
+libzbc=""
 dynamic_engines="no"
 prefix=/usr/local
 
@@ -202,7 +221,7 @@ for opt do
   ;;
   --disable-pmem) disable_pmem="yes"
   ;;
-  --enable-cuda) enable_cuda="yes"
+  --enable-cuda) cuda="yes"
   ;;
   --disable-native) disable_native="yes"
   ;;
@@ -211,6 +230,8 @@ for opt do
   --enable-libiscsi) libiscsi="yes"
   ;;
   --enable-libnbd) libnbd="yes"
+  ;;
+  --disable-libzbc) libzbc="no"
   ;;
   --disable-tcmalloc) disable_tcmalloc="yes"
   ;;
@@ -255,6 +276,7 @@ if test "$show_help" = "yes" ; then
   echo "--with-ime=             Install path for DDN's Infinite Memory Engine"
   echo "--enable-libiscsi       Enable iscsi support"
   echo "--enable-libnbd         Enable libnbd (NBD engine) support"
+  echo "--disable-libzbc        Disable libzbc even if found"
   echo "--disable-tcmalloc	Disable tcmalloc support"
   echo "--enable-libaio-uring   Enable libaio emulated over io_uring"
   echo "--dynamic-libengines	Lib-based ioengines as dynamic libraries"
@@ -551,6 +573,25 @@ fi
 print_config "Static build" "$build_static"
 
 ##########################################
+# check for C11 atomics support
+cat > $TMPC <<EOF
+#include <stdatomic.h>
+int main(void)
+{
+  _Atomic unsigned v;
+  atomic_load(&v);
+  return 0;
+}
+EOF
+if ! compile_prog "" "" "C11 atomics"; then
+  echo
+  echo "Your compiler doesn't support C11 atomics. gcc 4.9/clang 3.6 are the"
+  echo "minimum versions with it - perhaps your compiler is too old?"
+  fatal "C11 atomics support not found"
+fi
+
+
+##########################################
 # check for wordsize
 wordsize="0"
 cat > $TMPC <<EOF
@@ -607,8 +648,13 @@ int main(void)
   return 0;
 }
 EOF
-  if test "$libaio_uring" = "yes" && compile_prog "" "-luring" "libaio io_uring" ; then
-    libaio=yes
+  if test "$libaio_uring" = "yes"; then
+    if compile_prog "" "-luring" "libaio io_uring" ; then
+      libaio=yes
+      LIBS="-luring $LIBS"
+    else
+      feature_not_found "libaio io_uring" ""
+    fi
   elif compile_prog "" "-laio" "libaio" ; then
     libaio=yes
     libaio_uring=no
@@ -1492,18 +1538,17 @@ if test "$?" != "0" ; then
   echo "configure: gtk and gthread not found"
   exit 1
 fi
-if ! ${cross_prefix}pkg-config --atleast-version 2.18.0 gtk+-2.0; then
-  echo "GTK found, but need version 2.18 or higher"
-  gfio="no"
-else
+gfio="yes"
+if check_min_lib_version gtk+-2.0 2.18.0 "gfio"; then
   if compile_prog "$GTK_CFLAGS" "$GTK_LIBS" "gfio" ; then
-    gfio="yes"
     GFIO_LIBS="$LIBS $GTK_LIBS"
     CFLAGS="$CFLAGS $GTK_CFLAGS"
   else
     echo "Please install gtk and gdk libraries"
     gfio="no"
   fi
+else
+  gfio="no"
 fi
 LDFLAGS=$ORG_LDFLAGS
 fi
@@ -2033,7 +2078,7 @@ if test "$libhdfs" = "yes" ; then
     hdfs_conf_error=1
   fi
   if test "$hdfs_conf_error" = "1" ; then
-    exit 1
+    feature_not_found "libhdfs" ""
   fi
   FIO_HDFS_CPU=$cpu
   if test "$FIO_HDFS_CPU" = "x86_64" ; then
@@ -2072,10 +2117,11 @@ if test "$libpmem" != "yes" ; then
 fi
 cat > $TMPC << EOF
 #include <libpmem.h>
+#include <stdlib.h>
 int main(int argc, char **argv)
 {
   int rc;
-  rc = pmem_is_pmem(0, 0);
+  rc = pmem_is_pmem(NULL, NULL);
   return 0;
 }
 EOF
@@ -2083,6 +2129,27 @@ if compile_prog "" "-lpmem" "libpmem"; then
   libpmem="yes"
 fi
 print_config "libpmem" "$libpmem"
+
+##########################################
+# Check whether libpmem's version >= 1.5
+if test "$libpmem1_5" != "yes" ; then
+  libpmem1_5="no"
+fi
+if test "$libpmem" = "yes"; then
+  cat > $TMPC << EOF
+#include <libpmem.h>
+#include <stdlib.h>
+int main(int argc, char **argv)
+{
+  pmem_memcpy(NULL, NULL, NULL, NULL);
+  return 0;
+}
+EOF
+  if compile_prog "" "-lpmem" "libpmem1_5"; then
+    libpmem1_5="yes"
+  fi
+fi
+print_config "libpmem1_5" "$libpmem1_5"
 
 ##########################################
 # Check whether we have libpmemblk
@@ -2106,10 +2173,12 @@ EOF
 fi
 print_config "libpmemblk" "$libpmemblk"
 
-# Choose the ioengines
+# Choose libpmem-based ioengines
 if test "$libpmem" = "yes" && test "$disable_pmem" = "no"; then
-  pmem="yes"
   devdax="yes"
+  if test "$libpmem1_5" = "yes"; then
+    pmem="yes"
+  fi
   if test "$libpmemblk" = "yes"; then
     pmemblk="yes"
   fi
@@ -2151,33 +2220,26 @@ fi
 print_config "DDN's Infinite Memory Engine" "$libime"
 
 ##########################################
-# Check if we have required environment variables configured for libiscsi
-if test "$libiscsi" = "yes" ; then
-  if $(pkg-config --atleast-version=1.9.0 libiscsi); then
+# Check if we have libiscsi
+if test "$libiscsi" != "no" ; then
+  if check_min_lib_version libiscsi 1.9.0; then
     libiscsi="yes"
     libiscsi_cflags=$(pkg-config --cflags libiscsi)
     libiscsi_libs=$(pkg-config --libs libiscsi)
   else
-    if test "$libiscsi" = "yes" ; then
-      echo "libiscsi" "Install libiscsi >= 1.9.0"
-    fi
     libiscsi="no"
   fi
 fi
 print_config "iscsi engine" "$libiscsi"
 
 ##########################################
-# Check if we have libnbd (for NBD support).
-minimum_libnbd=0.9.8
-if test "$libnbd" = "yes" ; then
-  if $(pkg-config --atleast-version=$minimum_libnbd libnbd); then
+# Check if we have libnbd (for NBD support)
+if test "$libnbd" != "no" ; then
+  if check_min_lib_version libnbd 0.9.8; then
     libnbd="yes"
     libnbd_cflags=$(pkg-config --cflags libnbd)
     libnbd_libs=$(pkg-config --libs libnbd)
   else
-    if test "$libnbd" = "yes" ; then
-      echo "libnbd" "Install libnbd >= $minimum_libnbd"
-    fi
     libnbd="no"
   fi
 fi
@@ -2390,6 +2452,7 @@ if compile_prog "" "" "valgrind_dev"; then
 fi
 print_config "Valgrind headers" "$valgrind_dev"
 
+if test "$targetos" = "Linux" ; then
 ##########################################
 # <linux/blkzoned.h> probe
 if test "$linux_blkzoned" != "yes" ; then
@@ -2408,10 +2471,25 @@ fi
 print_config "Zoned block device support" "$linux_blkzoned"
 
 ##########################################
-# libzbc probe
-if test "$libzbc" != "yes" ; then
-  libzbc="no"
+# Check BLK_ZONE_REP_CAPACITY
+cat > $TMPC << EOF
+#include <linux/blkzoned.h>
+int main(void)
+{
+  return BLK_ZONE_REP_CAPACITY;
+}
+EOF
+if compile_prog "" "" "blkzoned report capacity"; then
+  output_sym "CONFIG_HAVE_REP_CAPACITY"
+  rep_capacity="yes"
+else
+  rep_capacity="no"
 fi
+print_config "Zoned block device capacity" "$rep_capacity"
+fi
+
+##########################################
+# libzbc probe
 cat > $TMPC << EOF
 #include <libzbc/zbc.h>
 int main(int argc, char **argv)
@@ -2421,19 +2499,18 @@ int main(int argc, char **argv)
   return zbc_open("foo=bar", O_RDONLY, &dev);
 }
 EOF
-if compile_prog "" "-lzbc" "libzbc"; then
-  libzbcvermaj=$(pkg-config --modversion libzbc | sed 's/\.[0-9]*\.[0-9]*//')
-  if test "$libzbcvermaj" -ge "5" ; then
+if test "$libzbc" != "no" ; then
+  if compile_prog "" "-lzbc" "libzbc"; then
     libzbc="yes"
+    if ! check_min_lib_version libzbc 5; then
+      libzbc="no"
+    fi
   else
-    print_config "libzbc engine" "Unsupported libzbc version (version 5 or above required)"
+    if test "$libzbc" = "yes" ; then
+      feature_not_found "libzbc" "libzbc or libzbc/zbc.h"
+    fi
     libzbc="no"
   fi
-else
-  if test "$libzbc" = "yes" ; then
-      feature_not_found "libzbc" "libzbc or libzbc/zbc.h"
-  fi
-  libzbc="no"
 fi
 print_config "libzbc engine" "$libzbc"
 
@@ -2468,9 +2545,7 @@ print_config "march_armv8_a_crc_crypto" "$march_armv8_a_crc_crypto"
 
 ##########################################
 # cuda probe
-if test "$cuda" != "yes" ; then
-  cuda="no"
-fi
+if test "$cuda" != "no" ; then
 cat > $TMPC << EOF
 #include <cuda.h>
 int main(int argc, char **argv)
@@ -2478,9 +2553,15 @@ int main(int argc, char **argv)
   return cuInit(0);
 }
 EOF
-if test "$enable_cuda" = "yes" && compile_prog "" "-lcuda" "cuda"; then
-  cuda="yes"
-  LIBS="-lcuda $LIBS"
+  if compile_prog "" "-lcuda" "cuda"; then
+    cuda="yes"
+    LIBS="-lcuda $LIBS"
+  else
+    if test "$cuda" = "yes" ; then
+      feature_not_found "cuda" ""
+    fi
+    cuda="no"
+  fi
 fi
 print_config "cuda" "$cuda"
 
@@ -2968,11 +3049,16 @@ int main(int argc, char **argv)
   return 0;
 }
 EOF
-if test "$disable_tcmalloc" != "yes"  && compile_prog "" "-ltcmalloc" "tcmalloc"; then
-  LIBS="-ltcmalloc $LIBS"
-  tcmalloc="yes"
-else
-  tcmalloc="no"
+if test "$disable_tcmalloc" != "yes"; then
+  if compile_prog "" "-ltcmalloc" "tcmalloc"; then
+    tcmalloc="yes"
+    LIBS="-ltcmalloc $LIBS"
+  elif compile_prog "" "-l:libtcmalloc_minimal.so.4" "tcmalloc_minimal4"; then
+    tcmalloc="yes"
+    LIBS="-l:libtcmalloc_minimal.so.4 $LIBS"
+  else
+    tcmalloc="no"
+  fi
 fi
 print_config "TCMalloc support" "$tcmalloc"
 

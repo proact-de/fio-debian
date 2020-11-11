@@ -464,6 +464,7 @@ static int get_next_block(struct thread_data *td, struct io_u *io_u,
 			log_err("fio: bug in offset generation: offset=%llu, b=%llu\n", (unsigned long long) offset, (unsigned long long) b);
 			ret = 1;
 		}
+		io_u->verify_offset = io_u->offset;
 	}
 
 	return ret;
@@ -506,6 +507,7 @@ static int get_next_offset(struct thread_data *td, struct io_u *io_u,
 		return 1;
 	}
 
+	io_u->verify_offset = io_u->offset;
 	return 0;
 }
 
@@ -680,7 +682,22 @@ static enum fio_ddir rate_ddir(struct thread_data *td, enum fio_ddir ddir)
 	if (td->o.io_submit_mode == IO_MODE_INLINE)
 		io_u_quiesce(td);
 
+	if (td->o.timeout && ((usec + now) > td->o.timeout)) {
+		/*
+		 * check if the usec is capable of taking negative values
+		 */
+		if (now > td->o.timeout) {
+			ddir = DDIR_INVAL;
+			return ddir;
+		}
+		usec = td->o.timeout - now;
+	}
 	usec_sleep(td, usec);
+
+	now = utime_since_now(&td->epoch);
+	if ((td->o.timeout && (now > td->o.timeout)) || td->terminate)
+		ddir = DDIR_INVAL;
+
 	return ddir;
 }
 
@@ -778,7 +795,7 @@ void put_io_u(struct thread_data *td, struct io_u *io_u)
 {
 	const bool needs_lock = td_async_processing(td);
 
-	zbd_put_io_u(io_u);
+	zbd_put_io_u(td, io_u);
 
 	if (td->parent)
 		td = td->parent;
@@ -896,6 +913,10 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 
 	set_rw_ddir(td, io_u);
 
+	if (io_u->ddir == DDIR_INVAL) {
+		dprint(FD_IO, "invalid direction received ddir = %d", io_u->ddir);
+		return 1;
+	}
 	/*
 	 * fsync() or fdatasync() or trim etc, we are done
 	 */
@@ -945,6 +966,7 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 
 out:
 	dprint_io_u(io_u, "fill");
+	io_u->verify_offset = io_u->offset;
 	td->zone_bytes += io_u->buflen;
 	return 0;
 }
@@ -971,6 +993,7 @@ static void __io_u_mark_map(uint64_t *map, unsigned int nr)
 		break;
 	case 1 ... 4:
 		idx = 1;
+		fallthrough;
 	case 0:
 		break;
 	}
@@ -1012,6 +1035,7 @@ void io_u_mark_depth(struct thread_data *td, unsigned int nr)
 		break;
 	case 2 ... 3:
 		idx = 1;
+		fallthrough;
 	case 1:
 		break;
 	}
@@ -1052,6 +1076,7 @@ static void io_u_mark_lat_nsec(struct thread_data *td, unsigned long long nsec)
 		break;
 	case 2 ... 3:
 		idx = 1;
+		fallthrough;
 	case 0 ... 1:
 		break;
 	}
@@ -1093,6 +1118,7 @@ static void io_u_mark_lat_usec(struct thread_data *td, unsigned long long usec)
 		break;
 	case 2 ... 3:
 		idx = 1;
+		fallthrough;
 	case 0 ... 1:
 		break;
 	}
@@ -1140,6 +1166,7 @@ static void io_u_mark_lat_msec(struct thread_data *td, unsigned long long msec)
 		break;
 	case 2 ... 3:
 		idx = 1;
+		fallthrough;
 	case 0 ... 1:
 		break;
 	}
@@ -1342,7 +1369,7 @@ static long set_io_u_file(struct thread_data *td, struct io_u *io_u)
 		if (!fill_io_u(td, io_u))
 			break;
 
-		zbd_put_io_u(io_u);
+		zbd_put_io_u(td, io_u);
 
 		put_file_log(td, f);
 		td_io_close_file(td, f);
@@ -1545,9 +1572,10 @@ struct io_u *__get_io_u(struct thread_data *td)
 		__td_io_u_lock(td);
 
 again:
-	if (!io_u_rempty(&td->io_u_requeues))
+	if (!io_u_rempty(&td->io_u_requeues)) {
 		io_u = io_u_rpop(&td->io_u_requeues);
-	else if (!queue_full(td)) {
+		io_u->resid = 0;
+	} else if (!queue_full(td)) {
 		io_u = io_u_qpop(&td->io_u_freelist);
 
 		io_u->file = NULL;
@@ -1954,8 +1982,23 @@ static void io_completed(struct thread_data *td, struct io_u **io_u_ptr,
 	td->last_ddir = ddir;
 
 	if (!io_u->error && ddir_rw(ddir)) {
-		unsigned long long bytes = io_u->buflen - io_u->resid;
+		unsigned long long bytes = io_u->xfer_buflen - io_u->resid;
 		int ret;
+
+		/*
+		 * Make sure we notice short IO from here, and requeue them
+		 * appropriately!
+		 */
+		if (io_u->resid) {
+			io_u->xfer_buflen = io_u->resid;
+			io_u->xfer_buf += bytes;
+			io_u->offset += bytes;
+			td->ts.short_io_u[io_u->ddir]++;
+			if (io_u->offset < io_u->file->real_file_size) {
+				requeue_io_u(td, io_u_ptr);
+				return;
+			}
+		}
 
 		td->io_blocks[ddir]++;
 		td->io_bytes[ddir] += bytes;

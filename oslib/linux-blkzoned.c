@@ -113,6 +113,16 @@ out:
 	return 0;
 }
 
+static uint64_t zone_capacity(struct blk_zone_report *hdr,
+			      struct blk_zone *blkz)
+{
+#ifdef CONFIG_HAVE_REP_CAPACITY
+	if (hdr->flags & BLK_ZONE_REP_CAPACITY)
+		return blkz->capacity << 9;
+#endif
+	return blkz->len << 9;
+}
+
 int blkzoned_report_zones(struct thread_data *td, struct fio_file *f,
 			  uint64_t offset, struct zbd_zone *zones,
 			  unsigned int nr_zones)
@@ -149,6 +159,7 @@ int blkzoned_report_zones(struct thread_data *td, struct fio_file *f,
 		z->start = blkz->start << 9;
 		z->wp = blkz->wp << 9;
 		z->len = blkz->len << 9;
+		z->capacity = zone_capacity(hdr, blkz);
 
 		switch (blkz->type) {
 		case BLK_ZONE_TYPE_CONVENTIONAL:
@@ -211,9 +222,21 @@ int blkzoned_reset_wp(struct thread_data *td, struct fio_file *f,
 		.sector         = offset >> 9,
 		.nr_sectors     = length >> 9,
 	};
+	int fd, ret = 0;
 
-	if (ioctl(f->fd, BLKRESETZONE, &zr) < 0)
-		return -errno;
+	/* If the file is not yet opened, open it for this function. */
+	fd = f->fd;
+	if (fd < 0) {
+		fd = open(f->file_name, O_RDWR | O_LARGEFILE);
+		if (fd < 0)
+			return -errno;
+	}
 
-	return 0;
+	if (ioctl(fd, BLKRESETZONE, &zr) < 0)
+		ret = -errno;
+
+	if (f->fd < 0)
+		close(fd);
+
+	return ret;
 }

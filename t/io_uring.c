@@ -94,6 +94,8 @@ static int sq_thread_poll = 0;	/* use kernel submission/poller thread */
 static int sq_thread_cpu = -1;	/* pin above thread to this CPU */
 static int do_nop = 0;		/* no-op SQ ring commands */
 
+static int vectored = 1;
+
 static int io_uring_register_buffers(struct submitter *s)
 {
 	if (do_nop)
@@ -123,6 +125,29 @@ static int io_uring_register_files(struct submitter *s)
 static int io_uring_setup(unsigned entries, struct io_uring_params *p)
 {
 	return syscall(__NR_io_uring_setup, entries, p);
+}
+
+static void io_uring_probe(int fd)
+{
+	struct io_uring_probe *p;
+	int ret;
+
+	p = malloc(sizeof(*p) + 256 * sizeof(struct io_uring_probe_op));
+	if (!p)
+		return;
+
+	memset(p, 0, sizeof(*p) + 256 * sizeof(struct io_uring_probe_op));
+	ret = syscall(__NR_io_uring_register, fd, IORING_REGISTER_PROBE, p, 256);
+	if (ret < 0)
+		goto out;
+
+	if (IORING_OP_READ > p->ops_len)
+		goto out;
+
+	if ((p->ops[IORING_OP_READ].flags & IO_URING_OP_SUPPORTED))
+		vectored = 0;
+out:
+	free(p);
 }
 
 static int io_uring_enter(struct submitter *s, unsigned int to_submit,
@@ -184,6 +209,11 @@ static void init_io(struct submitter *s, unsigned index)
 		sqe->addr = (unsigned long) s->iovecs[index].iov_base;
 		sqe->len = bs;
 		sqe->buf_index = index;
+	} else if (!vectored) {
+		sqe->opcode = IORING_OP_READ;
+		sqe->addr = (unsigned long) s->iovecs[index].iov_base;
+		sqe->len = bs;
+		sqe->buf_index = 0;
 	} else {
 		sqe->opcode = IORING_OP_READV;
 		sqe->addr = (unsigned long) &s->iovecs[index];
@@ -414,6 +444,8 @@ static int setup_ring(struct submitter *s)
 	}
 	s->ring_fd = fd;
 
+	io_uring_probe(fd);
+
 	if (fixedbufs) {
 		ret = io_uring_register_buffers(s);
 		if (ret < 0) {
@@ -503,7 +535,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	while ((opt = getopt(argc, argv, "d:s:c:b:p:h?")) != -1) {
+	while ((opt = getopt(argc, argv, "d:s:c:b:p:B:F:h?")) != -1) {
 		switch (opt) {
 		case 'd':
 			depth = atoi(optarg);
@@ -519,6 +551,12 @@ int main(int argc, char *argv[])
 			break;
 		case 'p':
 			polled = !!atoi(optarg);
+			break;
+		case 'B':
+			fixedbufs = !!atoi(optarg);
+			break;
+		case 'F':
+			register_files = !!atoi(optarg);
 			break;
 		case 'h':
 		case '?':
@@ -596,7 +634,7 @@ int main(int argc, char *argv[])
 		printf("ring setup failed: %s, %d\n", strerror(errno), err);
 		return 1;
 	}
-	printf("polled=%d, fixedbufs=%d, buffered=%d", polled, fixedbufs, buffered);
+	printf("polled=%d, fixedbufs=%d, register_files=%d, buffered=%d", polled, fixedbufs, register_files, buffered);
 	printf(" QD=%d, sq_ring=%d, cq_ring=%d\n", depth, *s->sq_ring.ring_entries, *s->cq_ring.ring_entries);
 
 	pthread_create(&s->thread, NULL, submitter_fn, s);

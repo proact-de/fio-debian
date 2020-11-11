@@ -1476,6 +1476,22 @@ static int str_size_cb(void *data, unsigned long long *__val)
 	return 0;
 }
 
+static int str_io_size_cb(void *data, unsigned long long *__val)
+{
+	struct thread_data *td = cb_data_to_td(data);
+	unsigned long long v = *__val;
+
+	if (parse_is_percent(v)) {
+		td->o.io_size = 0;
+		td->o.io_size_percent = -1ULL - v;
+		dprint(FD_PARSE, "SET io_size_percent %d\n",
+					td->o.io_size_percent);
+	} else
+		td->o.io_size = v;
+
+	return 0;
+}
+
 static int str_write_bw_log_cb(void *data, const char *str)
 {
 	struct thread_data *td = cb_data_to_td(data);
@@ -2043,6 +2059,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.alias	= "io_limit",
 		.lname	= "IO Size",
 		.type	= FIO_OPT_STR_VAL,
+		.cb	= str_io_size_cb,
 		.off1	= offsetof(struct thread_options, io_size),
 		.help	= "Total size of I/O to be performed",
 		.interval = 1024 * 1024,
@@ -3322,6 +3339,17 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_STR_VAL,
 		.off1	= offsetof(struct thread_options, zone_size),
 		.help	= "Amount of data to read per zone",
+		.def	= "0",
+		.interval = 1024 * 1024,
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_ZONE,
+	},
+	{
+		.name	= "zonecapacity",
+		.lname	= "Zone capacity",
+		.type	= FIO_OPT_STR_VAL,
+		.off1	= offsetof(struct thread_options, zone_capacity),
+		.help	= "Capacity per zone",
 		.def	= "0",
 		.interval = 1024 * 1024,
 		.category = FIO_OPT_C_IO,
@@ -4691,20 +4719,14 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.parent	= "flow_id",
 		.hide	= 1,
 		.def	= "0",
+		.maxval	= FLOW_MAX_WEIGHT,
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IO_FLOW,
 	},
 	{
 		.name	= "flow_watermark",
 		.lname	= "I/O flow watermark",
-		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct thread_options, flow_watermark),
-		.help	= "High watermark for flow control. This option"
-			" should be set to the same value for all threads"
-			" with non-zero flow.",
-		.parent	= "flow_id",
-		.hide	= 1,
-		.def	= "1024",
+		.type	= FIO_OPT_SOFT_DEPRECATED,
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IO_FLOW,
 	},

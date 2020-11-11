@@ -1139,6 +1139,8 @@ int setup_files(struct thread_data *td)
 		if (f->io_size == -1ULL)
 			total_size = -1ULL;
 		else {
+			uint64_t io_size;
+
                         if (o->size_percent && o->size_percent != 100) {
 				uint64_t file_size;
 
@@ -1150,7 +1152,14 @@ int setup_files(struct thread_data *td)
 
 				f->io_size -= (f->io_size % td_min_bs(td));
 			}
-			total_size += f->io_size;
+
+			io_size = f->io_size;
+			if (o->io_size_percent && o->io_size_percent != 100) {
+				io_size *= o->io_size_percent;
+				io_size /= 100;
+			}
+
+			total_size += io_size;
 		}
 
 		if (f->filetype == FIO_TYPE_FILE &&
@@ -1445,11 +1454,23 @@ void close_files(struct thread_data *td)
 	}
 }
 
+void fio_file_free(struct fio_file *f)
+{
+	if (fio_file_axmap(f))
+		axmap_free(f->io_axmap);
+	if (!fio_file_smalloc(f)) {
+		free(f->file_name);
+		free(f);
+	} else {
+		sfree(f->file_name);
+		sfree(f);
+	}
+}
+
 void close_and_free_files(struct thread_data *td)
 {
 	struct fio_file *f;
 	unsigned int i;
-	bool use_free = td_ioengine_flagged(td, FIO_NOFILEHASH);
 
 	dprint(FD_FILE, "close files\n");
 
@@ -1470,20 +1491,7 @@ void close_and_free_files(struct thread_data *td)
 		}
 
 		zbd_close_file(f);
-
-		if (use_free)
-			free(f->file_name);
-		else
-			sfree(f->file_name);
-		f->file_name = NULL;
-		if (fio_file_axmap(f)) {
-			axmap_free(f->io_axmap);
-			f->io_axmap = NULL;
-		}
-		if (use_free)
-			free(f);
-		else
-			sfree(f);
+		fio_file_free(f);
 	}
 
 	td->o.filename = NULL;
@@ -1609,6 +1617,8 @@ static struct fio_file *alloc_new_file(struct thread_data *td)
 	f->fd = -1;
 	f->shadow_fd = -1;
 	fio_file_reset(td, f);
+	if (!td_ioengine_flagged(td, FIO_NOFILEHASH))
+		fio_file_set_smalloc(f);
 	return f;
 }
 
