@@ -17,6 +17,7 @@
 #include "../optgroup.h"
 #include "../lib/memalign.h"
 #include "../lib/fls.h"
+#include "../lib/roundup.h"
 
 #ifdef ARCH_HAVE_IOURING
 
@@ -173,6 +174,7 @@ static struct fio_option options[] = {
 		.lname	= "Non-vectored",
 		.type	= FIO_OPT_INT,
 		.off1	= offsetof(struct ioring_options, nonvectored),
+		.def	= "-1",
 		.help	= "Use non-vectored read/write commands",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_IOURING,
@@ -216,9 +218,6 @@ static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 
 	sqe = &ld->sqes[io_u->index];
 
-	/* zero out fields not used in this submission */
-	memset(sqe, 0, sizeof(*sqe));
-
 	if (o->registerfiles) {
 		sqe->fd = f->engine_pos;
 		sqe->flags = IOSQE_FIXED_FILE;
@@ -233,13 +232,21 @@ static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 			sqe->len = io_u->xfer_buflen;
 			sqe->buf_index = io_u->index;
 		} else {
+			struct iovec *iov = &ld->iovecs[io_u->index];
+
+			/*
+			 * Update based on actual io_u, requeue could have
+			 * adjusted these
+			 */
+			iov->iov_base = io_u->xfer_buf;
+			iov->iov_len = io_u->xfer_buflen;
+
 			sqe->opcode = ddir_to_op[io_u->ddir][!!o->nonvectored];
 			if (o->nonvectored) {
-				sqe->addr = (unsigned long)
-						ld->iovecs[io_u->index].iov_base;
-				sqe->len = ld->iovecs[io_u->index].iov_len;
+				sqe->addr = (unsigned long) iov->iov_base;
+				sqe->len = iov->iov_len;
 			} else {
-				sqe->addr = (unsigned long) &ld->iovecs[io_u->index];
+				sqe->addr = (unsigned long) iov;
 				sqe->len = 1;
 			}
 		}
@@ -252,13 +259,18 @@ static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 		if (ld->ioprio_set)
 			sqe->ioprio |= td->o.ioprio;
 		sqe->off = io_u->offset;
+		sqe->rw_flags = 0;
 	} else if (ddir_sync(io_u->ddir)) {
+		sqe->ioprio = 0;
 		if (io_u->ddir == DDIR_SYNC_FILE_RANGE) {
 			sqe->off = f->first_write;
 			sqe->len = f->last_write - f->first_write;
 			sqe->sync_range_flags = td->o.sync_file_range;
 			sqe->opcode = IORING_OP_SYNC_FILE_RANGE;
 		} else {
+			sqe->off = 0;
+			sqe->addr = 0;
+			sqe->len = 0;
 			if (io_u->ddir == DDIR_DATASYNC)
 				sqe->fsync_flags |= IORING_FSYNC_DATASYNC;
 			sqe->opcode = IORING_OP_FSYNC;
@@ -434,9 +446,10 @@ static int fio_ioring_commit(struct thread_data *td)
 	 */
 	if (o->sqpoll_thread) {
 		struct io_sq_ring *ring = &ld->sq_ring;
+		unsigned flags;
 
-		read_barrier();
-		if (*ring->flags & IORING_SQ_NEED_WAKEUP)
+		flags = atomic_load_acquire(ring->flags);
+		if (flags & IORING_SQ_NEED_WAKEUP)
 			io_uring_enter(ld, ld->queued, 0,
 					IORING_ENTER_SQ_WAKEUP);
 		ld->queued = 0;
@@ -538,6 +551,40 @@ static int fio_ioring_mmap(struct ioring_data *ld, struct io_uring_params *p)
 	return 0;
 }
 
+static void fio_ioring_probe(struct thread_data *td)
+{
+	struct ioring_data *ld = td->io_ops_data;
+	struct ioring_options *o = td->eo;
+	struct io_uring_probe *p;
+	int ret;
+
+	/* already set by user, don't touch */
+	if (o->nonvectored != -1)
+		return;
+
+	/* default to off, as that's always safe */
+	o->nonvectored = 0;
+
+	p = malloc(sizeof(*p) + 256 * sizeof(struct io_uring_probe_op));
+	if (!p)
+		return;
+
+	memset(p, 0, sizeof(*p) + 256 * sizeof(struct io_uring_probe_op));
+	ret = syscall(__NR_io_uring_register, ld->ring_fd,
+			IORING_REGISTER_PROBE, p, 256);
+	if (ret < 0)
+		goto out;
+
+	if (IORING_OP_WRITE > p->ops_len)
+		goto out;
+
+	if ((p->ops[IORING_OP_READ].flags & IO_URING_OP_SUPPORTED) &&
+	    (p->ops[IORING_OP_WRITE].flags & IO_URING_OP_SUPPORTED))
+		o->nonvectored = 1;
+out:
+	free(p);
+}
+
 static int fio_ioring_queue_init(struct thread_data *td)
 {
 	struct ioring_data *ld = td->io_ops_data;
@@ -564,15 +611,9 @@ static int fio_ioring_queue_init(struct thread_data *td)
 
 	ld->ring_fd = ret;
 
+	fio_ioring_probe(td);
+
 	if (o->fixedbufs) {
-		struct rlimit rlim = {
-			.rlim_cur = RLIM_INFINITY,
-			.rlim_max = RLIM_INFINITY,
-		};
-
-		if (setrlimit(RLIMIT_MEMLOCK, &rlim) < 0)
-			return -1;
-
 		ret = syscall(__NR_io_uring_register, ld->ring_fd,
 				IORING_REGISTER_BUFFERS, ld->iovecs, depth);
 		if (ret < 0)
@@ -643,6 +684,13 @@ static int fio_ioring_post_init(struct thread_data *td)
 		return 1;
 	}
 
+	for (i = 0; i < td->o.iodepth; i++) {
+		struct io_uring_sqe *sqe;
+
+		sqe = &ld->sqes[i];
+		memset(sqe, 0, sizeof(*sqe));
+	}
+
 	if (o->registerfiles) {
 		err = fio_ioring_register_files(td);
 		if (err) {
@@ -652,11 +700,6 @@ static int fio_ioring_post_init(struct thread_data *td)
 	}
 
 	return 0;
-}
-
-static unsigned roundup_pow2(unsigned depth)
-{
-	return 1UL << __fls(depth - 1);
 }
 
 static int fio_ioring_init(struct thread_data *td)

@@ -738,12 +738,13 @@ Accepted values are:
 .RS
 .TP
 .B none
-The \fBzonerange\fR, \fBzonesize\fR and \fBzoneskip\fR parameters are ignored.
+The \fBzonerange\fR, \fBzonesize\fR \fBzonecapacity\fR and \fBzoneskip\fR
+parameters are ignored.
 .TP
 .B strided
 I/O happens in a single zone until \fBzonesize\fR bytes have been transferred.
 After that number of bytes has been transferred processing of the next zone
-starts.
+starts. The \fBzonecapacity\fR parameter is ignored.
 .TP
 .B zbd
 Zoned block device mode. I/O happens sequentially in each zone, even if random
@@ -770,6 +771,14 @@ For \fBzonemode\fR=zbd, this is the size of a single zone. The
 zoned block device, the specified \fBzonesize\fR must be 0 or equal to the
 device zone size. For a regular block device or file, the specified
 \fBzonesize\fR must be at least 512B.
+.TP
+.BI zonecapacity \fR=\fPint
+For \fBzonemode\fR=zbd, this defines the capacity of a single zone, which is
+the accessible area starting from the zone start address. This parameter only
+applies when using \fBzonemode\fR=zbd in combination with regular block devices.
+If not specified it defaults to the zone size. If the target device is a zoned
+block device, the zone capacity is obtained from the device information and this
+option is ignored.
 .TP
 .BI zoneskip \fR=\fPint
 For \fBzonemode\fR=strided, the number of bytes to skip after \fBzonesize\fR
@@ -2327,7 +2336,9 @@ replay, the file needs to be turned into a blkparse binary data file first
 You can specify a number of files by separating the names with a ':' character.
 See the \fBfilename\fR option for information on how to escape ':'
 characters within the file names. These files will be sequentially assigned to
-job clones created by \fBnumjobs\fR.
+job clones created by \fBnumjobs\fR. '-' is a reserved name, meaning read from
+stdin, notably if \fBfilename\fR is set to '-' which means stdin as well,
+then this flag can't be set to '-'.
 .TP
 .BI read_iolog_chunked \fR=\fPbool
 Determines how iolog is read. If false (default) entire \fBread_iolog\fR will
@@ -2538,27 +2549,25 @@ The ID of the flow. If not specified, it defaults to being a global
 flow. See \fBflow\fR.
 .TP
 .BI flow \fR=\fPint
-Weight in token-based flow control. If this value is used, then there is
-a 'flow counter' which is used to regulate the proportion of activity between
-two or more jobs. Fio attempts to keep this flow counter near zero. The
-\fBflow\fR parameter stands for how much should be added or subtracted to the
-flow counter on each iteration of the main I/O loop. That is, if one job has
-`flow=8' and another job has `flow=\-1', then there will be a roughly 1:8
-ratio in how much one runs vs the other.
-.TP
-.BI flow_watermark \fR=\fPint
-The maximum value that the absolute value of the flow counter is allowed to
-reach before the job must wait for a lower value of the counter.
+Weight in token-based flow control. If this value is used,
+then fio regulates the activity between two or more jobs
+sharing the same flow_id.
+Fio attempts to keep each job activity proportional to other jobs' activities
+in the same flow_id group, with respect to requested weight per job.
+That is, if one job has `flow=3', another job has `flow=2'
+and another with `flow=1`, then there will be a roughly 3:2:1 ratio
+in how much one runs vs the others.
 .TP
 .BI flow_sleep \fR=\fPint
-The period of time, in microseconds, to wait after the flow watermark has
-been exceeded before retrying operations.
+The period of time, in microseconds, to wait after the flow counter
+has exceeded its proportion before retrying operations.
 .TP
 .BI stonewall "\fR,\fB wait_for_previous"
 Wait for preceding jobs in the job file to exit, before starting this
 one. Can be used to insert serialization points in the job file. A stone
 wall also implies starting a new reporting group, see
-\fBgroup_reporting\fR.
+\fBgroup_reporting\fR. Optionally you can use `stonewall=0` to disable or
+`stonewall=1` to enable it.
 .TP
 .BI exitall
 By default, fio will continue running all other jobs when one job finishes.
@@ -2566,15 +2575,27 @@ Sometimes this is not the desired action. Setting \fBexitall\fR will instead
 make fio terminate all jobs in the same group, as soon as one job of that
 group finishes.
 .TP
-.BI exit_what
+.BI exit_what \fR=\fPstr
 By default, fio will continue running all other jobs when one job finishes.
-Sometimes this is not the desired action. Setting \fBexit_all\fR will instead
+Sometimes this is not the desired action. Setting \fBexitall\fR will instead
 make fio terminate all jobs in the same group. The option \fBexit_what\fR
-allows to control which jobs get terminated when \fBexitall\fR is enabled. The
-default is \fBgroup\fR and does not change the behaviour of \fBexitall\fR. The
-setting \fBall\fR terminates all jobs. The setting \fBstonewall\fR terminates
-all currently running jobs across all groups and continues execution with the
-next stonewalled group.
+allows you to control which jobs get terminated when \fBexitall\fR is enabled.
+The default value is \fBgroup\fR.
+The allowed values are:
+.RS
+.RS
+.TP
+.B all
+terminates all jobs.
+.TP
+.B group
+is the default and does not change the behaviour of \fBexitall\fR.
+.TP
+.B stonewall
+terminates all currently running jobs across all groups and continues
+execution with the next stonewalled group.
+.RE
+.RE
 .TP
 .BI exec_prerun \fR=\fPstr
 Before running this job, issue the command specified through

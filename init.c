@@ -564,13 +564,11 @@ static int setup_rate(struct thread_data *td)
 {
 	int ret = 0;
 
-	if (td->o.rate[DDIR_READ] || td->o.rate_iops[DDIR_READ])
-		ret = __setup_rate(td, DDIR_READ);
-	if (td->o.rate[DDIR_WRITE] || td->o.rate_iops[DDIR_WRITE])
-		ret |= __setup_rate(td, DDIR_WRITE);
-	if (td->o.rate[DDIR_TRIM] || td->o.rate_iops[DDIR_TRIM])
-		ret |= __setup_rate(td, DDIR_TRIM);
-
+	for_each_rw_ddir(ddir) {
+		if (td->o.rate[ddir] || td->o.rate_iops[ddir]) {
+			ret |= __setup_rate(td, ddir);
+		}
+	}
 	return ret;
 }
 
@@ -662,31 +660,25 @@ static int fixup_options(struct thread_data *td)
 	if (td_read(td))
 		o->overwrite = 1;
 
-	if (!o->min_bs[DDIR_READ])
-		o->min_bs[DDIR_READ] = o->bs[DDIR_READ];
-	if (!o->max_bs[DDIR_READ])
-		o->max_bs[DDIR_READ] = o->bs[DDIR_READ];
-	if (!o->min_bs[DDIR_WRITE])
-		o->min_bs[DDIR_WRITE] = o->bs[DDIR_WRITE];
-	if (!o->max_bs[DDIR_WRITE])
-		o->max_bs[DDIR_WRITE] = o->bs[DDIR_WRITE];
-	if (!o->min_bs[DDIR_TRIM])
-		o->min_bs[DDIR_TRIM] = o->bs[DDIR_TRIM];
-	if (!o->max_bs[DDIR_TRIM])
-		o->max_bs[DDIR_TRIM] = o->bs[DDIR_TRIM];
+	for_each_rw_ddir(ddir) {
+		if (!o->min_bs[ddir])
+			o->min_bs[ddir] = o->bs[ddir];
+		if (!o->max_bs[ddir])
+			o->max_bs[ddir] = o->bs[ddir];
+	}
 
-	o->rw_min_bs = min(o->min_bs[DDIR_READ], o->min_bs[DDIR_WRITE]);
-	o->rw_min_bs = min(o->min_bs[DDIR_TRIM], o->rw_min_bs);
+	o->rw_min_bs = -1;
+	for_each_rw_ddir(ddir) {
+		o->rw_min_bs = min(o->rw_min_bs, o->min_bs[ddir]);
+	}
 
 	/*
 	 * For random IO, allow blockalign offset other than min_bs.
 	 */
-	if (!o->ba[DDIR_READ] || !td_random(td))
-		o->ba[DDIR_READ] = o->min_bs[DDIR_READ];
-	if (!o->ba[DDIR_WRITE] || !td_random(td))
-		o->ba[DDIR_WRITE] = o->min_bs[DDIR_WRITE];
-	if (!o->ba[DDIR_TRIM] || !td_random(td))
-		o->ba[DDIR_TRIM] = o->min_bs[DDIR_TRIM];
+	for_each_rw_ddir(ddir) {
+		if (!o->ba[ddir] || !td_random(td))
+			o->ba[ddir] = o->min_bs[ddir];
+	}
 
 	if ((o->ba[DDIR_READ] != o->min_bs[DDIR_READ] ||
 	    o->ba[DDIR_WRITE] != o->min_bs[DDIR_WRITE] ||
@@ -765,14 +757,12 @@ static int fixup_options(struct thread_data *td)
 		log_err("fio: rate and rate_iops are mutually exclusive\n");
 		ret |= 1;
 	}
-	if ((o->rate[DDIR_READ] && (o->rate[DDIR_READ] < o->ratemin[DDIR_READ])) ||
-	    (o->rate[DDIR_WRITE] && (o->rate[DDIR_WRITE] < o->ratemin[DDIR_WRITE])) ||
-	    (o->rate[DDIR_TRIM] && (o->rate[DDIR_TRIM] < o->ratemin[DDIR_TRIM])) ||
-	    (o->rate_iops[DDIR_READ] && (o->rate_iops[DDIR_READ] < o->rate_iops_min[DDIR_READ])) ||
-	    (o->rate_iops[DDIR_WRITE] && (o->rate_iops[DDIR_WRITE] < o->rate_iops_min[DDIR_WRITE])) ||
-	    (o->rate_iops[DDIR_TRIM] && (o->rate_iops[DDIR_TRIM] < o->rate_iops_min[DDIR_TRIM]))) {
-		log_err("fio: minimum rate exceeds rate\n");
-		ret |= 1;
+	for_each_rw_ddir(ddir) {
+		if ((o->rate[ddir] && (o->rate[ddir] < o->ratemin[ddir])) ||
+		    (o->rate_iops[ddir] && (o->rate_iops[ddir] < o->rate_iops_min[ddir]))) {
+			log_err("fio: minimum rate exceeds rate, ddir %d\n", +ddir);
+			ret |= 1;
+		}
 	}
 
 	if (!o->timeout && o->time_based) {
@@ -1745,11 +1735,8 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		if (file_alloced) {
 			if (td_new->files) {
 				struct fio_file *f;
-				for_each_file(td_new, f, i) {
-					if (f->file_name)
-						sfree(f->file_name);
-					sfree(f);
-				}
+				for_each_file(td_new, f, i)
+					fio_file_free(f);
 				free(td_new->files);
 				td_new->files = NULL;
 			}
@@ -1848,6 +1835,7 @@ static int __parse_jobs_ini(struct thread_data *td,
 		int nested, char *name, char ***popts, int *aopts, int *nopts)
 {
 	bool global = false;
+	bool stdin_occupied = false;
 	char *string;
 	FILE *f;
 	char *p;
@@ -1864,9 +1852,10 @@ static int __parse_jobs_ini(struct thread_data *td,
 	if (is_buf)
 		f = NULL;
 	else {
-		if (!strcmp(file, "-"))
+		if (!strcmp(file, "-")) {
 			f = stdin;
-		else
+			stdin_occupied = true;
+		} else
 			f = fopen(file, "r");
 
 		if (!f) {
@@ -2068,6 +2057,20 @@ static int __parse_jobs_ini(struct thread_data *td,
 		}
 
 		ret = fio_options_parse(td, opts, num_opts);
+
+		if (!ret && td->o.read_iolog_file != NULL) {
+			char *fname = get_name_by_idx(td->o.read_iolog_file,
+						      td->subjob_number);
+			if (!strcmp(fname, "-")) {
+				if (stdin_occupied) {
+					log_err("fio: only one user (read_iolog_file/job "
+						"file) of stdin is permitted at once but "
+						"more than one was found.\n");
+					ret = 1;
+				}
+				stdin_occupied = true;
+			}
+		}
 		if (!ret) {
 			if (dump_cmdline)
 				dump_opt_list(td);
@@ -2892,7 +2895,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			log_err("%s: unrecognized option '%s'\n", argv[0],
 							argv[optind - 1]);
 			show_closest_option(argv[optind - 1]);
-			/* fall through */
+			fallthrough;
 		default:
 			do_exit++;
 			exit_val = 1;

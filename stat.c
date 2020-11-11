@@ -414,6 +414,18 @@ static void display_lat(const char *name, unsigned long long min,
 	free(maxp);
 }
 
+static double convert_agg_kbytes_percent(struct group_run_stats *rs, int ddir, int mean)
+{
+	double p_of_agg = 100.0;
+	if (rs && rs->agg[ddir] > 1024) {
+		p_of_agg = mean * 100 / (double) (rs->agg[ddir] / 1024.0);
+
+		if (p_of_agg > 100.0)
+			p_of_agg = 100.0;
+	}
+	return p_of_agg;
+}
+
 static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 			     int ddir, struct buf_output *out)
 {
@@ -551,11 +563,7 @@ static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 		else
 			bw_str = "kB";
 
-		if (rs->agg[ddir]) {
-			p_of_agg = mean * 100 / (double) (rs->agg[ddir] / 1024);
-			if (p_of_agg > 100.0)
-				p_of_agg = 100.0;
-		}
+		p_of_agg = convert_agg_kbytes_percent(rs, ddir, mean);
 
 		if (rs->unit_base == 1) {
 			min *= 8.0;
@@ -1070,12 +1078,10 @@ static void show_thread_status_normal(struct thread_stat *ts,
 	if (strlen(ts->description))
 		log_buf(out, "  Description  : [%s]\n", ts->description);
 
-	if (ts->io_bytes[DDIR_READ])
-		show_ddir_status(rs, ts, DDIR_READ, out);
-	if (ts->io_bytes[DDIR_WRITE])
-		show_ddir_status(rs, ts, DDIR_WRITE, out);
-	if (ts->io_bytes[DDIR_TRIM])
-		show_ddir_status(rs, ts, DDIR_TRIM, out);
+	for_each_rw_ddir(ddir) {
+		if (ts->io_bytes[ddir])
+			show_ddir_status(rs, ts, ddir, out);
+	}
 
 	show_latencies(ts, out);
 
@@ -1376,11 +1382,7 @@ static void add_ddir_status_json(struct thread_stat *ts,
 	}
 
 	if (calc_lat(&ts->bw_stat[ddir], &min, &max, &mean, &dev)) {
-		if (rs->agg[ddir]) {
-			p_of_agg = mean * 100 / (double) (rs->agg[ddir] / 1024);
-			if (p_of_agg > 100.0)
-				p_of_agg = 100.0;
-		}
+		p_of_agg = convert_agg_kbytes_percent(rs, ddir, mean);
 	} else {
 		min = max = 0;
 		p_of_agg = mean = dev = 0.0;
@@ -2311,9 +2313,9 @@ void __show_running_run_stats(void)
 
 	for_each_td(td, i) {
 		td->update_rusage = 1;
-		td->ts.io_bytes[DDIR_READ] = td->io_bytes[DDIR_READ];
-		td->ts.io_bytes[DDIR_WRITE] = td->io_bytes[DDIR_WRITE];
-		td->ts.io_bytes[DDIR_TRIM] = td->io_bytes[DDIR_TRIM];
+		for_each_rw_ddir(ddir) {
+			td->ts.io_bytes[ddir] = td->io_bytes[ddir];
+		}
 		td->ts.total_run_time = mtime_since(&td->epoch, &ts);
 
 		rt[i] = mtime_since(&td->start, &ts);
@@ -3130,3 +3132,4 @@ uint32_t *io_u_block_info(struct thread_data *td, struct io_u *io_u)
 	assert(idx < td->ts.nr_block_infos);
 	return info;
 }
+

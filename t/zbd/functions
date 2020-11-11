@@ -19,6 +19,51 @@ if [ -n "${use_libzbc}" ] &&
     exit 1
 fi
 
+blkzone_reports_capacity() {
+	local dev="${1}"
+
+	[[ -n "${blkzone}" ]] &&
+		"${blkzone}" report -c 1 -o 0 "${dev}" | grep -q 'cap '
+}
+
+# Whether or not $1 (/dev/...) is a NVME ZNS device.
+is_nvme_zns() {
+	local s
+
+	s=/sys/block/$(basename "${1}")/device/subsystem
+
+	if [[ ! -h "${s}" || $(realpath "${s}") != /sys/class/nvme ]]; then
+		return 1
+	fi
+
+	[[ $(</sys/block/$(basename "${1}")/queue/zoned) == host-managed ]]
+}
+
+# Whether or not $1 (/dev/...) is a null_blk device with zone capacity smaller
+# than zone size.
+is_nullb_with_zone_cap() {
+	local f
+
+	f=/sys/kernel/config/nullb/$(basename "${1}")
+	[[ -r "${f}/zone_capacity" &&
+		   $(<"${f}/zone_capacity") -lt $(<"${f}/zone_size") ]]
+}
+
+# Check if blkzone is available and suitable for the test target device. If not
+# available, print error message and return 1. Otherwise return 0.
+check_blkzone() {
+	local dev="${1}"
+
+	# If the device supports zone capacity, mandate zone capacity report by
+	# blkzone.
+	if (is_nvme_zns "${dev}" || is_nullb_with_zone_cap "${dev}") &&
+				! blkzone_reports_capacity "${dev}"; then
+		echo "Error: blkzone does not report zone capacity"
+		echo "Error: install latest util-linux with blkzone"
+		return 1
+	fi
+}
+
 # Reports the starting sector and length of the first sequential zone of device
 # $1.
 first_sequential_zone() {
@@ -37,6 +82,43 @@ first_sequential_zone() {
 	    sed -n 's/^Zone [0-9]*: type 0x2 .*, sector \([0-9]*\), \([0-9]*\) sectors,.*$/\1 \2/p' |
 	    head -n1
     fi
+}
+
+# Reports the summed zone capacity of $1 number of zones starting from offset $2
+# on device $3.
+total_zone_capacity() {
+	local nr_zones=$1
+	local sector=$(($2 / 512))
+	local dev=$3
+	local capacity=0 num
+	local grep_str
+
+	if [ -z "$is_zbd" ]; then
+		# For regular block devices, handle zone size as zone capacity.
+		echo $((zone_size * nr_zones))
+		return
+	fi
+
+	if [ -n "${blkzone}" ] && [ ! -n "${use_libzbc}" ]; then
+		if blkzone_reports_capacity "${dev}"; then
+			grep_str='cap \K[0-9a-zA-Z]*'
+		else
+			# If zone capacity is not reported, refer zone length.
+			grep_str='len \K[0-9a-zA-Z]*'
+		fi
+		while read num; do
+			capacity=$((capacity + num))
+		done < <(${blkzone} report -c "$nr_zones" -o "$sector" "$dev" |
+				grep -Po "${grep_str}")
+	else
+		# ZBC devices do not have zone capacity. Use zone size.
+		while read num; do
+			capacity=$((capacity + num))
+		done < <(${zbc_report_zones} -nz "$nr_zones" -start "$sector" \
+				"$dev" | grep -Po 'sector [0-9]*, \K[0-9]*')
+	fi
+
+	echo $((capacity * 512))
 }
 
 max_open_zones() {
@@ -103,7 +185,7 @@ reset_zone() {
 	fi
     else
 	if [ "$offset" -lt 0 ]; then
-	    ${zbc_reset_zone} -all "$dev" "${offset}" >/dev/null
+	    ${zbc_reset_zone} -all "$dev" >/dev/null
 	else
 	    ${zbc_reset_zone} -sector "$dev" "${offset}" >/dev/null
 	fi

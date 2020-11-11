@@ -102,6 +102,7 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->size = le64_to_cpu(top->size);
 	o->io_size = le64_to_cpu(top->io_size);
 	o->size_percent = le32_to_cpu(top->size_percent);
+	o->io_size_percent = le32_to_cpu(top->io_size_percent);
 	o->fill_device = le32_to_cpu(top->fill_device);
 	o->file_append = le32_to_cpu(top->file_append);
 	o->file_size_low = le64_to_cpu(top->file_size_low);
@@ -223,6 +224,7 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->ss_limit.u.f = fio_uint64_to_double(le64_to_cpu(top->ss_limit.u.i));
 	o->zone_range = le64_to_cpu(top->zone_range);
 	o->zone_size = le64_to_cpu(top->zone_size);
+	o->zone_capacity = le64_to_cpu(top->zone_capacity);
 	o->zone_skip = le64_to_cpu(top->zone_skip);
 	o->zone_mode = le32_to_cpu(top->zone_mode);
 	o->lockmem = le64_to_cpu(top->lockmem);
@@ -236,8 +238,8 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->loops = le32_to_cpu(top->loops);
 	o->mem_type = le32_to_cpu(top->mem_type);
 	o->mem_align = le32_to_cpu(top->mem_align);
-	o->exit_what = le16_to_cpu(top->exit_what);
-	o->stonewall = le16_to_cpu(top->stonewall);
+	o->exit_what = le32_to_cpu(top->exit_what);
+	o->stonewall = le32_to_cpu(top->stonewall);
 	o->new_group = le32_to_cpu(top->new_group);
 	o->numjobs = le32_to_cpu(top->numjobs);
 	o->cpus_allowed_policy = le32_to_cpu(top->cpus_allowed_policy);
@@ -280,8 +282,7 @@ void convert_thread_options_to_cpu(struct thread_options *o,
 	o->uid = le32_to_cpu(top->uid);
 	o->gid = le32_to_cpu(top->gid);
 	o->flow_id = __le32_to_cpu(top->flow_id);
-	o->flow = __le32_to_cpu(top->flow);
-	o->flow_watermark = __le32_to_cpu(top->flow_watermark);
+	o->flow = le32_to_cpu(top->flow);
 	o->flow_sleep = le32_to_cpu(top->flow_sleep);
 	o->sync_file_range = le32_to_cpu(top->sync_file_range);
 	o->latency_target = le64_to_cpu(top->latency_target);
@@ -367,6 +368,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->iodepth_batch_complete_max = cpu_to_le32(o->iodepth_batch_complete_max);
 	top->serialize_overlap = cpu_to_le32(o->serialize_overlap);
 	top->size_percent = cpu_to_le32(o->size_percent);
+	top->io_size_percent = cpu_to_le32(o->io_size_percent);
 	top->fill_device = cpu_to_le32(o->fill_device);
 	top->file_append = cpu_to_le32(o->file_append);
 	top->ratecycle = cpu_to_le32(o->ratecycle);
@@ -436,8 +438,8 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->loops = cpu_to_le32(o->loops);
 	top->mem_type = cpu_to_le32(o->mem_type);
 	top->mem_align = cpu_to_le32(o->mem_align);
-	top->exit_what = cpu_to_le16(o->exit_what);
-	top->stonewall = cpu_to_le16(o->stonewall);
+	top->exit_what = cpu_to_le32(o->exit_what);
+	top->stonewall = cpu_to_le32(o->stonewall);
 	top->new_group = cpu_to_le32(o->new_group);
 	top->numjobs = cpu_to_le32(o->numjobs);
 	top->cpus_allowed_policy = cpu_to_le32(o->cpus_allowed_policy);
@@ -480,8 +482,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->uid = cpu_to_le32(o->uid);
 	top->gid = cpu_to_le32(o->gid);
 	top->flow_id = __cpu_to_le32(o->flow_id);
-	top->flow = __cpu_to_le32(o->flow);
-	top->flow_watermark = __cpu_to_le32(o->flow_watermark);
+	top->flow = cpu_to_le32(o->flow);
 	top->flow_sleep = cpu_to_le32(o->flow_sleep);
 	top->sync_file_range = cpu_to_le32(o->sync_file_range);
 	top->latency_target = __cpu_to_le64(o->latency_target);
@@ -563,6 +564,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->ss_limit.u.i = __cpu_to_le64(fio_double_to_uint64(o->ss_limit.u.f));
 	top->zone_range = __cpu_to_le64(o->zone_range);
 	top->zone_size = __cpu_to_le64(o->zone_size);
+	top->zone_capacity = __cpu_to_le64(o->zone_capacity);
 	top->zone_skip = __cpu_to_le64(o->zone_skip);
 	top->zone_mode = __cpu_to_le32(o->zone_mode);
 	top->lockmem = __cpu_to_le64(o->lockmem);
