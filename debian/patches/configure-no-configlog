@@ -3,7 +3,7 @@ Author: Martin Steigerwald <martin.steigerwald@proact.de>
 
 --- a/configure
 +++ b/configure
-@@ -3076,3 +3076,5 @@
+@@ -3046,3 +3046,5 @@
  include \$(SRCDIR)/Makefile
  EOF
  fi
