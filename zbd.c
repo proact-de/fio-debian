@@ -718,6 +718,9 @@ static int zbd_reset_zone(struct thread_data *td, struct fio_file *f,
 	uint64_t length = (z+1)->start - offset;
 	int ret = 0;
 
+	if (z->wp == z->start)
+		return 0;
+
 	assert(is_valid_offset(f, offset + length - 1));
 
 	dprint(FD_ZBD, "%s: resetting wp of zone %u.\n", f->file_name,
@@ -1546,6 +1549,7 @@ enum io_u_action zbd_adjust_block(struct thread_data *td, struct io_u *io_u)
 	case DDIR_READ:
 		if (td->runstate == TD_VERIFYING && td_write(td)) {
 			zb = zbd_replay_write_order(td, io_u, zb);
+			pthread_mutex_unlock(&zb->mutex);
 			goto accept;
 		}
 		/*

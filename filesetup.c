@@ -231,13 +231,12 @@ static int extend_file(struct thread_data *td, struct fio_file *f)
 						break;
 					log_info("fio: ENOSPC on laying out "
 						 "file, stopping\n");
-					break;
 				}
 				td_verror(td, errno, "write");
 			} else
 				td_verror(td, EIO, "write");
 
-			break;
+			goto err;
 		}
 	}
 
@@ -655,8 +654,7 @@ int generic_open_file(struct thread_data *td, struct fio_file *f)
 		}
 		flags |= OS_O_DIRECT | FIO_O_ATOMIC;
 	}
-	if (td->o.sync_io)
-		flags |= O_SYNC;
+	flags |= td->o.sync_io;
 	if (td->o.create_on_open && td->o.allow_create)
 		flags |= O_CREAT;
 skip_flags:

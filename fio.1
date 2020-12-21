@@ -1462,9 +1462,31 @@ starting I/O if the platform and file type support it. Defaults to true.
 This will be ignored if \fBpre_read\fR is also specified for the
 same job.
 .TP
-.BI sync \fR=\fPbool
-Use synchronous I/O for buffered writes. For the majority of I/O engines,
-this means using O_SYNC. Default: false.
+.BI sync \fR=\fPstr
+Whether, and what type, of synchronous I/O to use for writes.  The allowed
+values are:
+.RS
+.RS
+.TP
+.B none
+Do not use synchronous IO, the default.
+.TP
+.B 0
+Same as \fBnone\fR.
+.TP
+.B sync
+Use synchronous file IO. For the majority of I/O engines,
+this means using O_SYNC.
+.TP
+.B 1
+Same as \fBsync\fR.
+.TP
+.B dsync
+Use synchronous data IO. For the majority of I/O engines,
+this means using O_DSYNC.
+.PD
+.RE
+.RE
 .TP
 .BI iomem \fR=\fPstr "\fR,\fP mem" \fR=\fPstr
 Fio can use various types of memory as the I/O unit buffer. The allowed
@@ -1561,7 +1583,8 @@ if \fBsize\fR is set to 20GiB and \fBio_size\fR is set to 5GiB, fio
 will perform I/O within the first 20GiB but exit when 5GiB have been
 done. The opposite is also possible \-\- if \fBsize\fR is set to 20GiB,
 and \fBio_size\fR is set to 40GiB, then fio will do 40GiB of I/O within
-the 0..20GiB region.
+the 0..20GiB region. Value can be set as percentage: \fBio_size\fR=N%.
+In this case \fBio_size\fR multiplies \fBsize\fR= value.
 .TP
 .BI filesize \fR=\fPirange(int)
 Individual file sizes. May be a range, in which case fio will select sizes
@@ -1673,11 +1696,6 @@ of the CPU. In case of SMP machines, use `numjobs=<nr_of_cpu>'
 to get desired CPU usage, as the cpuload only loads a
 single CPU at the desired rate. A job never finishes unless there is
 at least one non-cpuio job.
-.TP
-.B guasi
-The GUASI I/O engine is the Generic Userspace Asynchronous Syscall
-Interface approach to async I/O. See \fIhttp://www.xmailserver.org/guasi-lib.html\fR
-for more info on GUASI.
 .TP
 .B rdma
 The RDMA I/O engine supports both RDMA memory semantics
@@ -2219,7 +2237,7 @@ has a bit of extra overhead, especially for lower queue depth I/O where it
 can increase latencies. The benefit is that fio can manage submission rates
 independently of the device completion rates. This avoids skewed latency
 reporting if I/O gets backed up on the device side (the coordinated omission
-problem).
+problem). Note that this option cannot reliably be used with async IO engines.
 .SS "I/O rate"
 .TP
 .BI thinktime \fR=\fPtime
