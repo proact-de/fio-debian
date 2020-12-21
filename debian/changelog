@@ -1,3 +1,9 @@
+fio (3.25-1) UNRELEASED; urgency=medium
+
+  * Imported new upstream version 3.25.
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 21 Dec 2020 16:22:52 +0100
+
 fio (3.23-1) unstable; urgency=medium
 
   * Imported new upstream version 3.23.
