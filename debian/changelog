@@ -1,4 +1,4 @@
-fio (3.25-1) UNRELEASED; urgency=medium
+fio (3.25-1) unstable; urgency=medium
 
   * Imported new upstream version 3.25.
   * patches:
@@ -7,7 +7,7 @@ fio (3.25-1) UNRELEASED; urgency=medium
       override user CFLAGS.
   * control: Bumped standards version to 4.5.1.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 21 Dec 2020 16:22:52 +0100
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 21 Dec 2020 16:52:09 +0100
 
 fio (3.23-1) unstable; urgency=medium
 
