@@ -1677,10 +1677,28 @@ Buffers and memory
 	This will be ignored if :option:`pre_read` is also specified for the
 	same job.
 
-.. option:: sync=bool
+.. option:: sync=str
 
-	Use synchronous I/O for buffered writes. For the majority of I/O engines,
-	this means using O_SYNC. Default: false.
+	Whether, and what type, of synchronous I/O to use for writes.  The allowed
+	values are:
+
+		**none**
+			Do not use synchronous IO, the default.
+
+		**0**
+			Same as **none**.
+
+		**sync**
+			Use synchronous file IO. For the majority of I/O engines,
+			this means using O_SYNC.
+
+		**1**
+			Same as **sync**.
+
+		**dsync**
+			Use synchronous data IO. For the majority of I/O engines,
+			this means using O_DSYNC.
+
 
 .. option:: iomem=str, mem=str
 
@@ -1900,14 +1918,6 @@ I/O engine
 			to get desired CPU usage, as the cpuload only loads a
 			single CPU at the desired rate. A job never finishes unless there is
 			at least one non-cpuio job.
-
-		**guasi**
-			The GUASI I/O engine is the Generic Userspace Asynchronous Syscall
-			Interface approach to async I/O. See
-
-			http://www.xmailserver.org/guasi-lib.html
-
-			for more info on GUASI.
 
 		**rdma**
 			The RDMA I/O engine supports both RDMA memory semantics
@@ -2482,7 +2492,8 @@ I/O depth
 	can increase latencies. The benefit is that fio can manage submission rates
 	independently of the device completion rates. This avoids skewed latency
 	reporting if I/O gets backed up on the device side (the coordinated omission
-	problem).
+	problem). Note that this option cannot reliably be used with async IO
+	engines.
 
 
 I/O rate

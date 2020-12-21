@@ -1481,9 +1481,13 @@ static int str_io_size_cb(void *data, unsigned long long *__val)
 	struct thread_data *td = cb_data_to_td(data);
 	unsigned long long v = *__val;
 
-	if (parse_is_percent(v)) {
+	if (parse_is_percent_uncapped(v)) {
 		td->o.io_size = 0;
 		td->o.io_size_percent = -1ULL - v;
+		if (td->o.io_size_percent > 100) {
+			log_err("fio: io_size values greater than 100%% aren't supported\n");
+			return 1;
+		}
 		dprint(FD_PARSE, "SET io_size_percent %d\n",
 					td->o.io_size_percent);
 	} else
@@ -1868,11 +1872,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			  { .ival = "cpuio",
 			    .help = "CPU cycle burner engine",
 			  },
-#ifdef CONFIG_GUASI
-			  { .ival = "guasi",
-			    .help = "GUASI IO engine",
-			  },
-#endif
 #ifdef CONFIG_RDMA
 			  { .ival = "rdma",
 			    .help = "RDMA IO engine",
@@ -3734,14 +3733,32 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	{
 		.name	= "sync",
 		.lname	= "Synchronous I/O",
-		.type	= FIO_OPT_BOOL,
+		.type	= FIO_OPT_STR,
 		.off1	= offsetof(struct thread_options, sync_io),
-		.help	= "Use O_SYNC for buffered writes",
-		.def	= "0",
-		.parent = "buffered",
+		.help	= "Use synchronous write IO",
+		.def	= "none",
 		.hide	= 1,
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IO_TYPE,
+		.posval = {
+			  { .ival = "none",
+			    .oval = 0,
+			  },
+			  { .ival = "0",
+			    .oval = 0,
+			  },
+			  { .ival = "sync",
+			    .oval = O_SYNC,
+			  },
+			  { .ival = "1",
+			    .oval = O_SYNC,
+			  },
+#ifdef O_DSYNC
+			  { .ival = "dsync",
+			    .oval = O_DSYNC,
+			  },
+#endif
+		},
 	},
 #ifdef FIO_HAVE_WRITE_HINT
 	{
