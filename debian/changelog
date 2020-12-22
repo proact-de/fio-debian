@@ -1,9 +1,9 @@
-fio (3.25-2) UNRELEASED; urgency=medium
+fio (3.25-2) unstable; urgency=medium
 
   * Moved manpage for 'fiologparser_hist.py' into '/usr/share/doc/fio'
     as well to fix manpage being installed with language 'py'.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 22 Dec 2020 10:49:39 +0100
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 22 Dec 2020 11:07:22 +0100
 
 fio (3.25-1) unstable; urgency=medium
 
