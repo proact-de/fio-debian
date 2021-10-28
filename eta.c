@@ -331,7 +331,7 @@ static void calc_rate(int unified_rw_rep, unsigned long mtime,
 		else
 			this_rate = 0;
 
-		if (unified_rw_rep) {
+		if (unified_rw_rep == UNIFIED_MIXED) {
 			rate[i] = 0;
 			rate[0] += this_rate;
 		} else
@@ -356,7 +356,7 @@ static void calc_iops(int unified_rw_rep, unsigned long mtime,
 		else
 			this_iops = 0;
 
-		if (unified_rw_rep) {
+		if (unified_rw_rep == UNIFIED_MIXED) {
 			iops[i] = 0;
 			iops[0] += this_iops;
 		} else
@@ -509,7 +509,7 @@ bool calc_thread_status(struct jobs_eta *je, int force)
 		memcpy(&rate_prev_time, &now, sizeof(now));
 		regrow_agg_logs();
 		for_each_rw_ddir(ddir) {
-			add_agg_sample(sample_val(je->rate[ddir]), ddir, 0, 0);
+			add_agg_sample(sample_val(je->rate[ddir]), ddir, 0);
 		}
 	}
 

@@ -327,6 +327,7 @@ void free_threads_shm(void)
 
 static void free_shm(void)
 {
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 	if (nr_segments) {
 		flow_exit();
 		fio_debug_jobp = NULL;
@@ -343,6 +344,7 @@ static void free_shm(void)
 	fio_filelock_exit();
 	file_hash_exit();
 	scleanup();
+#endif
 }
 
 static int add_thread_segment(void)
@@ -443,19 +445,6 @@ static void dump_opt_list(struct thread_data *td)
 	flist_for_each(entry, &td->opt_list) {
 		p = flist_entry(entry, struct print_option, list);
 		dump_print_option(p);
-	}
-}
-
-static void fio_dump_options_free(struct thread_data *td)
-{
-	while (!flist_empty(&td->opt_list)) {
-		struct print_option *p;
-
-		p = flist_first_entry(&td->opt_list, struct print_option, list);
-		flist_del_init(&p->list);
-		free(p->name);
-		free(p->value);
-		free(p);
 	}
 }
 
@@ -641,6 +630,11 @@ static int fixup_options(struct thread_data *td)
 
 	if (o->zone_mode == ZONE_MODE_NONE && o->zone_size) {
 		log_err("fio: --zonemode=none and --zonesize are not compatible.\n");
+		ret |= 1;
+	}
+
+	if (o->zone_mode == ZONE_MODE_ZBD && !o->create_serialize) {
+		log_err("fio: --zonemode=zbd and --create_serialize=0 are not compatible.\n");
 		ret |= 1;
 	}
 
@@ -959,8 +953,32 @@ static int fixup_options(struct thread_data *td)
 	/*
 	 * Fix these up to be nsec internally
 	 */
-	o->max_latency *= 1000ULL;
+	for_each_rw_ddir(ddir)
+		o->max_latency[ddir] *= 1000ULL;
+
 	o->latency_target *= 1000ULL;
+
+	/*
+	 * Dedupe working set verifications
+	 */
+	if (o->dedupe_percentage && o->dedupe_mode == DEDUPE_MODE_WORKING_SET) {
+		if (!fio_option_is_set(o, size)) {
+			log_err("fio: pregenerated dedupe working set "
+					"requires size to be set\n");
+			ret |= 1;
+		} else if (o->nr_files != 1) {
+			log_err("fio: dedupe working set mode supported with "
+					"single file per job, but %d files "
+					"provided\n", o->nr_files);
+			ret |= 1;
+		} else if (o->dedupe_working_set_percentage + o->dedupe_percentage > 100) {
+			log_err("fio: impossible to reach expected dedupe percentage %u "
+					"since %u percentage of size is reserved to dedupe working set "
+					"(those are unique pages)\n",
+					o->dedupe_percentage, o->dedupe_working_set_percentage);
+			ret |= 1;
+		}
+	}
 
 	return ret;
 }
@@ -971,13 +989,13 @@ static void init_rand_file_service(struct thread_data *td)
 	const unsigned int seed = td->rand_seeds[FIO_RAND_FILE_OFF];
 
 	if (td->o.file_service_type == FIO_FSERVICE_ZIPF) {
-		zipf_init(&td->next_file_zipf, nranges, td->zipf_theta, seed);
+		zipf_init(&td->next_file_zipf, nranges, td->zipf_theta, td->random_center, seed);
 		zipf_disable_hash(&td->next_file_zipf);
 	} else if (td->o.file_service_type == FIO_FSERVICE_PARETO) {
-		pareto_init(&td->next_file_zipf, nranges, td->pareto_h, seed);
+		pareto_init(&td->next_file_zipf, nranges, td->pareto_h, td->random_center, seed);
 		zipf_disable_hash(&td->next_file_zipf);
 	} else if (td->o.file_service_type == FIO_FSERVICE_GAUSS) {
-		gauss_init(&td->next_file_gauss, nranges, td->gauss_dev, seed);
+		gauss_init(&td->next_file_gauss, nranges, td->gauss_dev, td->random_center, seed);
 		gauss_disable_hash(&td->next_file_gauss);
 	}
 }
@@ -1035,6 +1053,7 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 	init_rand_seed(&td->dedupe_state, td->rand_seeds[FIO_DEDUPE_OFF], false);
 	init_rand_seed(&td->zone_state, td->rand_seeds[FIO_RAND_ZONE_OFF], false);
 	init_rand_seed(&td->prio_state, td->rand_seeds[FIO_RAND_PRIO_CMDS], false);
+	init_rand_seed(&td->dedupe_working_set_index_state, td->rand_seeds[FIO_RAND_DEDUPE_WORKING_SET_IX], use64);
 
 	if (!td_random(td))
 		return;
@@ -1102,18 +1121,15 @@ int ioengine_load(struct thread_data *td)
 		 * for this name and see if they match. If they do, then
 		 * the engine is unchanged.
 		 */
-		dlhandle = td->io_ops_dlhandle;
+		dlhandle = td->io_ops->dlhandle;
 		ops = load_ioengine(td);
 		if (!ops)
 			goto fail;
 
-		if (ops == td->io_ops && dlhandle == td->io_ops_dlhandle) {
-			if (dlhandle)
-				dlclose(dlhandle);
+		if (ops == td->io_ops && dlhandle == td->io_ops->dlhandle)
 			return 0;
-		}
 
-		if (dlhandle && dlhandle != td->io_ops_dlhandle)
+		if (dlhandle && dlhandle != td->io_ops->dlhandle)
 			dlclose(dlhandle);
 
 		/* Unload the old engine. */
@@ -1239,7 +1255,8 @@ enum {
 	FPRE_NONE = 0,
 	FPRE_JOBNAME,
 	FPRE_JOBNUM,
-	FPRE_FILENUM
+	FPRE_FILENUM,
+	FPRE_CLIENTUID
 };
 
 static struct fpre_keyword {
@@ -1250,6 +1267,7 @@ static struct fpre_keyword {
 	{ .keyword = "$jobname",	.key = FPRE_JOBNAME, },
 	{ .keyword = "$jobnum",		.key = FPRE_JOBNUM, },
 	{ .keyword = "$filenum",	.key = FPRE_FILENUM, },
+	{ .keyword = "$clientuid",	.key = FPRE_CLIENTUID, },
 	{ .keyword = NULL, },
 	};
 
@@ -1327,6 +1345,21 @@ static char *make_filename(char *buf, size_t buf_size,struct thread_options *o,
 				int ret;
 
 				ret = snprintf(dst, dst_left, "%d", filenum);
+				if (ret < 0)
+					break;
+				else if (ret > dst_left) {
+					log_err("fio: truncated filename\n");
+					dst += dst_left;
+					dst_left = 0;
+				} else {
+					dst += ret;
+					dst_left -= ret;
+				}
+				break;
+				}
+			case FPRE_CLIENTUID: {
+				int ret;
+				ret = snprintf(dst, dst_left, "%s", client_sockaddr_str);
 				if (ret < 0)
 					break;
 				else if (ret > dst_left) {
@@ -1481,6 +1514,9 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if (fixup_options(td))
 		goto err;
 
+	if (init_dedupe_working_set_seeds(td))
+		goto err;
+
 	/*
 	 * Belongs to fixup_options, but o->name is not necessarily set as yet
 	 */
@@ -1547,6 +1583,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.hist_coarseness = o->log_hist_coarseness,
 			.log_type = IO_LOG_TYPE_LAT,
 			.log_offset = o->log_offset,
+			.log_prio = o->log_prio,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
@@ -1580,6 +1617,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.hist_coarseness = o->log_hist_coarseness,
 			.log_type = IO_LOG_TYPE_HIST,
 			.log_offset = o->log_offset,
+			.log_prio = o->log_prio,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
@@ -1611,6 +1649,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.hist_coarseness = o->log_hist_coarseness,
 			.log_type = IO_LOG_TYPE_BW,
 			.log_offset = o->log_offset,
+			.log_prio = o->log_prio,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
@@ -1642,6 +1681,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.hist_coarseness = o->log_hist_coarseness,
 			.log_type = IO_LOG_TYPE_IOPS,
 			.log_offset = o->log_offset,
+			.log_prio = o->log_prio,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};

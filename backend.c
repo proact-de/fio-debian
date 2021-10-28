@@ -393,7 +393,7 @@ static bool break_on_this_error(struct thread_data *td, enum fio_ddir ddir,
 			td_clear_error(td);
 			*retptr = 0;
 			return false;
-		} else if (td->o.fill_device && err == ENOSPC) {
+		} else if (td->o.fill_device && (err == ENOSPC || err == EDQUOT)) {
 			/*
 			 * We expect to hit this error if
 			 * fill_device option is set.
@@ -439,7 +439,7 @@ static int wait_for_completions(struct thread_data *td, struct timespec *time)
 	if ((full && !min_evts) || !td->o.iodepth_batch_complete_min)
 		min_evts = 1;
 
-	if (time && __should_check_rate(td))
+	if (time && should_check_rate(td))
 		fio_gettime(time, NULL);
 
 	do {
@@ -494,7 +494,7 @@ int io_queue_event(struct thread_data *td, struct io_u *io_u, int *ret,
 			requeue_io_u(td, &io_u);
 		} else {
 sync_done:
-			if (comp_time && __should_check_rate(td))
+			if (comp_time && should_check_rate(td))
 				fio_gettime(comp_time, NULL);
 
 			*ret = io_u_sync_complete(td, io_u);
@@ -858,14 +858,47 @@ static long long usec_for_io(struct thread_data *td, enum fio_ddir ddir)
 	return 0;
 }
 
-static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir)
+static void init_thinktime(struct thread_data *td)
+{
+	if (td->o.thinktime_blocks_type == THINKTIME_BLOCKS_TYPE_COMPLETE)
+		td->thinktime_blocks_counter = td->io_blocks;
+	else
+		td->thinktime_blocks_counter = td->io_issues;
+	td->last_thinktime = td->epoch;
+	td->last_thinktime_blocks = 0;
+}
+
+static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir,
+			     struct timespec *time)
 {
 	unsigned long long b;
 	uint64_t total;
 	int left;
+	struct timespec now;
+	bool stall = false;
 
-	b = ddir_rw_sum(td->io_blocks);
-	if (b % td->o.thinktime_blocks)
+	if (td->o.thinktime_iotime) {
+		fio_gettime(&now, NULL);
+		if (utime_since(&td->last_thinktime, &now)
+		    >= td->o.thinktime_iotime + td->o.thinktime) {
+			stall = true;
+		} else if (!fio_option_is_set(&td->o, thinktime_blocks)) {
+			/*
+			 * When thinktime_iotime is set and thinktime_blocks is
+			 * not set, skip the thinktime_blocks check, since
+			 * thinktime_blocks default value 1 does not work
+			 * together with thinktime_iotime.
+			 */
+			return;
+		}
+
+	}
+
+	b = ddir_rw_sum(td->thinktime_blocks_counter);
+	if (b >= td->last_thinktime_blocks + td->o.thinktime_blocks)
+		stall = true;
+
+	if (!stall)
 		return;
 
 	io_u_quiesce(td);
@@ -898,6 +931,13 @@ static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir)
 		/* adjust for rate_process=poisson */
 		td->last_usec[ddir] += total;
 	}
+
+	if (time && should_check_rate(td))
+		fio_gettime(time, NULL);
+
+	td->last_thinktime_blocks = b;
+	if (td->o.thinktime_iotime)
+		td->last_thinktime = now;
 }
 
 /*
@@ -1076,6 +1116,10 @@ reap:
 		}
 		if (ret < 0)
 			break;
+
+		if (ddir_rw(ddir) && td->o.thinktime)
+			handle_thinktime(td, ddir, &comp_time);
+
 		if (!ddir_rw_sum(td->bytes_done) &&
 		    !td_ioengine_flagged(td, FIO_NOIO))
 			continue;
@@ -1090,9 +1134,6 @@ reap:
 		}
 		if (!in_ramp_time(td) && td->o.latency_target)
 			lat_target_check(td);
-
-		if (ddir_rw(ddir) && td->o.thinktime)
-			handle_thinktime(td, ddir);
 	}
 
 	check_update_rusage(td);
@@ -1100,7 +1141,7 @@ reap:
 	if (td->trim_entries)
 		log_err("fio: %lu trim entries leaked?\n", td->trim_entries);
 
-	if (td->o.fill_device && td->error == ENOSPC) {
+	if (td->o.fill_device && (td->error == ENOSPC || td->error == EDQUOT)) {
 		td->error = 0;
 		fio_mark_td_terminate(td);
 	}
@@ -1115,7 +1156,8 @@ reap:
 
 		if (i) {
 			ret = io_u_queued_complete(td, i);
-			if (td->o.fill_device && td->error == ENOSPC)
+			if (td->o.fill_device &&
+			    (td->error == ENOSPC || td->error == EDQUOT))
 				td->error = 0;
 		}
 
@@ -1336,22 +1378,19 @@ int init_io_u_buffers(struct thread_data *td)
 	return 0;
 }
 
+#ifdef FIO_HAVE_IOSCHED_SWITCH
 /*
- * This function is Linux specific.
+ * These functions are Linux specific.
  * FIO_HAVE_IOSCHED_SWITCH enabled currently means it's Linux.
  */
-static int switch_ioscheduler(struct thread_data *td)
+static int set_ioscheduler(struct thread_data *td, struct fio_file *file)
 {
-#ifdef FIO_HAVE_IOSCHED_SWITCH
 	char tmp[256], tmp2[128], *p;
 	FILE *f;
 	int ret;
 
-	if (td_ioengine_flagged(td, FIO_DISKLESSIO))
-		return 0;
-
-	assert(td->files && td->files[0]);
-	sprintf(tmp, "%s/queue/scheduler", td->files[0]->du->sysfs_root);
+	assert(file->du && file->du->sysfs_root);
+	sprintf(tmp, "%s/queue/scheduler", file->du->sysfs_root);
 
 	f = fopen(tmp, "r+");
 	if (!f) {
@@ -1404,7 +1443,7 @@ static int switch_ioscheduler(struct thread_data *td)
 
 	sprintf(tmp2, "[%s]", td->o.ioscheduler);
 	if (!strstr(tmp, tmp2)) {
-		log_err("fio: io scheduler %s not found\n", td->o.ioscheduler);
+		log_err("fio: unable to set io scheduler to %s\n", td->o.ioscheduler);
 		td_verror(td, EINVAL, "iosched_switch");
 		fclose(f);
 		return 1;
@@ -1412,10 +1451,54 @@ static int switch_ioscheduler(struct thread_data *td)
 
 	fclose(f);
 	return 0;
-#else
-	return 0;
-#endif
 }
+
+static int switch_ioscheduler(struct thread_data *td)
+{
+	struct fio_file *f;
+	unsigned int i;
+	int ret = 0;
+
+	if (td_ioengine_flagged(td, FIO_DISKLESSIO))
+		return 0;
+
+	assert(td->files && td->files[0]);
+
+	for_each_file(td, f, i) {
+
+		/* Only consider regular files and block device files */
+		switch (f->filetype) {
+		case FIO_TYPE_FILE:
+		case FIO_TYPE_BLOCK:
+			/*
+			 * Make sure that the device hosting the file could
+			 * be determined.
+			 */
+			if (!f->du)
+				continue;
+			break;
+		case FIO_TYPE_CHAR:
+		case FIO_TYPE_PIPE:
+		default:
+			continue;
+		}
+
+		ret = set_ioscheduler(td, f);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+#else
+
+static int switch_ioscheduler(struct thread_data *td)
+{
+	return 0;
+}
+
+#endif /* FIO_HAVE_IOSCHED_SWITCH */
 
 static bool keep_running(struct thread_data *td)
 {
@@ -1713,6 +1796,7 @@ static void *thread_main(void *data)
 			td_verror(td, errno, "ioprio_set");
 			goto err;
 		}
+		td->ioprio = ioprio_value(o->ioprio_class, o->ioprio);
 	}
 
 	if (o->cgroup && cgroup_setup(td, cgroup_list, &cgroup_mnt))
@@ -1749,6 +1833,8 @@ static void *thread_main(void *data)
 	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->ss.prev_time, &td->epoch, sizeof(td->epoch));
+
+	init_thinktime(td);
 
 	if (o->ratemin[DDIR_READ] || o->ratemin[DDIR_WRITE] ||
 			o->ratemin[DDIR_TRIM]) {
@@ -2527,6 +2613,7 @@ int fio_backend(struct sk_out *sk_out)
 	for_each_td(td, i) {
 		steadystate_free(td);
 		fio_options_free(td);
+		fio_dump_options_free(td);
 		if (td->rusage_sem) {
 			fio_sem_remove(td->rusage_sem);
 			td->rusage_sem = NULL;
