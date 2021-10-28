@@ -1,3 +1,10 @@
+fio (3.28-1) UNRELEASED; urgency=medium
+
+  * Imported new upstream version 3.28.
+    Removes raw device support. (Closes: #997201)
+
+ -- Sven Hoexter <hoexter@debian.org>  Thu, 28 Oct 2021 14:32:47 +0200
+
 fio (3.25-2) unstable; urgency=medium
 
   * Moved manpage for 'fiologparser_hist.py' into '/usr/share/doc/fio'
