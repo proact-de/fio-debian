@@ -15,6 +15,7 @@
 #include "../lib/pow2.h"
 #include "../optgroup.h"
 #include "../lib/memalign.h"
+#include "cmdprio.h"
 
 /* Should be defined in newest aio_abi.h */
 #ifndef IOCB_FLAG_IOPRIO
@@ -50,14 +51,25 @@ struct libaio_data {
 	unsigned int queued;
 	unsigned int head;
 	unsigned int tail;
+
+	bool use_cmdprio;
 };
 
 struct libaio_options {
-	void *pad;
+	struct thread_data *td;
 	unsigned int userspace_reap;
-	unsigned int cmdprio_percentage;
+	struct cmdprio cmdprio;
 	unsigned int nowait;
 };
+
+static int str_cmdprio_bssplit_cb(void *data, const char *input)
+{
+	struct libaio_options *o = data;
+	struct thread_data *td = o->td;
+	struct cmdprio *cmdprio = &o->cmdprio;
+
+	return fio_cmdprio_bssplit_parse(td, input, cmdprio);
+}
 
 static struct fio_option options[] = {
 	{
@@ -74,10 +86,53 @@ static struct fio_option options[] = {
 		.name	= "cmdprio_percentage",
 		.lname	= "high priority percentage",
 		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct libaio_options, cmdprio_percentage),
-		.minval	= 1,
+		.off1	= offsetof(struct libaio_options,
+				   cmdprio.percentage[DDIR_READ]),
+		.off2	= offsetof(struct libaio_options,
+				   cmdprio.percentage[DDIR_WRITE]),
+		.minval	= 0,
 		.maxval	= 100,
 		.help	= "Send high priority I/O this percentage of the time",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_LIBAIO,
+	},
+	{
+		.name	= "cmdprio_class",
+		.lname	= "Asynchronous I/O priority class",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct libaio_options,
+				   cmdprio.class[DDIR_READ]),
+		.off2	= offsetof(struct libaio_options,
+				   cmdprio.class[DDIR_WRITE]),
+		.help	= "Set asynchronous IO priority class",
+		.minval	= IOPRIO_MIN_PRIO_CLASS + 1,
+		.maxval	= IOPRIO_MAX_PRIO_CLASS,
+		.interval = 1,
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_LIBAIO,
+	},
+	{
+		.name	= "cmdprio",
+		.lname	= "Asynchronous I/O priority level",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct libaio_options,
+				   cmdprio.level[DDIR_READ]),
+		.off2	= offsetof(struct libaio_options,
+				   cmdprio.level[DDIR_WRITE]),
+		.help	= "Set asynchronous IO priority level",
+		.minval	= IOPRIO_MIN_PRIO,
+		.maxval	= IOPRIO_MAX_PRIO,
+		.interval = 1,
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_LIBAIO,
+	},
+	{
+		.name   = "cmdprio_bssplit",
+		.lname  = "Priority percentage block size split",
+		.type   = FIO_OPT_STR_ULL,
+		.cb     = str_cmdprio_bssplit_cb,
+		.off1   = offsetof(struct libaio_options, cmdprio.bssplit),
+		.help   = "Set priority percentages for different block sizes",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_LIBAIO,
 	},
@@ -85,6 +140,24 @@ static struct fio_option options[] = {
 	{
 		.name	= "cmdprio_percentage",
 		.lname	= "high priority percentage",
+		.type	= FIO_OPT_UNSUPPORTED,
+		.help	= "Your platform does not support I/O priority classes",
+	},
+	{
+		.name	= "cmdprio_class",
+		.lname	= "Asynchronous I/O priority class",
+		.type	= FIO_OPT_UNSUPPORTED,
+		.help	= "Your platform does not support I/O priority classes",
+	},
+	{
+		.name	= "cmdprio",
+		.lname	= "Asynchronous I/O priority level",
+		.type	= FIO_OPT_UNSUPPORTED,
+		.help	= "Your platform does not support I/O priority classes",
+	},
+	{
+		.name   = "cmdprio_bssplit",
+		.lname  = "Priority percentage block size split",
 		.type	= FIO_OPT_UNSUPPORTED,
 		.help	= "Your platform does not support I/O priority classes",
 	},
@@ -135,12 +208,31 @@ static int fio_libaio_prep(struct thread_data *td, struct io_u *io_u)
 static void fio_libaio_prio_prep(struct thread_data *td, struct io_u *io_u)
 {
 	struct libaio_options *o = td->eo;
-	if (rand_between(&td->prio_state, 0, 99) < o->cmdprio_percentage) {
-		io_u->iocb.aio_reqprio = IOPRIO_CLASS_RT << IOPRIO_CLASS_SHIFT;
+	struct cmdprio *cmdprio = &o->cmdprio;
+	enum fio_ddir ddir = io_u->ddir;
+	unsigned int p = fio_cmdprio_percentage(cmdprio, io_u);
+	unsigned int cmdprio_value =
+		ioprio_value(cmdprio->class[ddir], cmdprio->level[ddir]);
+
+	if (p && rand_between(&td->prio_state, 0, 99) < p) {
+		io_u->ioprio = cmdprio_value;
+		io_u->iocb.aio_reqprio = cmdprio_value;
 		io_u->iocb.u.c.flags |= IOCB_FLAG_IOPRIO;
-		io_u->flags |= IO_U_F_PRIORITY;
+		if (!td->ioprio || cmdprio_value < td->ioprio) {
+			/*
+			 * The async IO priority is higher (has a lower value)
+			 * than the default context priority.
+			 */
+			io_u->flags |= IO_U_F_HIGH_PRIO;
+		}
+	} else if (td->ioprio && td->ioprio < cmdprio_value) {
+		/*
+		 * The IO will be executed with the default context priority,
+		 * and this priority is higher (has a lower value) than the
+		 * async IO priority.
+		 */
+		io_u->flags |= IO_U_F_HIGH_PRIO;
 	}
-	return;
 }
 
 static struct io_u *fio_libaio_event(struct thread_data *td, int event)
@@ -246,7 +338,6 @@ static enum fio_q_status fio_libaio_queue(struct thread_data *td,
 					  struct io_u *io_u)
 {
 	struct libaio_data *ld = td->io_ops_data;
-	struct libaio_options *o = td->eo;
 
 	fio_ro_check(td, io_u);
 
@@ -277,7 +368,7 @@ static enum fio_q_status fio_libaio_queue(struct thread_data *td,
 		return FIO_Q_COMPLETED;
 	}
 
-	if (o->cmdprio_percentage)
+	if (ld->use_cmdprio)
 		fio_libaio_prio_prep(td, io_u);
 
 	ld->iocbs[ld->head] = &io_u->iocb;
@@ -420,8 +511,9 @@ static int fio_libaio_post_init(struct thread_data *td)
 static int fio_libaio_init(struct thread_data *td)
 {
 	struct libaio_data *ld;
-	struct thread_options *to = &td->o;
 	struct libaio_options *o = td->eo;
+	struct cmdprio *cmdprio = &o->cmdprio;
+	int ret;
 
 	ld = calloc(1, sizeof(*ld));
 
@@ -432,16 +524,13 @@ static int fio_libaio_init(struct thread_data *td)
 	ld->io_us = calloc(ld->entries, sizeof(struct io_u *));
 
 	td->io_ops_data = ld;
-	/*
-	 * Check for option conflicts
-	 */
-	if ((fio_option_is_set(to, ioprio) || fio_option_is_set(to, ioprio_class)) &&
-			o->cmdprio_percentage != 0) {
-		log_err("%s: cmdprio_percentage option and mutually exclusive "
-				"prio or prioclass option is set, exiting\n", to->name);
+
+	ret = fio_cmdprio_init(td, cmdprio, &ld->use_cmdprio);
+	if (ret) {
 		td_verror(td, EINVAL, "fio_libaio_init");
 		return 1;
 	}
+
 	return 0;
 }
 

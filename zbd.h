@@ -17,6 +17,7 @@ struct fio_file;
 enum io_u_action {
 	io_u_accept	= 0,
 	io_u_eof	= 1,
+	io_u_completed  = 2,
 };
 
 /**
@@ -28,6 +29,7 @@ enum io_u_action {
  * @mutex: protects the modifiable members in this structure
  * @type: zone type (BLK_ZONE_TYPE_*)
  * @cond: zone state (BLK_ZONE_COND_*)
+ * @has_wp: whether or not this zone can have a valid write pointer
  * @open: whether or not this zone is currently open. Only relevant if
  *		max_open_zones > 0.
  * @reset_zone: whether or not this zone should be reset before writing to it
@@ -40,6 +42,7 @@ struct fio_zone_info {
 	uint32_t		verify_block;
 	enum zbd_zone_type	type:2;
 	enum zbd_zone_cond	cond:4;
+	unsigned int		has_wp:1;
 	unsigned int		open:1;
 	unsigned int		reset_zone:1;
 };
@@ -48,11 +51,14 @@ struct fio_zone_info {
  * zoned_block_device_info - zoned block device characteristics
  * @model: Device model.
  * @max_open_zones: global limit on the number of simultaneously opened
- *	sequential write zones.
+ *	sequential write zones. A zero value means unlimited open zones,
+ *	and that open zones will not be tracked in the open_zones array.
  * @mutex: Protects the modifiable members in this structure (refcount and
  *		num_open_zones).
  * @zone_size: size of a single zone in bytes.
  * @sectors_with_data: total size of data in all zones in units of 512 bytes
+ * @wp_sectors_with_data: total size of data in zones with write pointers in
+ *                        units of 512 bytes
  * @zone_size_log2: log2 of the zone size in bytes if it is a power of 2 or 0
  *		if the zone size is not a power of 2.
  * @nr_zones: number of zones
@@ -73,6 +79,7 @@ struct zoned_block_device_info {
 	pthread_mutex_t		mutex;
 	uint64_t		zone_size;
 	uint64_t		sectors_with_data;
+	uint64_t		wp_sectors_with_data;
 	uint32_t		zone_size_log2;
 	uint32_t		nr_zones;
 	uint32_t		refcount;
@@ -82,6 +89,8 @@ struct zoned_block_device_info {
 	struct fio_zone_info	zone_info[0];
 };
 
+int zbd_init_files(struct thread_data *td);
+void zbd_recalc_options_with_zone_granularity(struct thread_data *td);
 int zbd_setup_files(struct thread_data *td);
 void zbd_free_zone_info(struct fio_file *f);
 void zbd_file_reset(struct thread_data *td, struct fio_file *f);
@@ -91,6 +100,7 @@ enum fio_ddir zbd_adjust_ddir(struct thread_data *td, struct io_u *io_u,
 			      enum fio_ddir ddir);
 enum io_u_action zbd_adjust_block(struct thread_data *td, struct io_u *io_u);
 char *zbd_write_status(const struct thread_stat *ts);
+int zbd_do_io_u_trim(const struct thread_data *td, struct io_u *io_u);
 
 static inline void zbd_close_file(struct fio_file *f)
 {

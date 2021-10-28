@@ -156,7 +156,6 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 /*
  * Hook for getting the zoned model of a zoned block device for zonemode=zbd.
  * The zoned model can be one of (see zbd_types.h):
- * - ZBD_IGNORE: skip regular files
  * - ZBD_NONE: regular block device (zone emulation will be used)
  * - ZBD_HOST_AWARE: host aware zoned block device
  * - ZBD_HOST_MANAGED: host managed zoned block device
@@ -194,6 +193,18 @@ static int fio_skeleton_reset_wp(struct thread_data *td, struct fio_file *f,
 }
 
 /*
+ * Hook called for getting the maximum number of open zones for a
+ * ZBD_HOST_MANAGED zoned block device.
+ * A @max_open_zones value set to zero means no limit.
+ */
+static int fio_skeleton_get_max_open_zones(struct thread_data *td,
+					   struct fio_file *f,
+					   unsigned int *max_open_zones)
+{
+	return 0;
+}
+
+/*
  * Note that the structure is exported, so that fio can get it via
  * dlsym(..., "ioengine"); for (and only for) external engines.
  */
@@ -212,6 +223,7 @@ struct ioengine_ops ioengine = {
 	.get_zoned_model = fio_skeleton_get_zoned_model,
 	.report_zones	= fio_skeleton_report_zones,
 	.reset_wp	= fio_skeleton_reset_wp,
+	.get_max_open_zones = fio_skeleton_get_max_open_zones,
 	.options	= options,
 	.option_struct_size	= sizeof(struct fio_skeleton_options),
 };

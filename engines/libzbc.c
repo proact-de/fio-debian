@@ -14,11 +14,13 @@
 #include "fio.h"
 #include "err.h"
 #include "zbd_types.h"
+#include "zbd.h"
 
 struct libzbc_data {
 	struct zbc_device	*zdev;
 	enum zbc_dev_model	model;
 	uint64_t		nr_sectors;
+	uint32_t		max_open_seq_req;
 };
 
 static int libzbc_get_dev_info(struct libzbc_data *ld, struct fio_file *f)
@@ -32,6 +34,7 @@ static int libzbc_get_dev_info(struct libzbc_data *ld, struct fio_file *f)
 	zbc_get_device_info(ld->zdev, zinfo);
 	ld->model = zinfo->zbd_model;
 	ld->nr_sectors = zinfo->zbd_sectors;
+	ld->max_open_seq_req = zinfo->zbd_max_nr_open_seq_req;
 
 	dprint(FD_ZBD, "%s: vendor_id:%s, type: %s, model: %s\n",
 	       f->file_name, zinfo->zbd_vendor_id,
@@ -61,7 +64,7 @@ static int libzbc_open_dev(struct thread_data *td, struct fio_file *f,
 		return -EINVAL;
 	}
 
-	if (td_write(td)) {
+	if (td_write(td) || td_trim(td)) {
 		if (!read_only)
 			flags |= O_RDWR;
 	} else if (td_read(td)) {
@@ -69,10 +72,6 @@ static int libzbc_open_dev(struct thread_data *td, struct fio_file *f,
 			flags |= O_RDWR;
 		else
 			flags |= O_RDONLY;
-	} else if (td_trim(td)) {
-		td_verror(td, EINVAL, "libzbc does not support trim");
-		log_err("%s: libzbc does not support trim\n", f->file_name);
-		return -EINVAL;
 	}
 
 	if (td->o.oatomic) {
@@ -86,7 +85,8 @@ static int libzbc_open_dev(struct thread_data *td, struct fio_file *f,
 		return -ENOMEM;
 
 	ret = zbc_open(f->file_name,
-		       flags | ZBC_O_DRV_SCSI | ZBC_O_DRV_ATA, &ld->zdev);
+		       flags | ZBC_O_DRV_BLOCK | ZBC_O_DRV_SCSI | ZBC_O_DRV_ATA,
+		       &ld->zdev);
 	if (ret) {
 		log_err("%s: zbc_open() failed, err=%d\n",
 			f->file_name, ret);
@@ -177,10 +177,8 @@ static int libzbc_get_zoned_model(struct thread_data *td, struct fio_file *f,
 	struct libzbc_data *ld;
 	int ret;
 
-	if (f->filetype != FIO_TYPE_BLOCK && f->filetype != FIO_TYPE_CHAR) {
-		*model = ZBD_IGNORE;
-		return 0;
-	}
+	if (f->filetype != FIO_TYPE_BLOCK && f->filetype != FIO_TYPE_CHAR)
+		return -EINVAL;
 
 	ret = libzbc_open_dev(td, f, &ld);
 	if (ret)
@@ -283,7 +281,7 @@ static int libzbc_report_zones(struct thread_data *td, struct fio_file *f,
 		default:
 			/* Treat all these conditions as offline (don't use!) */
 			zbdz->cond = ZBD_ZONE_COND_OFFLINE;
-			break;
+			zbdz->wp = zbdz->start;
 		}
 	}
 
@@ -332,6 +330,24 @@ err:
 			f->file_name,
 			zbc_sk_str(err.sk), zbc_asc_ascq_str(err.asc_ascq));
 	return -ret;
+}
+
+static int libzbc_get_max_open_zones(struct thread_data *td, struct fio_file *f,
+				     unsigned int *max_open_zones)
+{
+	struct libzbc_data *ld;
+	int ret;
+
+	ret = libzbc_open_dev(td, f, &ld);
+	if (ret)
+		return ret;
+
+	if (ld->max_open_seq_req == ZBC_NO_LIMIT)
+		*max_open_zones = 0;
+	else
+		*max_open_zones = ld->max_open_seq_req;
+
+	return 0;
 }
 
 ssize_t libzbc_rw(struct thread_data *td, struct io_u *io_u)
@@ -392,7 +408,11 @@ static enum fio_q_status libzbc_queue(struct thread_data *td, struct io_u *io_u)
 		ret = zbc_flush(ld->zdev);
 		if (ret)
 			log_err("zbc_flush error %zd\n", ret);
-	} else if (io_u->ddir != DDIR_TRIM) {
+	} else if (io_u->ddir == DDIR_TRIM) {
+		ret = zbd_do_io_u_trim(td, io_u);
+		if (!ret)
+			ret = EINVAL;
+	} else {
 		log_err("Unsupported operation %u\n", io_u->ddir);
 		ret = -EINVAL;
 	}
@@ -413,6 +433,7 @@ FIO_STATIC struct ioengine_ops ioengine = {
 	.get_zoned_model	= libzbc_get_zoned_model,
 	.report_zones		= libzbc_report_zones,
 	.reset_wp		= libzbc_reset_wp,
+	.get_max_open_zones	= libzbc_get_max_open_zones,
 	.queue			= libzbc_queue,
 	.flags			= FIO_SYNCIO | FIO_NOEXTEND | FIO_RAWIO,
 };

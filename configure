@@ -45,6 +45,7 @@ print_config() {
 
 # Default CFLAGS
 CFLAGS="-D_GNU_SOURCE -include config-host.h $CFLAGS"
+CONFIGURE_CFLAGS="-Werror-implicit-function-declaration"
 BUILD_CFLAGS=""
 
 # Print a helpful header at the top of config.log
@@ -88,14 +89,14 @@ do_cc() {
 }
 
 compile_object() {
-  do_cc $CFLAGS -Werror-implicit-function-declaration -c -o $TMPO $TMPC
+  do_cc $CFLAGS $CONFIGURE_CFLAGS -c -o $TMPO $TMPC
 }
 
 compile_prog() {
   local_cflags="$1"
   local_ldflags="$2 $LIBS"
   echo "Compiling test case $3" >> config.log
-  do_cc $CFLAGS -Werror-implicit-function-declaration $local_cflags -o $TMPE $TMPC $LDFLAGS $local_ldflags
+  do_cc $CFLAGS $CONFIGURE_CFLAGS $local_cflags -o $TMPE $TMPC $LDFLAGS $local_ldflags
 }
 
 feature_not_found() {
@@ -141,7 +142,7 @@ check_min_lib_version() {
   fi
   : "${_feature:=${1}}"
   if "${cross_prefix}"pkg-config --version > /dev/null 2>&1; then
-    if eval "echo \$$_feature" = "yes" ; then
+    if test "$(eval echo \"\$$_feature\")" = "yes" ; then
       feature_not_found "$_feature" "$1 >= $2"
     fi
   else
@@ -162,13 +163,16 @@ pmemblk="no"
 devdax="no"
 pmem="no"
 cuda="no"
+libcufile="no"
 disable_lex=""
 disable_pmem="no"
 disable_native="no"
 march_set="no"
 libiscsi="no"
 libnbd="no"
+libnfs="no"
 libzbc=""
+dfs=""
 dynamic_engines="no"
 prefix=/usr/local
 
@@ -224,6 +228,8 @@ for opt do
   ;;
   --enable-cuda) cuda="yes"
   ;;
+  --enable-libcufile) libcufile="yes"
+  ;;
   --disable-native) disable_native="yes"
   ;;
   --with-ime=*) ime_path="$optarg"
@@ -236,7 +242,11 @@ for opt do
   ;;
   --disable-tcmalloc) disable_tcmalloc="yes"
   ;;
+  --disable-nfs) disable_nfs="yes"
+  ;;
   --dynamic-libengines) dynamic_engines="yes"
+  ;;
+  --disable-dfs) dfs="no"
   ;;
   --help)
     show_help="yes"
@@ -254,7 +264,7 @@ if test "$show_help" = "yes" ; then
   echo "--cc=                   Specify compiler to use"
   echo "--extra-cflags=         Specify extra CFLAGS to pass to compiler"
   echo "--build-32bit-win       Enable 32-bit build on Windows"
-  echo "--target-win-ver=       Minimum version of Windows to target (XP or 7)"
+  echo "--target-win-ver=       Minimum version of Windows to target (only accepts 7)"
   echo "--enable-pdb            Enable Windows PDB symbols generation (needs clang/lld)"
   echo "--build-static          Build a static fio"
   echo "--esx                   Configure build options for esx"
@@ -264,14 +274,17 @@ if test "$show_help" = "yes" ; then
   echo "--disable-rados         Disable Rados support even if found"
   echo "--disable-rbd           Disable Rados Block Device even if found"
   echo "--disable-http          Disable HTTP support even if found"
+  echo "--disable-nfs           Disable userspace NFS support even if found"
   echo "--disable-gfapi         Disable gfapi"
   echo "--enable-libhdfs        Enable hdfs support"
+  echo "--enable-libnfs         Enable nfs support"
   echo "--disable-lex           Disable use of lex/yacc for math"
   echo "--disable-pmem          Disable pmem based engines even if found"
   echo "--enable-lex            Enable use of lex/yacc for math"
   echo "--disable-shm           Disable SHM support"
   echo "--disable-optimizations Don't enable compiler optimizations"
   echo "--enable-cuda           Enable GPUDirect RDMA support"
+  echo "--enable-libcufile      Enable GPUDirect Storage cuFile support"
   echo "--disable-native        Don't build for native host"
   echo "--with-ime=             Install path for DDN's Infinite Memory Engine"
   echo "--enable-libiscsi       Enable iscsi support"
@@ -279,6 +292,7 @@ if test "$show_help" = "yes" ; then
   echo "--disable-libzbc        Disable libzbc even if found"
   echo "--disable-tcmalloc	Disable tcmalloc support"
   echo "--dynamic-libengines	Lib-based ioengines as dynamic libraries"
+  echo "--disable-dfs		Disable DAOS File System support even if found"
   exit $exit_val
 fi
 
@@ -356,16 +370,15 @@ Darwin)
   if test -z "$cpu" && test "$(sysctl -n hw.optional.x86_64)" = "1"; then
     cpu="x86_64"
   fi
-  # Error at compile time linking of weak/partial symbols if possible...
+  # Avoid configure feature detection of features provided by weak symbols
 cat > $TMPC <<EOF
 int main(void)
 {
   return 0;
 }
 EOF
-  if compile_prog "" "-Wl,-no_weak_imports" "disable weak symbols"; then
-    echo "Disabling weak symbols"
-    LDFLAGS="$LDFLAGS -Wl,-no_weak_imports"
+  if compile_prog "" "-Werror=partial-availability" "error on weak symbols"; then
+    CONFIGURE_CFLAGS="$CONFIGURE_CFLAGS -Werror=partial-availability"
   fi
   ;;
 SunOS)
@@ -391,11 +404,7 @@ CYGWIN*)
     # Default Windows API target
     target_win_ver="7"
   fi
-  if test "$target_win_ver" = "XP"; then
-    output_sym "CONFIG_WINDOWS_XP"
-    # Technically the below is targeting 2003
-    CFLAGS="$CFLAGS -D_WIN32_WINNT=0x0502"
-  elif test "$target_win_ver" = "7"; then
+  if test "$target_win_ver" = "7"; then
     output_sym "CONFIG_WINDOWS_7"
     CFLAGS="$CFLAGS -D_WIN32_WINNT=0x0601"
   else
@@ -413,6 +422,8 @@ CYGWIN*)
   clock_gettime="yes" # clock_monotonic probe has dependency on this
   clock_monotonic="yes"
   sched_idle="yes"
+  pthread_condattr_setclock="no"
+  pthread_affinity="no"
   ;;
 esac
 
@@ -758,10 +769,8 @@ print_config "POSIX pshared support" "$posix_pshared"
 
 ##########################################
 # POSIX pthread_condattr_setclock() probe
-if test "$pthread_condattr_setclock" != "yes" ; then
-  pthread_condattr_setclock="no"
-fi
-cat > $TMPC <<EOF
+if test "$pthread_condattr_setclock" != "no" ; then
+  cat > $TMPC <<EOF
 #include <pthread.h>
 int main(void)
 {
@@ -770,11 +779,12 @@ int main(void)
   return 0;
 }
 EOF
-if compile_prog "" "$LIBS" "pthread_condattr_setclock" ; then
-  pthread_condattr_setclock=yes
-elif compile_prog "" "$LIBS -lpthread" "pthread_condattr_setclock" ; then
-  pthread_condattr_setclock=yes
-  LIBS="$LIBS -lpthread"
+  if compile_prog "" "$LIBS" "pthread_condattr_setclock" ; then
+    pthread_condattr_setclock=yes
+  elif compile_prog "" "$LIBS -lpthread" "pthread_condattr_setclock" ; then
+    pthread_condattr_setclock=yes
+    LIBS="$LIBS -lpthread"
+  fi
 fi
 print_config "pthread_condattr_setclock()" "$pthread_condattr_setclock"
 
@@ -798,6 +808,29 @@ elif compile_prog "" "$LIBS -lpthread" "pthread_sigmask" ; then
   LIBS="$LIBS -lpthread"
 fi
 print_config "pthread_sigmask()" "$pthread_sigmask"
+
+##########################################
+# pthread_getaffinity_np() probe
+if test "$pthread_getaffinity" != "yes" ; then
+  pthread_getaffinity="no"
+fi
+cat > $TMPC <<EOF
+#include <stddef.h> /* NULL */
+#include <signal.h> /* pthread_sigmask() */
+#include <pthread.h>
+int main(void)
+{
+  cpu_set_t set;
+  return pthread_getaffinity_np(pthread_self(), sizeof(set), &set);
+}
+EOF
+if compile_prog "" "$LIBS" "pthread_getaffinity" ; then
+  pthread_getaffinity="yes"
+elif compile_prog "" "$LIBS -lpthread" "pthread_getaffinity" ; then
+  pthread_getaffinity="yes"
+  LIBS="$LIBS -lpthread"
+fi
+print_config "pthread_getaffinity_np()" "$pthread_getaffinity"
 
 ##########################################
 # solaris aio probe
@@ -919,6 +952,49 @@ if test "$disable_rdma" != "yes" && compile_prog "" "-lrdmacm" "rdma"; then
     rdmacm="yes"
 fi
 print_config "rdmacm" "$rdmacm"
+
+##########################################
+# librpma probe
+if test "$librpma" != "yes" ; then
+  librpma="no"
+fi
+cat > $TMPC << EOF
+#include <stdio.h>
+#include <librpma.h>
+int main(int argc, char **argv)
+{
+  enum rpma_conn_event event = RPMA_CONN_REJECTED;
+  (void) event; /* unused */
+  rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
+  return 0;
+}
+EOF
+if test "$disable_rdma" != "yes" && compile_prog "" "-lrpma" "rpma"; then
+    librpma="yes"
+fi
+print_config "librpma" "$librpma"
+
+##########################################
+# libprotobuf-c probe
+if test "$libprotobuf_c" != "yes" ; then
+  libprotobuf_c="no"
+fi
+cat > $TMPC << EOF
+#include <stdio.h>
+#include <protobuf-c/protobuf-c.h>
+#if !defined(PROTOBUF_C_VERSION_NUMBER)
+# error PROTOBUF_C_VERSION_NUMBER is not defined!
+#endif
+int main(int argc, char **argv)
+{
+  (void)protobuf_c_message_check(NULL);
+  return 0;
+}
+EOF
+if compile_prog "" "-lprotobuf-c" "protobuf_c"; then
+    libprotobuf_c="yes"
+fi
+print_config "libprotobuf_c" "$libprotobuf_c"
 
 ##########################################
 # asprintf() and vasprintf() probes
@@ -2055,7 +2131,7 @@ cat > $TMPC << EOF
 int main(int argc, char **argv)
 {
   int rc;
-  rc = pmem_is_pmem(NULL, NULL);
+  rc = pmem_is_pmem(NULL, 0);
   return 0;
 }
 EOF
@@ -2178,6 +2254,48 @@ if test "$libnbd" != "no" ; then
   fi
 fi
 print_config "NBD engine" "$libnbd"
+
+##########################################
+# check for dfs (DAOS File System)
+if test "$dfs" != "no" ; then
+  cat > $TMPC << EOF
+#include <fcntl.h>
+#include <daos.h>
+#include <daos_fs.h>
+
+int main(int argc, char **argv)
+{
+  daos_handle_t	poh;
+  daos_handle_t	coh;
+  dfs_t		*dfs;
+
+  (void) dfs_mount(poh, coh, O_RDWR, &dfs);
+
+  return 0;
+}
+EOF
+  if compile_prog "" "-luuid -ldfs -ldaos" "dfs"; then
+    dfs="yes"
+  else
+    dfs="no"
+  fi
+fi
+print_config "DAOS File System (dfs) Engine" "$dfs"
+
+##########################################
+# Check if we have libnfs (for userspace nfs support).
+if test "$disable_nfs" != "yes"; then
+  if $(pkg-config libnfs > /dev/null 2>&1); then
+    libnfs="yes"
+    libnfs_cflags=$(pkg-config --cflags libnfs)
+    libnfs_libs=$(pkg-config --libs libnfs)
+  else
+    if test "$libnfs" = "yes" ; then
+      echo "libnfs" "Install libnfs"
+    fi
+  fi
+fi
+print_config "NFS engine" "$libnfs"
 
 ##########################################
 # Check if we have lex/yacc available
@@ -2496,6 +2614,29 @@ fi
 print_config "cuda" "$cuda"
 
 ##########################################
+# libcufile probe
+if test "$libcufile" != "no" ; then
+cat > $TMPC << EOF
+#include <cufile.h>
+
+int main(int argc, char* argv[]) {
+   cuFileDriverOpen();
+   return 0;
+}
+EOF
+  if compile_prog "" "-lcuda -lcudart -lcufile" "libcufile"; then
+    libcufile="yes"
+    LIBS="-lcuda -lcudart -lcufile $LIBS"
+  else
+    if test "$libcufile" = "yes" ; then
+      feature_not_found "libcufile" ""
+    fi
+    libcufile="no"
+  fi
+fi
+print_config "libcufile" "$libcufile"
+
+##########################################
 # check for cc -march=native
 build_native="no"
 cat > $TMPC << EOF
@@ -2672,6 +2813,7 @@ print_config "Windows PDB generation" "$pdb"
 ##########################################
 # check for timerfd support
 timerfd_create="no"
+if test "$esx" != "yes" ; then
 cat > $TMPC << EOF
 #include <sys/time.h>
 #include <sys/timerfd.h>
@@ -2681,8 +2823,9 @@ int main(int argc, char **argv)
 	return timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
 }
 EOF
-if compile_prog "" "" "timerfd_create"; then
-  timerfd_create="yes"
+  if compile_prog "" "" "timerfd_create"; then
+    timerfd_create="yes"
+  fi
 fi
 print_config "timerfd_create" "$timerfd_create"
 
@@ -2724,6 +2867,9 @@ fi
 if test "$pthread_sigmask" = "yes" ; then
   output_sym "CONFIG_PTHREAD_SIGMASK"
 fi
+if test "$pthread_getaffinity" = "yes" ; then
+  output_sym "CONFIG_PTHREAD_GETAFFINITY"
+fi
 if test "$have_asprintf" = "yes" ; then
     output_sym "CONFIG_HAVE_ASPRINTF"
 fi
@@ -2763,17 +2909,20 @@ fi
 if test "$libverbs" = "yes" -a "$rdmacm" = "yes" ; then
   output_sym "CONFIG_RDMA"
 fi
+# librpma is supported on the 'x86_64' architecture for now
+if test "$cpu" = "x86_64" -a "$libverbs" = "yes" -a "$rdmacm" = "yes" \
+    -a "$librpma" = "yes" -a "$libpmem" = "yes" ; then
+  output_sym "CONFIG_LIBRPMA_APM"
+fi
+if test "$cpu" = "x86_64" -a "$libverbs" = "yes" -a "$rdmacm" = "yes" \
+    -a "$librpma" = "yes" -a "$libpmem" = "yes" -a "$libprotobuf_c" = "yes" ; then
+  output_sym "CONFIG_LIBRPMA_GPSPM"
+fi
 if test "$clock_gettime" = "yes" ; then
   output_sym "CONFIG_CLOCK_GETTIME"
 fi
 if test "$clock_monotonic" = "yes" ; then
   output_sym "CONFIG_CLOCK_MONOTONIC"
-fi
-if test "$clock_monotonic_raw" = "yes" ; then
-  output_sym "CONFIG_CLOCK_MONOTONIC_RAW"
-fi
-if test "$clock_monotonic_precise" = "yes" ; then
-  output_sym "CONFIG_CLOCK_MONOTONIC_PRECISE"
 fi
 if test "$clockid_t" = "yes"; then
   output_sym "CONFIG_CLOCKID_T"
@@ -2966,6 +3115,15 @@ fi
 if test "$cuda" = "yes" ; then
   output_sym "CONFIG_CUDA"
 fi
+if test "$libcufile" = "yes" ; then
+  output_sym "CONFIG_LIBCUFILE"
+fi
+if test "$dfs" = "yes" ; then
+  output_sym "CONFIG_DFS"
+fi
+if test "$libnfs" = "yes" ; then
+  output_sym "CONFIG_NFS"
+fi
 if test "$march_set" = "no" && test "$build_native" = "yes" ; then
   output_sym "CONFIG_BUILD_NATIVE"
 fi
@@ -3004,6 +3162,12 @@ if test "$libnbd" = "yes" ; then
   echo "CONFIG_LIBNBD=m" >> $config_host_mak
   echo "LIBNBD_CFLAGS=$libnbd_cflags" >> $config_host_mak
   echo "LIBNBD_LIBS=$libnbd_libs" >> $config_host_mak
+fi
+if test "$libnfs" = "yes" ; then
+  output_sym "CONFIG_LIBNFS"
+  echo "CONFIG_LIBNFS=m" >> $config_host_mak
+  echo "LIBNFS_CFLAGS=$libnfs_cflags" >> $config_host_mak
+  echo "LIBNFS_LIBS=$libnfs_libs" >> $config_host_mak
 fi
 if test "$dynamic_engines" = "yes" ; then
   output_sym "CONFIG_DYNAMIC_ENGINES"

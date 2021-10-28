@@ -40,6 +40,11 @@ ifdef CONFIG_PDB
   LDFLAGS += -fuse-ld=lld $(LINK_PDBFILE)
 endif
 
+# If clang, do not use builtin stpcpy as it breaks the build
+ifeq ($(CC),clang)
+  FIO_CFLAGS += -fno-builtin-stpcpy
+endif
+
 ifdef CONFIG_GFIO
   PROGS += gfio
 endif
@@ -51,12 +56,13 @@ SOURCE :=	$(sort $(patsubst $(SRCDIR)/%,%,$(wildcard $(SRCDIR)/crc/*.c)) \
 		pshared.c options.c \
 		smalloc.c filehash.c profile.c debug.c engines/cpu.c \
 		engines/mmap.c engines/sync.c engines/null.c engines/net.c \
-		engines/ftruncate.c engines/filecreate.c engines/filestat.c \
+		engines/ftruncate.c engines/filecreate.c engines/filestat.c engines/filedelete.c \
+		engines/exec.c \
 		server.c client.c iolog.c backend.c libfio.c flow.c cconv.c \
 		gettime-thread.c helpers.c json.c idletime.c td_error.c \
 		profiles/tiobench.c profiles/act.c io_u_queue.c filelock.c \
 		workqueue.c rate-submit.c optgroup.c helper_thread.c \
-		steadystate.c zone-dist.c zbd.c
+		steadystate.c zone-dist.c zbd.c dedupe.c
 
 ifdef CONFIG_LIBHDFS
   HDFSFLAGS= -I $(JAVA_HOME)/include -I $(JAVA_HOME)/include/linux -I $(FIO_LIBHDFS_INCLUDE)
@@ -79,6 +85,12 @@ ifdef CONFIG_LIBNBD
   ENGINES += nbd
 endif
 
+ifdef CONFIG_LIBNFS
+  CFLAGS += $(LIBNFS_CFLAGS)
+  LIBS += $(LIBNFS_LIBS)
+  SOURCE += engines/nfs.c
+endif
+
 ifdef CONFIG_64BIT
   CPPFLAGS += -DBITS_PER_LONG=64
 else ifdef CONFIG_32BIT
@@ -94,6 +106,21 @@ ifdef CONFIG_RDMA
   rdma_LIBS = -libverbs -lrdmacm
   ENGINES += rdma
 endif
+ifdef CONFIG_LIBRPMA_APM
+  librpma_apm_SRCS = engines/librpma_apm.c
+  librpma_fio_SRCS = engines/librpma_fio.c
+  librpma_apm_LIBS = -lrpma -lpmem
+  ENGINES += librpma_apm
+endif
+ifdef CONFIG_LIBRPMA_GPSPM
+  librpma_gpspm_SRCS = engines/librpma_gpspm.c engines/librpma_gpspm_flush.pb-c.c
+  librpma_fio_SRCS = engines/librpma_fio.c
+  librpma_gpspm_LIBS = -lrpma -lpmem -lprotobuf-c
+  ENGINES += librpma_gpspm
+endif
+ifdef librpma_fio_SRCS
+  SOURCE += $(librpma_fio_SRCS)
+endif
 ifdef CONFIG_POSIXAIO
   SOURCE += engines/posixaio.c
 endif
@@ -102,6 +129,9 @@ ifdef CONFIG_LINUX_FALLOCATE
 endif
 ifdef CONFIG_LINUX_EXT4_MOVE_EXTENT
   SOURCE += engines/e4defrag.c
+endif
+ifdef CONFIG_LIBCUFILE
+  SOURCE += engines/libcufile.c
 endif
 ifdef CONFIG_LINUX_SPLICE
   SOURCE += engines/splice.c
@@ -126,6 +156,11 @@ ifdef CONFIG_HTTP
   http_SRCS = engines/http.c
   http_LIBS = -lcurl -lssl -lcrypto
   ENGINES += http
+endif
+ifdef CONFIG_DFS
+  dfs_SRCS = engines/dfs.c
+  dfs_LIBS = -luuid -ldaos -ldfs
+  ENGINES += dfs
 endif
 SOURCE += oslib/asprintf.c
 ifndef CONFIG_STRSEP
@@ -259,7 +294,7 @@ else # !CONFIG_DYNAMIC_ENGINES
 define engine_template =
 SOURCE += $$($(1)_SRCS)
 LIBS += $$($(1)_LIBS)
-CFLAGS += $$($(1)_CFLAGS)
+override CFLAGS += $$($(1)_CFLAGS)
 endef
 endif
 
@@ -343,6 +378,23 @@ T_MEMLOCK_PROGS = t/memlock
 T_TT_OBJS = t/time-test.o
 T_TT_PROGS = t/time-test
 
+T_FUZZ_OBJS = t/fuzz/fuzz_parseini.o
+T_FUZZ_OBJS += $(OBJS)
+ifdef CONFIG_ARITHMETIC
+T_FUZZ_OBJS += lex.yy.o y.tab.o
+endif
+# in case there is no fuzz driver defined by environment variable LIB_FUZZING_ENGINE, use a simple one
+# For instance, with compiler clang, address sanitizer and libFuzzer as a fuzzing engine, you should define
+# export CFLAGS="-fsanitize=address,fuzzer-no-link"
+# export LIB_FUZZING_ENGINE="-fsanitize=address"
+# export CC=clang
+# before running configure && make
+# You can adapt this with different compilers, sanitizers, and fuzzing engines
+ifndef LIB_FUZZING_ENGINE
+T_FUZZ_OBJS += t/fuzz/onefile.o
+endif
+T_FUZZ_PROGS = t/fuzz/fuzz_parseini
+
 T_OBJS = $(T_SMALLOC_OBJS)
 T_OBJS += $(T_IEEE_OBJS)
 T_OBJS += $(T_ZIPF_OBJS)
@@ -356,6 +408,7 @@ T_OBJS += $(T_PIPE_ASYNC_OBJS)
 T_OBJS += $(T_MEMLOCK_OBJS)
 T_OBJS += $(T_TT_OBJS)
 T_OBJS += $(T_IOU_RING_OBJS)
+T_OBJS += $(T_FUZZ_OBJS)
 
 ifneq (,$(findstring CYGWIN,$(CONFIG_TARGET_OS)))
     T_DEDUPE_OBJS += $(WINDOWS_OBJS)
@@ -379,6 +432,7 @@ endif
 ifneq (,$(findstring Linux,$(CONFIG_TARGET_OS)))
 T_TEST_PROGS += $(T_IOU_RING_PROGS)
 endif
+T_TEST_PROGS += $(T_FUZZ_PROGS)
 
 PROGS += $(T_PROGS)
 
@@ -530,6 +584,13 @@ t/ieee754: $(T_IEEE_OBJS)
 fio: $(FIO_OBJS)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) -o $@ $(FIO_OBJS) $(LIBS) $(HDFSLIB)
 
+t/fuzz/fuzz_parseini: $(T_FUZZ_OBJS)
+ifndef LIB_FUZZING_ENGINE
+	$(QUIET_LINK)$(CC) $(LDFLAGS) -o $@ $(T_FUZZ_OBJS) $(LIBS) $(HDFSLIB)
+else
+	$(QUIET_LINK)$(CXX) $(LDFLAGS) -o $@ $(T_FUZZ_OBJS) $(LIB_FUZZING_ENGINE) $(LIBS) $(HDFSLIB)
+endif
+
 gfio: $(GFIO_OBJS)
 	$(QUIET_LINK)$(CC) $(filter-out -static, $(LDFLAGS)) -o gfio $(GFIO_OBJS) $(LIBS) $(GFIO_LIBS) $(GTK_LDFLAGS) $(HDFSLIB)
 
@@ -590,16 +651,17 @@ test: fio
 fulltest:
 	sudo modprobe null_blk &&				 	\
 	if [ ! -e /usr/include/libzbc/zbc.h ]; then			\
-	  git clone https://github.com/hgst/libzbc &&		 	\
+	  git clone https://github.com/westerndigitalcorporation/libzbc && \
 	  (cd libzbc &&						 	\
 	   ./autogen.sh &&					 	\
 	   ./configure --prefix=/usr &&				 	\
 	   make -j &&						 	\
 	   sudo make install)						\
 	fi &&					 			\
-	sudo t/zbd/run-tests-against-regular-nullb &&		 	\
+	sudo t/zbd/run-tests-against-nullb -s 1 &&		 	\
 	if [ -e /sys/module/null_blk/parameters/zoned ]; then		\
-		sudo t/zbd/run-tests-against-zoned-nullb;	 	\
+		sudo t/zbd/run-tests-against-nullb -s 2;	 	\
+		sudo t/zbd/run-tests-against-nullb -s 4;	 	\
 	fi
 
 install: $(PROGS) $(SCRIPTS) $(ENGS_OBJS) tools/plot/fio2gnuplot.1 FORCE
