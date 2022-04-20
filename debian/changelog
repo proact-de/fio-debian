@@ -1,7 +1,7 @@
 fio (3.30-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.30 (Closes: #1009880). 
-  * docs: Install README.rst instead of README.
+  * docs: Install README.rst and HOWTO.rst instead of README and HOWTO.
   * control: Add Sphinx as build-dependency in order to build manpage
     from it.
 
