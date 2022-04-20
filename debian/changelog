@@ -1,6 +1,7 @@
 fio (3.30-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.30 (Closes: #1009880). 
+  * docs: Install README.rst instead of README.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 20 Apr 2022 11:16:28 +0200
 
