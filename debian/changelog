@@ -1,4 +1,4 @@
-fio (3.30-1) UNRELEASED; urgency=medium
+fio (3.30-1) unstable; urgency=medium
 
   * Imported new upstream version 3.30 (Closes: #1009880).
   * docs: Install README.rst and HOWTO.rst instead of README and HOWTO.
@@ -6,7 +6,7 @@ fio (3.30-1) UNRELEASED; urgency=medium
     * Add Sphinx as build-dependency in order to build manpage from it.
     * Bumped standards version to 4.6.0.1. No changes needed.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 20 Apr 2022 11:16:28 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 20 Apr 2022 12:03:54 +0200
 
 fio (3.28-1) unstable; urgency=medium
 
