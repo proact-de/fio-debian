@@ -119,10 +119,14 @@ extern int fio_cpus_split(os_cpu_mask_t *mask, unsigned int cpu);
 
 #ifndef FIO_HAVE_IOPRIO_CLASS
 #define ioprio_value_is_class_rt(prio)	(false)
+#define IOPRIO_MIN_PRIO_CLASS		0
+#define IOPRIO_MAX_PRIO_CLASS		0
 #endif
 #ifndef FIO_HAVE_IOPRIO
 #define ioprio_value(prioclass, prio)	(0)
 #define ioprio_set(which, who, prioclass, prio)	(0)
+#define IOPRIO_MIN_PRIO			0
+#define IOPRIO_MAX_PRIO			0
 #endif
 
 #ifndef FIO_HAVE_ODIRECT
@@ -410,6 +414,15 @@ static inline bool os_cpu_has(cpu_features feature)
 
 #ifndef FIO_EMULATED_MKDIR_TWO
 # define fio_mkdir(path, mode)	mkdir(path, mode)
+#endif
+
+#ifdef _SC_CLK_TCK
+static inline void os_clk_tck(long *clk_tck)
+{
+	*clk_tck = sysconf(_SC_CLK_TCK);
+}
+#else
+extern void os_clk_tck(long *clk_tck);
 #endif
 
 #endif /* FIO_OS_H */

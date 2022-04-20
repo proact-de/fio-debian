@@ -87,8 +87,8 @@ static void reset_io_counters(struct thread_data *td, int all)
 			td->this_io_bytes[ddir] = 0;
 			td->stat_io_blocks[ddir] = 0;
 			td->this_io_blocks[ddir] = 0;
-			td->rate_bytes[ddir] = 0;
-			td->rate_blocks[ddir] = 0;
+			td->last_rate_check_bytes[ddir] = 0;
+			td->last_rate_check_blocks[ddir] = 0;
 			td->bytes_done[ddir] = 0;
 			td->rate_io_issue_bytes[ddir] = 0;
 			td->rate_next_io_time[ddir] = 0;
@@ -104,7 +104,7 @@ static void reset_io_counters(struct thread_data *td, int all)
 	/*
 	 * reset file done count if we are to start over
 	 */
-	if (td->o.time_based || td->o.loops || td->o.do_verify)
+	if (td->o.time_based || td->loops > 1 || td->o.do_verify)
 		td->nr_done_files = 0;
 }
 
@@ -140,10 +140,9 @@ void reset_all_stats(struct thread_data *td)
 		td->io_issues[i] = 0;
 		td->ts.total_io_u[i] = 0;
 		td->ts.runtime[i] = 0;
-		td->rwmix_issues = 0;
 	}
 
-	set_epoch_time(td, td->o.log_unix_epoch);
+	set_epoch_time(td, td->o.log_unix_epoch | td->o.log_alternate_epoch, td->o.log_alternate_epoch_clock_id);
 	memcpy(&td->start, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));

@@ -224,6 +224,13 @@ static struct option l_opts[FIO_NR_OPTIONS] = {
 		.has_arg	= optional_argument,
 		.val		= 'S',
 	},
+#ifdef WIN32
+	{
+		.name		= (char *) "server-internal",
+		.has_arg	= required_argument,
+		.val		= 'N',
+	},
+#endif
 	{	.name		= (char *) "daemonize",
 		.has_arg	= required_argument,
 		.val		= 'D',
@@ -1445,6 +1452,26 @@ static bool wait_for_ok(const char *jobname, struct thread_options *o)
 	return true;
 }
 
+static int verify_per_group_options(struct thread_data *td, const char *jobname)
+{
+	struct thread_data *td2;
+	int i;
+
+	for_each_td(td2, i) {
+		if (td->groupid != td2->groupid)
+			continue;
+
+		if (td->o.stats &&
+		    td->o.lat_percentiles != td2->o.lat_percentiles) {
+			log_err("fio: lat_percentiles in job: %s differs from group\n",
+				jobname);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 /*
  * Treat an empty log file name the same as a one not given
  */
@@ -1548,17 +1575,15 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	memcpy(td->ts.percentile_list, o->percentile_list, sizeof(o->percentile_list));
 	td->ts.sig_figs = o->sig_figs;
 
-	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
-		td->ts.clat_stat[i].min_val = ULONG_MAX;
-		td->ts.slat_stat[i].min_val = ULONG_MAX;
-		td->ts.lat_stat[i].min_val = ULONG_MAX;
-		td->ts.bw_stat[i].min_val = ULONG_MAX;
-		td->ts.iops_stat[i].min_val = ULONG_MAX;
-		td->ts.clat_high_prio_stat[i].min_val = ULONG_MAX;
-		td->ts.clat_low_prio_stat[i].min_val = ULONG_MAX;
-	}
-	td->ts.sync_stat.min_val = ULONG_MAX;
-	td->ddir_seq_nr = o->ddir_seq_nr;
+	init_thread_stat_min_vals(&td->ts);
+
+	/*
+	 * td->>ddir_seq_nr needs to be initialized to 1, NOT o->ddir_seq_nr,
+	 * so that get_next_offset gets a new random offset the first time it
+	 * is called, instead of keeping an initial offset of 0 for the first
+	 * nr-1 calls
+	 */
+	td->ddir_seq_nr = 1;
 
 	if ((o->stonewall || o->new_group) && prev_group_jobs) {
 		prev_group_jobs = 0;
@@ -1571,6 +1596,10 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 
 	td->groupid = groupid;
 	prev_group_jobs++;
+
+	if (td->o.group_reporting && prev_group_jobs > 1 &&
+	    verify_per_group_options(td, jobname))
+		goto err;
 
 	if (setup_rate(td))
 		goto err;
@@ -1595,17 +1624,23 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 		else
 			suf = "log";
 
-		gen_log_name(logname, sizeof(logname), "lat", pre,
-				td->thread_number, suf, o->per_job_logs);
-		setup_log(&td->lat_log, &p, logname);
+		if (!o->disable_lat) {
+			gen_log_name(logname, sizeof(logname), "lat", pre,
+				     td->thread_number, suf, o->per_job_logs);
+			setup_log(&td->lat_log, &p, logname);
+		}
 
-		gen_log_name(logname, sizeof(logname), "slat", pre,
-				td->thread_number, suf, o->per_job_logs);
-		setup_log(&td->slat_log, &p, logname);
+		if (!o->disable_slat) {
+			gen_log_name(logname, sizeof(logname), "slat", pre,
+				     td->thread_number, suf, o->per_job_logs);
+			setup_log(&td->slat_log, &p, logname);
+		}
 
-		gen_log_name(logname, sizeof(logname), "clat", pre,
-				td->thread_number, suf, o->per_job_logs);
-		setup_log(&td->clat_log, &p, logname);
+		if (!o->disable_clat) {
+			gen_log_name(logname, sizeof(logname), "clat", pre,
+				     td->thread_number, suf, o->per_job_logs);
+			setup_log(&td->clat_log, &p, logname);
+		}
 
 	}
 
@@ -2149,6 +2184,10 @@ static int __parse_jobs_ini(struct thread_data *td,
 		free(job_sections[i]);
 		i++;
 	}
+
+	free(job_sections);
+	job_sections = NULL;
+	nr_job_sections = 0;
 
 	free(opts);
 out:
@@ -2798,6 +2837,12 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			exit_val = 1;
 #endif
 			break;
+#ifdef WIN32
+		case 'N':
+			did_arg = true;
+			fio_server_internal_set(optarg);
+			break;
+#endif
 		case 'D':
 			if (pid_file)
 				free(pid_file);
@@ -2945,7 +2990,7 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 			log_err("%s: unrecognized option '%s'\n", argv[0],
 							argv[optind - 1]);
 			show_closest_option(argv[optind - 1]);
-			fallthrough;
+			fio_fallthrough;
 		default:
 			do_exit++;
 			exit_val = 1;

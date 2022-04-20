@@ -80,6 +80,7 @@ import time
 import argparse
 import platform
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 
@@ -125,7 +126,8 @@ class FioLatTest():
             "--output-format={output-format}".format(**self.test_options),
         ]
         for opt in ['slat_percentiles', 'clat_percentiles', 'lat_percentiles',
-                    'unified_rw_reporting', 'fsync', 'fdatasync', 'numjobs', 'cmdprio_percentage']:
+                    'unified_rw_reporting', 'fsync', 'fdatasync', 'numjobs',
+                    'cmdprio_percentage', 'bssplit', 'cmdprio_bssplit']:
             if opt in self.test_options:
                 option = '--{0}={{{0}}}'.format(opt)
                 fio_args.append(option.format(**self.test_options))
@@ -268,7 +270,7 @@ class FioLatTest():
             #
             # Check only for the presence/absence of json+
             # latency bins. Future work can check the
-            # accurracy of the bin values and counts.
+            # accuracy of the bin values and counts.
             #
             # Because the latency percentiles are based on
             # the bins, we can be confident that the bin
@@ -363,20 +365,19 @@ class FioLatTest():
 
     def check_nocmdprio_lat(self, job):
         """
-        Make sure no high/low priority latencies appear.
+        Make sure no per priority latencies appear.
 
         job         JSON object to check
         """
 
         for ddir in ['read', 'write', 'trim']:
             if ddir in job:
-                if 'lat_high_prio' in job[ddir] or 'lat_low_prio' in job[ddir] or \
-                    'clat_high_prio' in job[ddir] or 'clat_low_prio' in job[ddir]:
-                    print("Unexpected high/low priority latencies found in %s output" % ddir)
+                if 'prios' in job[ddir]:
+                    print("Unexpected per priority latencies found in %s output" % ddir)
                     return False
 
         if self.debug:
-            print("No high/low priority latencies found")
+            print("No per priority latencies found")
 
         return True
 
@@ -497,7 +498,7 @@ class FioLatTest():
         return retval
 
     def check_prio_latencies(self, jsondata, clat=True, plus=False):
-        """Check consistency of high/low priority latencies.
+        """Check consistency of per priority latencies.
 
         clat                True if we should check clat data; other check lat data
         plus                True if we have json+ format data where additional checks can
@@ -506,78 +507,78 @@ class FioLatTest():
         """
 
         if clat:
-            high = 'clat_high_prio'
-            low = 'clat_low_prio'
-            combined = 'clat_ns'
+            obj = combined = 'clat_ns'
         else:
-            high = 'lat_high_prio'
-            low = 'lat_low_prio'
-            combined = 'lat_ns'
+            obj = combined = 'lat_ns'
 
-        if not high in jsondata or not low in jsondata or not combined in jsondata:
-            print("Error identifying high/low priority latencies")
+        if not 'prios' in jsondata or not combined in jsondata:
+            print("Error identifying per priority latencies")
             return False
 
-        if jsondata[high]['N'] + jsondata[low]['N'] != jsondata[combined]['N']:
-            print("High %d + low %d != combined sample size %d" % \
-                    (jsondata[high]['N'], jsondata[low]['N'], jsondata[combined]['N']))
-            return False
-        elif self.debug:
-            print("High %d + low %d == combined sample size %d" % \
-                    (jsondata[high]['N'], jsondata[low]['N'], jsondata[combined]['N']))
-
-        if min(jsondata[high]['min'], jsondata[low]['min']) != jsondata[combined]['min']:
-            print("Min of high %d, low %d min latencies does not match min %d from combined data" % \
-                    (jsondata[high]['min'], jsondata[low]['min'], jsondata[combined]['min']))
+        sum_sample_size = sum([x[obj]['N'] for x in jsondata['prios']])
+        if sum_sample_size != jsondata[combined]['N']:
+            print("Per prio sample size sum %d != combined sample size %d" %
+                  (sum_sample_size, jsondata[combined]['N']))
             return False
         elif self.debug:
-            print("Min of high %d, low %d min latencies matches min %d from combined data" % \
-                    (jsondata[high]['min'], jsondata[low]['min'], jsondata[combined]['min']))
+            print("Per prio sample size sum %d == combined sample size %d" %
+                  (sum_sample_size, jsondata[combined]['N']))
 
-        if max(jsondata[high]['max'], jsondata[low]['max']) != jsondata[combined]['max']:
-            print("Max of high %d, low %d max latencies does not match max %d from combined data" % \
-                    (jsondata[high]['max'], jsondata[low]['max'], jsondata[combined]['max']))
+        min_val = min([x[obj]['min'] for x in jsondata['prios']])
+        if min_val != jsondata[combined]['min']:
+            print("Min per prio min latency %d does not match min %d from combined data" %
+                  (min_val, jsondata[combined]['min']))
             return False
         elif self.debug:
-            print("Max of high %d, low %d max latencies matches max %d from combined data" % \
-                    (jsondata[high]['max'], jsondata[low]['max'], jsondata[combined]['max']))
+            print("Min per prio min latency %d matches min %d from combined data" %
+                  (min_val, jsondata[combined]['min']))
 
-        weighted_avg = (jsondata[high]['mean'] * jsondata[high]['N'] + \
-                        jsondata[low]['mean'] * jsondata[low]['N']) / jsondata[combined]['N']
+        max_val = max([x[obj]['max'] for x in jsondata['prios']])
+        if max_val != jsondata[combined]['max']:
+            print("Max per prio max latency %d does not match max %d from combined data" %
+                  (max_val, jsondata[combined]['max']))
+            return False
+        elif self.debug:
+            print("Max per prio max latency %d matches max %d from combined data" %
+                  (max_val, jsondata[combined]['max']))
+
+        weighted_vals = [x[obj]['mean'] * x[obj]['N'] for x in jsondata['prios']]
+        weighted_avg = sum(weighted_vals) / jsondata[combined]['N']
         delta = abs(weighted_avg - jsondata[combined]['mean'])
         if (delta / jsondata[combined]['mean']) > 0.0001:
-            print("Difference between weighted average %f of high, low means "
+            print("Difference between merged per prio weighted average %f mean "
                   "and actual mean %f exceeds 0.01%%" % (weighted_avg, jsondata[combined]['mean']))
             return False
         elif self.debug:
-            print("Weighted average %f of high, low means matches actual mean %f" % \
-                    (weighted_avg, jsondata[combined]['mean']))
+            print("Merged per prio weighted average %f mean matches actual mean %f" %
+                  (weighted_avg, jsondata[combined]['mean']))
 
         if plus:
-            if not self.check_jsonplus(jsondata[high]):
-                return False
-            if not self.check_jsonplus(jsondata[low]):
-                return False
+            for prio in jsondata['prios']:
+                if not self.check_jsonplus(prio[obj]):
+                    return False
 
-            bins = {**jsondata[high]['bins'], **jsondata[low]['bins']}
-            for duration in bins.keys():
-                if duration in jsondata[high]['bins'] and duration in jsondata[low]['bins']:
-                    bins[duration] = jsondata[high]['bins'][duration] + \
-                            jsondata[low]['bins'][duration]
+            counter = Counter()
+            for prio in jsondata['prios']:
+                counter.update(prio[obj]['bins'])
+
+            bins = dict(counter)
 
             if len(bins) != len(jsondata[combined]['bins']):
-                print("Number of combined high/low bins does not match number of overall bins")
+                print("Number of merged bins %d does not match number of overall bins %d" %
+                      (len(bins), len(jsondata[combined]['bins'])))
                 return False
             elif self.debug:
-                print("Number of bins from merged high/low data matches number of overall bins")
+                print("Number of merged bins %d matches number of overall bins %d" %
+                      (len(bins), len(jsondata[combined]['bins'])))
 
             for duration in bins.keys():
                 if bins[duration] != jsondata[combined]['bins'][duration]:
-                    print("Merged high/low count does not match overall count for duration %d" \
-                            % duration)
+                    print("Merged per prio count does not match overall count for duration %d" %
+                          duration)
                     return False
 
-        print("Merged high/low priority latency data match combined latency data")
+        print("Merged per priority latency data match combined latency data")
         return True
 
     def check(self):
@@ -602,7 +603,7 @@ class Test001(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['read'], 0, slat=False)
@@ -626,7 +627,7 @@ class Test002(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['write'], 1, slat=False, clat=False)
@@ -650,7 +651,7 @@ class Test003(FioLatTest):
             print("Unexpected write data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['trim'], 2, slat=False, tlat=False)
@@ -674,7 +675,7 @@ class Test004(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['read'], 0, plus=True)
@@ -698,7 +699,7 @@ class Test005(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['write'], 1, slat=False, plus=True)
@@ -722,7 +723,7 @@ class Test006(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['read'], 0, slat=False, tlat=False, plus=True)
@@ -743,7 +744,7 @@ class Test007(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['read'], 0, clat=False, tlat=False, plus=True)
@@ -761,11 +762,11 @@ class Test008(FioLatTest):
         job = self.json_data['jobs'][0]
 
         retval = True
-        if 'read' in job or 'write'in job or 'trim' in job:
+        if 'read' in job or 'write' in job or 'trim' in job:
             print("Unexpected data direction found in fio output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['mixed'], 0, plus=True, unified=True)
@@ -792,7 +793,7 @@ class Test009(FioLatTest):
             print("Error checking fsync latency data")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['write'], 1, slat=False, plus=True)
@@ -813,7 +814,7 @@ class Test010(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['read'], 0, plus=True)
@@ -839,7 +840,7 @@ class Test011(FioLatTest):
             print("Unexpected trim data found in output")
             retval = False
         if not self.check_nocmdprio_lat(job):
-            print("Unexpected high/low priority latencies found")
+            print("Unexpected per priority latencies found")
             retval = False
 
         retval &= self.check_latencies(job['read'], 0, slat=False, clat=False, plus=True)
@@ -953,12 +954,33 @@ class Test019(FioLatTest):
         job = self.json_data['jobs'][0]
 
         retval = True
-        if 'read' in job or 'write'in job or 'trim' in job:
+        if 'read' in job or 'write' in job or 'trim' in job:
             print("Unexpected data direction found in fio output")
             retval = False
 
         retval &= self.check_latencies(job['mixed'], 0, plus=True, unified=True)
         retval &= self.check_prio_latencies(job['mixed'], clat=False, plus=True)
+
+        return retval
+
+
+class Test021(FioLatTest):
+    """Test object for Test 21."""
+
+    def check(self):
+        """Check Test 21 output."""
+
+        job = self.json_data['jobs'][0]
+
+        retval = True
+        if not self.check_empty(job['trim']):
+            print("Unexpected trim data found in output")
+            retval = False
+
+        retval &= self.check_latencies(job['read'], 0, slat=False, tlat=False, plus=True)
+        retval &= self.check_latencies(job['write'], 1, slat=False, tlat=False, plus=True)
+        retval &= self.check_prio_latencies(job['read'], clat=True, plus=True)
+        retval &= self.check_prio_latencies(job['write'], clat=True, plus=True)
 
         return retval
 
@@ -1007,7 +1029,7 @@ def main():
             # randread, null
             # enable slat, clat, lat
             # only clat and lat will appear because
-            # because the null ioengine is syncrhonous
+            # because the null ioengine is synchronous
             "test_id": 1,
             "runtime": 2,
             "output-format": "json",
@@ -1047,7 +1069,7 @@ def main():
         {
             # randread, aio
             # enable slat, clat, lat
-            # all will appear because liaio is asynchronous
+            # all will appear because libaio is asynchronous
             "test_id": 4,
             "runtime": 5,
             "output-format": "json+",
@@ -1153,9 +1175,9 @@ def main():
             # randread, null
             # enable slat, clat, lat
             # only clat and lat will appear because
-            # because the null ioengine is syncrhonous
-            # same as Test 1 except
-            # numjobs = 4 to test sum_thread_stats() changes
+            # because the null ioengine is synchronous
+            # same as Test 1 except add numjobs = 4 to test
+            # sum_thread_stats() changes
             "test_id": 12,
             "runtime": 2,
             "output-format": "json",
@@ -1170,9 +1192,9 @@ def main():
         {
             # randread, aio
             # enable slat, clat, lat
-            # all will appear because liaio is asynchronous
-            # same as Test 4 except
-            # numjobs = 4 to test sum_thread_stats() changes
+            # all will appear because libaio is asynchronous
+            # same as Test 4 except add numjobs = 4 to test
+            # sum_thread_stats() changes
             "test_id": 13,
             "runtime": 5,
             "output-format": "json+",
@@ -1187,8 +1209,8 @@ def main():
         {
             # 50/50 r/w, aio, unified_rw_reporting
             # enable slat, clat, lata
-            # same as Test 8 except
-            # numjobs = 4 to test sum_thread_stats() changes
+            # same as Test 8 except add numjobs = 4 to test
+            # sum_thread_stats() changes
             "test_id": 14,
             "runtime": 5,
             "output-format": "json+",
@@ -1204,7 +1226,7 @@ def main():
         {
             # randread, aio
             # enable slat, clat, lat
-            # all will appear because liaio is asynchronous
+            # all will appear because libaio is asynchronous
             # same as Test 4 except add cmdprio_percentage
             "test_id": 15,
             "runtime": 5,
@@ -1278,8 +1300,8 @@ def main():
         {
             # 50/50 r/w, aio, unified_rw_reporting
             # enable slat, clat, lat
-            # same as Test 19 except
-            # add numjobs = 4 to test sum_thread_stats() changes
+            # same as Test 19 except add numjobs = 4 to test
+            # sum_thread_stats() changes
             "test_id": 20,
             "runtime": 5,
             "output-format": "json+",
@@ -1293,6 +1315,40 @@ def main():
             'numjobs': 4,
             "test_obj": Test019,
         },
+        {
+            # r/w, aio
+            # enable only clat
+            # test bssplit and cmdprio_bssplit
+            "test_id": 21,
+            "runtime": 5,
+            "output-format": "json+",
+            "slat_percentiles": 0,
+            "clat_percentiles": 1,
+            "lat_percentiles": 0,
+            "ioengine": aio,
+            'rw': 'randrw',
+            'bssplit': '64k/40:1024k/60',
+            'cmdprio_bssplit': '64k/25/1/1:64k/75/3/2:1024k/0',
+            "test_obj": Test021,
+        },
+        {
+            # r/w, aio
+            # enable only clat
+            # same as Test 21 except add numjobs = 4 to test
+            # sum_thread_stats() changes
+            "test_id": 22,
+            "runtime": 5,
+            "output-format": "json+",
+            "slat_percentiles": 0,
+            "clat_percentiles": 1,
+            "lat_percentiles": 0,
+            "ioengine": aio,
+            'rw': 'randrw',
+            'bssplit': '64k/40:1024k/60',
+            'cmdprio_bssplit': '64k/25/1/1:64k/75/3/2:1024k/0',
+            'numjobs': 4,
+            "test_obj": Test021,
+        },
     ]
 
     passed = 0
@@ -1304,9 +1360,10 @@ def main():
            (args.run_only and test['test_id'] not in args.run_only):
             skipped = skipped + 1
             outcome = 'SKIPPED (User request)'
-        elif (platform.system() != 'Linux' or os.geteuid() != 0) and 'cmdprio_percentage' in test:
+        elif (platform.system() != 'Linux' or os.geteuid() != 0) and \
+             ('cmdprio_percentage' in test or 'cmdprio_bssplit' in test):
             skipped = skipped + 1
-            outcome = 'SKIPPED (Linux root required for cmdprio_percentage tests)'
+            outcome = 'SKIPPED (Linux root required for cmdprio tests)'
         else:
             test_obj = test['test_obj'](artifact_root, test, args.debug)
             status = test_obj.run_fio(fio)

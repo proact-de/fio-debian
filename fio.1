@@ -838,9 +838,9 @@ threads/processes.
 Limit on the number of simultaneously opened zones per single thread/process.
 .TP
 .BI ignore_zone_limits \fR=\fPbool
-If this isn't set, fio will query the max open zones limit from the zoned block
-device, and exit if the specified \fBmax_open_zones\fR value is larger than the
-limit reported by the device. Default: false.
+If this option is used, fio will ignore the maximum number of open zones limit
+of the zoned block device in use, thus allowing the option \fBmax_open_zones\fR
+value to be larger than the device reported limit. Default: false.
 .TP
 .BI zone_reset_threshold \fR=\fPfloat
 A number between zero and one that indicates the ratio of logical blocks with
@@ -1122,7 +1122,7 @@ see \fBend_fsync\fR and \fBfsync_on_close\fR.
 .TP
 .BI fdatasync \fR=\fPint
 Like \fBfsync\fR but uses \fBfdatasync\fR\|(2) to only sync data and
-not metadata blocks. In Windows, FreeBSD, DragonFlyBSD or OSX there is no
+not metadata blocks. In Windows, DragonFlyBSD or OSX there is no
 \fBfdatasync\fR\|(2) so this falls back to using \fBfsync\fR\|(2).
 Defaults to 0, which means fio does not periodically issue and wait for a
 data-only sync to complete.
@@ -1221,7 +1221,7 @@ more control over most probable outcome. This value is in range [0-1] which maps
 range of possible random values.
 Defaults are: random for \fBpareto\fR and \fBzipf\fR, and 0.5 for \fBnormal\fR.
 If you wanted to use \fBzipf\fR with a `theta` of 1.2 centered on 1/4 of allowed value range,
-you would use `random_distibution=zipf:1.2:0.25`.
+you would use `random_distribution=zipf:1.2:0.25`.
 .P
 For a \fBzoned\fR distribution, fio supports specifying percentages of I/O
 access that should fall within what range of the file or device. For
@@ -1686,10 +1686,10 @@ also be set as number of zones using 'z'.
 .TP
 .BI filesize \fR=\fPirange(int)
 Individual file sizes. May be a range, in which case fio will select sizes
-for files at random within the given range and limited to \fBsize\fR in
-total (if that is given). If not given, each created file is the same size.
-This option overrides \fBsize\fR in terms of file size, which means
-this value is used as a fixed size or possible range of each file.
+for files at random within the given range. If not given, each created file
+is the same size. This option overrides \fBsize\fR in terms of file size, 
+i.e. \fBsize\fR becomes merely the default for \fBio_size\fR (and
+has no effect it all if \fBio_size\fR is set explicitly).
 .TP
 .BI file_append \fR=\fPbool
 Perform I/O after the end of the file. Normally fio will operate within the
@@ -1965,10 +1965,12 @@ with the caveat that when used on the command line, they must come after the
 .BI (io_uring,libaio)cmdprio_percentage \fR=\fPint[,int]
 Set the percentage of I/O that will be issued with the highest priority.
 Default: 0. A single value applies to reads and writes. Comma-separated
-values may be specified for reads and writes. This option cannot be used
-with the `prio` or `prioclass` options. For this option to be effective,
+values may be specified for reads and writes. For this option to be effective,
 NCQ priority must be supported and enabled, and `direct=1' option must be
-used. fio must also be run as the root user.
+used. fio must also be run as the root user. Unlike slat/clat/lat stats, which
+can be tracked and reported independently, per priority stats only track and
+report a single type of latency. By default, completion latency (clat) will be
+reported, if \fBlat_percentiles\fR is set, total latency (lat) will be reported.
 .TP
 .BI (io_uring,libaio)cmdprio_class \fR=\fPint[,int]
 Set the I/O priority class to use for I/Os that must be issued with a
@@ -1993,10 +1995,34 @@ To get a finer control over I/O priority, this option allows specifying
 the percentage of IOs that must have a priority set depending on the block
 size of the IO. This option is useful only when used together with the option
 \fBbssplit\fR, that is, multiple different block sizes are used for reads and
-writes. The format for this option is the same as the format of the
-\fBbssplit\fR option, with the exception that values for trim IOs are
-ignored. This option is mutually exclusive with the \fBcmdprio_percentage\fR
-option.
+writes.
+.RS
+.P
+The first accepted format for this option is the same as the format of the
+\fBbssplit\fR option:
+.RS
+.P
+cmdprio_bssplit=blocksize/percentage:blocksize/percentage
+.RE
+.P
+In this case, each entry will use the priority class and priority level defined
+by the options \fBcmdprio_class\fR and \fBcmdprio\fR respectively.
+.P
+The second accepted format for this option is:
+.RS
+.P
+cmdprio_bssplit=blocksize/percentage/class/level:blocksize/percentage/class/level
+.RE
+.P
+In this case, the priority class and priority level is defined inside each
+entry. In comparison with the first accepted format, the second accepted format
+does not restrict all entries to have the same priority class and priority
+level.
+.P
+For both formats, only the read and write data directions are supported, values
+for trim IOs are ignored. This option is mutually exclusive with the
+\fBcmdprio_percentage\fR option.
+.RE
 .TP
 .BI (io_uring)fixedbufs
 If fio is asked to do direct IO, then Linux will map pages for each IO call, and
@@ -2064,6 +2090,19 @@ option when using cpuio I/O engine.
 .TP
 .BI (cpuio)cpuchunks \fR=\fPint
 Split the load into cycles of the given time. In microseconds.
+.TP
+.BI (cpuio)cpumode \fR=\fPstr
+Specify how to stress the CPU. It can take these two values:
+.RS
+.RS
+.TP
+.B noop
+This is the default and directs the CPU to execute noop instructions.
+.TP
+.B qsort
+Replace the default noop instructions with a qsort algorithm to consume more energy.
+.RE
+.RE
 .TP
 .BI (cpuio)exit_on_io_done \fR=\fPbool
 Detect when I/O threads are done, then exit.
@@ -2282,7 +2321,7 @@ With writefua option set to 1, write operations include the force
 unit access (fua) flag. Default: 0.
 .TP
 .BI (sg)sg_write_mode \fR=\fPstr
-Specify the type of write commands to issue. This option can take three
+Specify the type of write commands to issue. This option can take multiple
 values:
 .RS
 .RS
@@ -2290,12 +2329,15 @@ values:
 .B write (default)
 Write opcodes are issued as usual
 .TP
-.B verify
-Issue WRITE AND VERIFY commands. The BYTCHK bit is set to 0. This
-directs the device to carry out a medium verification with no data
-comparison. The writefua option is ignored with this selection.
+.B write_and_verify
+Issue WRITE AND VERIFY commands. The BYTCHK bit is set to 00b. This directs the
+device to carry out a medium verification with no data comparison for the data
+that was written. The writefua option is ignored with this selection.
 .TP
-.B same
+.B verify
+This option is deprecated. Use write_and_verify instead.
+.TP
+.B write_same
 Issue WRITE SAME commands. This transfers a single block to the device
 and writes this same block of data to a contiguous sequence of LBAs
 beginning at the specified offset. fio's block size parameter
@@ -2306,8 +2348,42 @@ blocksize=8k will write 16 sectors with each command. fio will still
 generate 8k of data for each command butonly the first 512 bytes will
 be used and transferred to the device. The writefua option is ignored
 with this selection.
+.TP
+.B same
+This option is deprecated. Use write_same instead.
+.TP
+.B write_same_ndob
+Issue WRITE SAME(16) commands as above but with the No Data Output
+Buffer (NDOB) bit set. No data will be transferred to the device with
+this bit set. Data written will be a pre-determined pattern such as
+all zeroes.
+.TP
+.B write_stream
+Issue WRITE STREAM(16) commands. Use the stream_id option to specify
+the stream identifier.
+.TP
+.B verify_bytchk_00
+Issue VERIFY commands with BYTCHK set to 00. This directs the device to carry
+out a medium verification with no data comparison.
+.TP
+.B verify_bytchk_01
+Issue VERIFY commands with BYTCHK set to 01. This directs the device to
+compare the data on the device with the data transferred to the device.
+.TP
+.B verify_bytchk_11
+Issue VERIFY commands with BYTCHK set to 11. This transfers a single block to
+the device and compares the contents of this block with the data on the device
+beginning at the specified offset. fio's block size parameter specifies the
+total amount of data compared with this command. However, only one block
+(sector) worth of data is transferred to the device. This is similar to the
+WRITE SAME command except that data is compared instead of written.
 .RE
 .RE
+.TP
+.BI (sg)stream_id \fR=\fPint
+Set the stream identifier for WRITE STREAM commands. If this is set to 0 (which is not
+a valid stream identifier) fio will open a stream and then close it when done. Default
+is 0.
 .TP
 .BI (nbd)uri \fR=\fPstr
 Specify the NBD URI of the server to test.
@@ -3006,7 +3082,7 @@ the verify will be of the newly written data.
 To avoid false verification errors, do not use the norandommap option when
 verifying data with async I/O engines and I/O depths > 1.  Or use the
 norandommap and the lfsr random generator together to avoid writing to the
-same offset with muliple outstanding I/Os.
+same offset with multiple outstanding I/Os.
 .RE
 .TP
 .BI verify_offset \fR=\fPint
@@ -3244,6 +3320,17 @@ logging (see \fBlog_avg_msec\fR) has been enabled. See
 \fBwrite_bw_log\fR for details about the filename format and \fBLOG
 FILE FORMATS\fR for how data is structured within the file.
 .TP
+.BI log_entries \fR=\fPint
+By default, fio will log an entry in the iops, latency, or bw log for
+every I/O that completes. The initial number of I/O log entries is 1024.
+When the log entries are all used, new log entries are dynamically
+allocated.  This dynamic log entry allocation may negatively impact
+time-related statistics such as I/O tail latencies (e.g. 99.9th percentile
+completion latency). This option allows specifying a larger initial
+number of log entries to avoid run-time allocation of new log entries,
+resulting in more precise time-related I/O statistics.
+Also see \fBlog_avg_msec\fR as well. Defaults to 1024.
+.TP
 .BI log_avg_msec \fR=\fPint
 By default, fio will log an entry in the iops, latency, or bw log for every
 I/O that completes. When writing to the disk log, that can quickly grow to a
@@ -3309,6 +3396,17 @@ parameter. The files will be stored with a `.fz' suffix.
 If set, fio will log Unix timestamps to the log files produced by enabling
 write_type_log for each log type, instead of the default zero-based
 timestamps.
+.TP
+.BI log_alternate_epoch \fR=\fPbool
+If set, fio will log timestamps based on the epoch used by the clock specified
+in the \fBlog_alternate_epoch_clock_id\fR option, to the log files produced by
+enabling write_type_log for each log type, instead of the default zero-based
+timestamps.
+.TP
+.BI log_alternate_epoch_clock_id \fR=\fPint
+Specifies the clock_id to be used by clock_gettime to obtain the alternate epoch
+if either \fBBlog_unix_epoch\fR or \fBlog_alternate_epoch\fR are true. Otherwise has no
+effect. Default value is 0, or CLOCK_REALTIME.
 .TP
 .BI block_error_percentiles \fR=\fPbool
 If set, record errors in trim block-sized units from writes and trims and

@@ -97,6 +97,7 @@ enum {
 	__TD_F_MMAP_KEEP,
 	__TD_F_DIRS_CREATED,
 	__TD_F_CHECK_RATE,
+	__TD_F_SYNCS,
 	__TD_F_LAST,		/* not a real bit, keep last */
 };
 
@@ -118,6 +119,7 @@ enum {
 	TD_F_MMAP_KEEP		= 1U << __TD_F_MMAP_KEEP,
 	TD_F_DIRS_CREATED	= 1U << __TD_F_DIRS_CREATED,
 	TD_F_CHECK_RATE		= 1U << __TD_F_CHECK_RATE,
+	TD_F_SYNCS		= 1U << __TD_F_SYNCS,
 };
 
 enum {
@@ -182,7 +184,7 @@ struct zone_split_index {
  */
 struct thread_data {
 	struct flist_head opt_list;
-	unsigned long flags;
+	unsigned long long flags;
 	struct thread_options o;
 	void *eo;
 	pthread_t thread;
@@ -335,10 +337,10 @@ struct thread_data {
 	 */
 	uint64_t rate_bps[DDIR_RWDIR_CNT];
 	uint64_t rate_next_io_time[DDIR_RWDIR_CNT];
-	unsigned long long rate_bytes[DDIR_RWDIR_CNT];
-	unsigned long rate_blocks[DDIR_RWDIR_CNT];
+	unsigned long long last_rate_check_bytes[DDIR_RWDIR_CNT];
+	unsigned long last_rate_check_blocks[DDIR_RWDIR_CNT];
 	unsigned long long rate_io_issue_bytes[DDIR_RWDIR_CNT];
-	struct timespec lastrate[DDIR_RWDIR_CNT];
+	struct timespec last_rate_check_time[DDIR_RWDIR_CNT];
 	int64_t last_usec[DDIR_RWDIR_CNT];
 	struct frand_state poisson_state[DDIR_RWDIR_CNT];
 
@@ -380,7 +382,7 @@ struct thread_data {
 
 	struct timespec start;	/* start of this loop */
 	struct timespec epoch;	/* time job was started */
-	unsigned long long unix_epoch; /* Time job was started, unix epoch based. */
+	unsigned long long alternate_epoch; /* Time job was started, clock_gettime's clock_id epoch based. */
 	struct timespec last_issue;
 	long time_offset;
 	struct timespec ts_cache;
@@ -428,6 +430,8 @@ struct thread_data {
 	struct flist_head io_log_list;
 	FILE *io_log_rfile;
 	unsigned int io_log_blktrace;
+	unsigned int io_log_blktrace_swap;
+	unsigned long long io_log_blktrace_last_ttime;
 	unsigned int io_log_current;
 	unsigned int io_log_checkmark;
 	unsigned int io_log_highmark;
@@ -676,13 +680,13 @@ enum {
 	TD_NR,
 };
 
-#define TD_ENG_FLAG_SHIFT	17
-#define TD_ENG_FLAG_MASK	((1U << 17) - 1)
+#define TD_ENG_FLAG_SHIFT	18
+#define TD_ENG_FLAG_MASK	((1ULL << 18) - 1)
 
 static inline void td_set_ioengine_flags(struct thread_data *td)
 {
 	td->flags = (~(TD_ENG_FLAG_MASK << TD_ENG_FLAG_SHIFT) & td->flags) |
-		    (td->io_ops->flags << TD_ENG_FLAG_SHIFT);
+		    ((unsigned long long)td->io_ops->flags << TD_ENG_FLAG_SHIFT);
 }
 
 static inline bool td_ioengine_flagged(struct thread_data *td,

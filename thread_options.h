@@ -50,6 +50,12 @@ struct split {
 	unsigned long long val2[ZONESPLIT_MAX];
 };
 
+struct split_prio {
+	uint64_t bs;
+	int32_t prio;
+	uint32_t perc;
+};
+
 struct bssplit {
 	uint64_t bs;
 	uint32_t perc;
@@ -166,6 +172,8 @@ struct thread_options {
 	unsigned int log_gz;
 	unsigned int log_gz_store;
 	unsigned int log_unix_epoch;
+	unsigned int log_alternate_epoch;
+	unsigned int log_alternate_epoch_clock_id;
 	unsigned int norandommap;
 	unsigned int softrandommap;
 	unsigned int bs_unaligned;
@@ -377,6 +385,7 @@ struct thread_options {
 	fio_fp64_t zrt;
 	fio_fp64_t zrf;
 
+	unsigned int log_entries;
 	unsigned int log_prio;
 };
 
@@ -481,6 +490,8 @@ struct thread_options_pack {
 	uint32_t log_gz;
 	uint32_t log_gz_store;
 	uint32_t log_unix_epoch;
+	uint32_t log_alternate_epoch;
+	uint32_t log_alternate_epoch_clock_id;
 	uint32_t norandommap;
 	uint32_t softrandommap;
 	uint32_t bs_unaligned;
@@ -683,6 +694,7 @@ struct thread_options_pack {
 	int32_t max_open_zones;
 	uint32_t ignore_zone_limits;
 
+	uint32_t log_entries;
 	uint32_t log_prio;
 } __attribute__((packed));
 
@@ -699,5 +711,9 @@ extern int str_split_parse(struct thread_data *td, char *str,
 
 extern int split_parse_ddir(struct thread_options *o, struct split *split,
 			    char *str, bool absolute, unsigned int max_splits);
+
+extern int split_parse_prio_ddir(struct thread_options *o,
+				 struct split_prio **entries, int *nr_entries,
+				 char *str);
 
 #endif

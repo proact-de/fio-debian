@@ -152,10 +152,15 @@ int read_iolog_get(struct thread_data *td, struct io_u *io_u)
 	while (!flist_empty(&td->io_log_list)) {
 		int ret;
 
-		if (!td->io_log_blktrace && td->o.read_iolog_chunked) {
+		if (td->o.read_iolog_chunked) {
 			if (td->io_log_checkmark == td->io_log_current) {
-				if (!read_iolog2(td))
-					return 1;
+				if (td->io_log_blktrace) {
+					if (!read_blktrace(td))
+						return 1;
+				} else {
+					if (!read_iolog2(td))
+						return 1;
+				}
 			}
 			td->io_log_current--;
 		}
@@ -355,7 +360,7 @@ void write_iolog_close(struct thread_data *td)
 	td->iolog_buf = NULL;
 }
 
-static int64_t iolog_items_to_fetch(struct thread_data *td)
+int64_t iolog_items_to_fetch(struct thread_data *td)
 {
 	struct timespec now;
 	uint64_t elapsed;
@@ -397,6 +402,7 @@ static bool read_iolog2(struct thread_data *td)
 	enum fio_ddir rw;
 	bool realloc = false;
 	int64_t items_to_fetch = 0;
+	int syncs;
 
 	if (td->o.read_iolog_chunked) {
 		items_to_fetch = iolog_items_to_fetch(td);
@@ -412,7 +418,7 @@ static bool read_iolog2(struct thread_data *td)
 	rfname = fname = malloc(256+16);
 	act = malloc(256+16);
 
-	reads = writes = waits = 0;
+	syncs = reads = writes = waits = 0;
 	while ((p = fgets(str, 4096, td->io_log_rfile)) != NULL) {
 		struct io_piece *ipo;
 		int r;
@@ -487,7 +493,9 @@ static bool read_iolog2(struct thread_data *td)
 				continue;
 			waits++;
 		} else if (rw == DDIR_INVAL) {
-		} else if (!ddir_sync(rw)) {
+		} else if (ddir_sync(rw)) {
+			syncs++;
+		} else {
 			log_err("bad ddir: %d\n", rw);
 			continue;
 		}
@@ -542,6 +550,8 @@ static bool read_iolog2(struct thread_data *td)
 			" read-only\n", td->o.name, writes);
 		writes = 0;
 	}
+	if (syncs)
+		td->flags |= TD_F_SYNCS;
 
 	if (td->o.read_iolog_chunked) {
 		if (td->io_log_current == 0) {
@@ -626,8 +636,6 @@ static bool init_iolog_read(struct thread_data *td, char *fname)
 	} else
 		f = fopen(fname, "r");
 
-	free(fname);
-
 	if (!f) {
 		perror("fopen read iolog");
 		return false;
@@ -709,11 +717,12 @@ bool init_iolog(struct thread_data *td)
 		 */
 		if (is_blktrace(fname, &need_swap)) {
 			td->io_log_blktrace = 1;
-			ret = load_blktrace(td, fname, need_swap);
+			ret = init_blktrace_read(td, fname, need_swap);
 		} else {
 			td->io_log_blktrace = 0;
 			ret = init_iolog_read(td, fname);
 		}
+		free(fname);
 	} else if (td->o.write_iolog_file)
 		ret = init_iolog_write(td);
 	else

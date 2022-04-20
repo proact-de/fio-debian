@@ -297,10 +297,9 @@ static int _curl_trace(CURL *handle, curl_infotype type,
 	switch (type) {
 	case CURLINFO_TEXT:
 		fprintf(stderr, "== Info: %s", data);
-		/* fall through */
+		fio_fallthrough;
 	default:
 	case CURLINFO_SSL_DATA_OUT:
-		/* fall through */
 	case CURLINFO_SSL_DATA_IN:
 		return 0;
 
@@ -389,7 +388,7 @@ static void _add_aws_auth_header(CURL *curl, struct curl_slist *slist, struct ht
 
 	signature = _conv_hex(md, SHA256_DIGEST_LENGTH);
 
-	/* Surpress automatic Accept: header */
+	/* Suppress automatic Accept: header */
 	slist = curl_slist_append(slist, "Accept:");
 
 	snprintf(s, sizeof(s), "x-amz-content-sha256: %s", dsha);
@@ -420,7 +419,7 @@ static void _add_swift_header(CURL *curl, struct curl_slist *slist, struct http_
 	if (op == DDIR_WRITE) {
 		dsha = _gen_hex_md5(buf, len);
 	}
-	/* Surpress automatic Accept: header */
+	/* Suppress automatic Accept: header */
 	slist = curl_slist_append(slist, "Accept:");
 
 	snprintf(s, sizeof(s), "etag: %s", dsha);

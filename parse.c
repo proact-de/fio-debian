@@ -477,13 +477,17 @@ static int check_int(const char *p, int *val)
 
 static size_t opt_len(const char *str)
 {
+	char delimiter[] = {',', ':'};
 	char *postfix;
+	unsigned int i;
 
-	postfix = strchr(str, ':');
-	if (!postfix)
-		return strlen(str);
+	for (i = 0; i < FIO_ARRAY_SIZE(delimiter); i++) {
+		postfix = strchr(str, delimiter[i]);
+		if (postfix)
+			return (int)(postfix - str);
+	}
 
-	return (int)(postfix - str);
+	return strlen(str);
 }
 
 static int str_match_len(const struct value_pair *vp, const char *str)
@@ -597,7 +601,7 @@ static int __handle_option(const struct fio_option *o, const char *ptr,
 	}
 	case FIO_OPT_STR_VAL_TIME:
 		is_time = 1;
-		fallthrough;
+		fio_fallthrough;
 	case FIO_OPT_ULL:
 	case FIO_OPT_INT:
 	case FIO_OPT_STR_VAL:
@@ -813,6 +817,8 @@ store_option_value:
 
 		if (o->off1) {
 			cp = td_var(data, o, o->off1);
+			if (*cp)
+				free(*cp);
 			*cp = strdup(ptr);
 			if (strlen(ptr) > o->maxlen - 1) {
 				log_err("value exceeds max length of %d\n",
@@ -974,7 +980,7 @@ store_option_value:
 	}
 	case FIO_OPT_DEPRECATED:
 		ret = 1;
-		fallthrough;
+		fio_fallthrough;
 	case FIO_OPT_SOFT_DEPRECATED:
 		log_info("Option %s is deprecated\n", o->name);
 		break;

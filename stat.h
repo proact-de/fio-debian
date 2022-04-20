@@ -68,7 +68,7 @@ struct group_run_stats {
  * than one. This method has low accuracy when the value is small. For
  * example, let the buckets be {[0,99],[100,199],...,[900,999]}, and
  * the represented value of each bucket be the mean of the range. Then
- * a value 0 has an round-off error of 49.5. To improve on this, we
+ * a value 0 has a round-off error of 49.5. To improve on this, we
  * use buckets with non-uniform ranges, while bounding the error of
  * each bucket within a ratio of the sample value. A simple example
  * would be when error_bound = 0.005, buckets are {
@@ -158,6 +158,12 @@ enum fio_lat {
 	FIO_LAT_CNT = 3,
 };
 
+struct clat_prio_stat {
+	uint64_t io_u_plat[FIO_IO_U_PLAT_NR];
+	struct io_stat clat_stat;
+	uint32_t ioprio;
+};
+
 struct thread_stat {
 	char name[FIO_JOBNAME_SIZE];
 	char verror[FIO_VERROR_SIZE];
@@ -168,6 +174,7 @@ struct thread_stat {
 	char description[FIO_JOBDESC_SIZE];
 	uint32_t members;
 	uint32_t unified_rw_rep;
+	uint32_t disable_prio_stat;
 
 	/*
 	 * bandwidth and latency stats
@@ -252,20 +259,39 @@ struct thread_stat {
 	fio_fp64_t ss_deviation;
 	fio_fp64_t ss_criterion;
 
-	uint64_t io_u_plat_high_prio[DDIR_RWDIR_CNT][FIO_IO_U_PLAT_NR] __attribute__((aligned(8)));;
-	uint64_t io_u_plat_low_prio[DDIR_RWDIR_CNT][FIO_IO_U_PLAT_NR];
-	struct io_stat clat_high_prio_stat[DDIR_RWDIR_CNT] __attribute__((aligned(8)));
-	struct io_stat clat_low_prio_stat[DDIR_RWDIR_CNT];
+	/* A mirror of td->ioprio. */
+	uint32_t ioprio;
 
 	union {
 		uint64_t *ss_iops_data;
+		/*
+		 * For FIO_NET_CMD_TS, the pointed to data will temporarily
+		 * be stored at this offset from the start of the payload.
+		 */
+		uint64_t ss_iops_data_offset;
 		uint64_t pad4;
 	};
 
 	union {
 		uint64_t *ss_bw_data;
+		/*
+		 * For FIO_NET_CMD_TS, the pointed to data will temporarily
+		 * be stored at this offset from the start of the payload.
+		 */
+		uint64_t ss_bw_data_offset;
 		uint64_t pad5;
 	};
+
+	union {
+		struct clat_prio_stat *clat_prio[DDIR_RWDIR_CNT];
+		/*
+		 * For FIO_NET_CMD_TS, the pointed to data will temporarily
+		 * be stored at this offset from the start of the payload.
+		 */
+		uint64_t clat_prio_offset[DDIR_RWDIR_CNT];
+		uint64_t pad6;
+	};
+	uint32_t nr_clat_prio[DDIR_RWDIR_CNT];
 
 	uint64_t cachehit;
 	uint64_t cachemiss;
@@ -325,8 +351,9 @@ extern void __show_run_stats(void);
 extern int __show_running_run_stats(void);
 extern void show_running_run_stats(void);
 extern void check_for_running_stats(void);
-extern void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src, bool first);
+extern void sum_thread_stats(struct thread_stat *dst, struct thread_stat *src);
 extern void sum_group_stats(struct group_run_stats *dst, struct group_run_stats *src);
+extern void init_thread_stat_min_vals(struct thread_stat *ts);
 extern void init_thread_stat(struct thread_stat *ts);
 extern void init_group_run_stat(struct group_run_stats *gs);
 extern void eta_to_str(char *str, unsigned long eta_sec);
@@ -341,9 +368,9 @@ extern void update_rusage_stat(struct thread_data *);
 extern void clear_rusage_stat(struct thread_data *);
 
 extern void add_lat_sample(struct thread_data *, enum fio_ddir, unsigned long long,
-			   unsigned long long, uint64_t, unsigned int, bool);
+			   unsigned long long, uint64_t, unsigned int, unsigned short);
 extern void add_clat_sample(struct thread_data *, enum fio_ddir, unsigned long long,
-			    unsigned long long, uint64_t, unsigned int, bool);
+			    unsigned long long, uint64_t, unsigned int, unsigned short);
 extern void add_slat_sample(struct thread_data *, enum fio_ddir, unsigned long long,
 				unsigned long long, uint64_t, unsigned int);
 extern void add_agg_sample(union io_sample_data, enum fio_ddir, unsigned long long);
@@ -354,6 +381,8 @@ extern void add_bw_sample(struct thread_data *, struct io_u *,
 extern void add_sync_clat_sample(struct thread_stat *ts,
 				unsigned long long nsec);
 extern int calc_log_samples(void);
+extern void free_clat_prio_stats(struct thread_stat *);
+extern int alloc_clat_prio_stat_ddir(struct thread_stat *, enum fio_ddir, int);
 
 extern void print_disk_util(struct disk_util_stat *, struct disk_util_agg *, int terse, struct buf_output *);
 extern void json_array_add_disk_util(struct disk_util_stat *dus,
