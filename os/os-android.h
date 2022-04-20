@@ -66,7 +66,7 @@
 
 #ifndef CONFIG_NO_SHM
 /*
- * Bionic doesn't support SysV shared memeory, so implement it using ashmem
+ * Bionic doesn't support SysV shared memory, so implement it using ashmem
  */
 #include <stdio.h>
 #include <linux/ashmem.h>
@@ -307,6 +307,10 @@ static inline int fio_set_sched_idle(void)
         struct sched_param p = { .sched_priority = 0, };
         return sched_setscheduler(gettid(), SCHED_IDLE, &p);
 }
+#endif
+
+#ifndef RWF_UNCACHED
+#define RWF_UNCACHED	0x00000040
 #endif
 
 #endif

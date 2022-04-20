@@ -136,13 +136,10 @@ static void set_sig_handlers(void)
 static bool __check_min_rate(struct thread_data *td, struct timespec *now,
 			     enum fio_ddir ddir)
 {
-	unsigned long long bytes = 0;
-	unsigned long iops = 0;
-	unsigned long spent;
-	unsigned long long rate;
-	unsigned long long ratemin = 0;
-	unsigned int rate_iops = 0;
-	unsigned int rate_iops_min = 0;
+	unsigned long long current_rate_check_bytes = td->this_io_bytes[ddir];
+	unsigned long current_rate_check_blocks = td->this_io_blocks[ddir];
+	unsigned long long option_rate_bytes_min = td->o.ratemin[ddir];
+	unsigned int option_rate_iops_min = td->o.rate_iops_min[ddir];
 
 	assert(ddir_rw(ddir));
 
@@ -155,68 +152,44 @@ static bool __check_min_rate(struct thread_data *td, struct timespec *now,
 	if (mtime_since(&td->start, now) < 2000)
 		return false;
 
-	iops += td->this_io_blocks[ddir];
-	bytes += td->this_io_bytes[ddir];
-	ratemin += td->o.ratemin[ddir];
-	rate_iops += td->o.rate_iops[ddir];
-	rate_iops_min += td->o.rate_iops_min[ddir];
-
 	/*
-	 * if rate blocks is set, sample is running
+	 * if last_rate_check_blocks or last_rate_check_bytes is set,
+	 * we can compute a rate per ratecycle
 	 */
-	if (td->rate_bytes[ddir] || td->rate_blocks[ddir]) {
-		spent = mtime_since(&td->lastrate[ddir], now);
-		if (spent < td->o.ratecycle)
+	if (td->last_rate_check_bytes[ddir] || td->last_rate_check_blocks[ddir]) {
+		unsigned long spent = mtime_since(&td->last_rate_check_time[ddir], now);
+		if (spent < td->o.ratecycle || spent==0)
 			return false;
 
-		if (td->o.rate[ddir] || td->o.ratemin[ddir]) {
+		if (td->o.ratemin[ddir]) {
 			/*
 			 * check bandwidth specified rate
 			 */
-			if (bytes < td->rate_bytes[ddir]) {
-				log_err("%s: rate_min=%lluB/s not met, only transferred %lluB\n",
-					td->o.name, ratemin, bytes);
+			unsigned long long current_rate_bytes =
+				((current_rate_check_bytes - td->last_rate_check_bytes[ddir]) * 1000) / spent;
+			if (current_rate_bytes < option_rate_bytes_min) {
+				log_err("%s: rate_min=%lluB/s not met, got %lluB/s\n",
+					td->o.name, option_rate_bytes_min, current_rate_bytes);
 				return true;
-			} else {
-				if (spent)
-					rate = ((bytes - td->rate_bytes[ddir]) * 1000) / spent;
-				else
-					rate = 0;
-
-				if (rate < ratemin ||
-				    bytes < td->rate_bytes[ddir]) {
-					log_err("%s: rate_min=%lluB/s not met, got %lluB/s\n",
-						td->o.name, ratemin, rate);
-					return true;
-				}
 			}
 		} else {
 			/*
 			 * checks iops specified rate
 			 */
-			if (iops < rate_iops) {
-				log_err("%s: rate_iops_min=%u not met, only performed %lu IOs\n",
-						td->o.name, rate_iops, iops);
-				return true;
-			} else {
-				if (spent)
-					rate = ((iops - td->rate_blocks[ddir]) * 1000) / spent;
-				else
-					rate = 0;
+			unsigned long long current_rate_iops =
+				((current_rate_check_blocks - td->last_rate_check_blocks[ddir]) * 1000) / spent;
 
-				if (rate < rate_iops_min ||
-				    iops < td->rate_blocks[ddir]) {
-					log_err("%s: rate_iops_min=%u not met, got %llu IOPS\n",
-						td->o.name, rate_iops_min, rate);
-					return true;
-				}
+			if (current_rate_iops < option_rate_iops_min) {
+				log_err("%s: rate_iops_min=%u not met, got %llu IOPS\n",
+					td->o.name, option_rate_iops_min, current_rate_iops);
+				return true;
 			}
 		}
 	}
 
-	td->rate_bytes[ddir] = bytes;
-	td->rate_blocks[ddir] = iops;
-	memcpy(&td->lastrate[ddir], now, sizeof(*now));
+	td->last_rate_check_bytes[ddir] = current_rate_check_bytes;
+	td->last_rate_check_blocks[ddir] = current_rate_check_blocks;
+	memcpy(&td->last_rate_check_time[ddir], now, sizeof(*now));
 	return false;
 }
 
@@ -837,7 +810,7 @@ static long long usec_for_io(struct thread_data *td, enum fio_ddir ddir)
 	if (td->o.rate_process == RATE_PROCESS_POISSON) {
 		uint64_t val, iops;
 
-		iops = bps / td->o.bs[ddir];
+		iops = bps / td->o.min_bs[ddir];
 		val = (int64_t) (1000000 / iops) *
 				-logf(__rand_0_1(&td->poisson_state[ddir]));
 		if (val) {
@@ -1091,8 +1064,10 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 				td->rate_io_issue_bytes[__ddir] += blen;
 			}
 
-			if (should_check_rate(td))
+			if (should_check_rate(td)) {
 				td->rate_next_io_time[__ddir] = usec_for_io(td, __ddir);
+				fio_gettime(&comp_time, NULL);
+			}
 
 		} else {
 			ret = io_u_submit(td, io_u);
@@ -1172,8 +1147,11 @@ reap:
 								f->file_name);
 			}
 		}
-	} else
+	} else {
+		if (td->o.io_submit_mode == IO_MODE_OFFLOAD)
+			workqueue_flush(&td->io_wq);
 		cleanup_pending_aio(td);
+	}
 
 	/*
 	 * stop job if we failed doing any IO
@@ -1777,6 +1755,18 @@ static void *thread_main(void *data)
 	if (!init_iolog(td))
 		goto err;
 
+	/* ioprio_set() has to be done before td_io_init() */
+	if (fio_option_is_set(o, ioprio) ||
+	    fio_option_is_set(o, ioprio_class)) {
+		ret = ioprio_set(IOPRIO_WHO_PROCESS, 0, o->ioprio_class, o->ioprio);
+		if (ret == -1) {
+			td_verror(td, errno, "ioprio_set");
+			goto err;
+		}
+		td->ioprio = ioprio_value(o->ioprio_class, o->ioprio);
+		td->ts.ioprio = td->ioprio;
+	}
+
 	if (td_io_init(td))
 		goto err;
 
@@ -1788,16 +1778,6 @@ static void *thread_main(void *data)
 
 	if (o->verify_async && verify_async_init(td))
 		goto err;
-
-	if (fio_option_is_set(o, ioprio) ||
-	    fio_option_is_set(o, ioprio_class)) {
-		ret = ioprio_set(IOPRIO_WHO_PROCESS, 0, o->ioprio_class, o->ioprio);
-		if (ret == -1) {
-			td_verror(td, errno, "ioprio_set");
-			goto err;
-		}
-		td->ioprio = ioprio_value(o->ioprio_class, o->ioprio);
-	}
 
 	if (o->cgroup && cgroup_setup(td, cgroup_list, &cgroup_mnt))
 		goto err;
@@ -1828,7 +1808,7 @@ static void *thread_main(void *data)
 	if (rate_submit_init(td, sk_out))
 		goto err;
 
-	set_epoch_time(td, o->log_unix_epoch);
+	set_epoch_time(td, o->log_unix_epoch | o->log_alternate_epoch, o->log_alternate_epoch_clock_id);
 	fio_getrusage(&td->ru_start);
 	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
@@ -1838,11 +1818,11 @@ static void *thread_main(void *data)
 
 	if (o->ratemin[DDIR_READ] || o->ratemin[DDIR_WRITE] ||
 			o->ratemin[DDIR_TRIM]) {
-	        memcpy(&td->lastrate[DDIR_READ], &td->bw_sample_time,
+	        memcpy(&td->last_rate_check_time[DDIR_READ], &td->bw_sample_time,
 					sizeof(td->bw_sample_time));
-	        memcpy(&td->lastrate[DDIR_WRITE], &td->bw_sample_time,
+	        memcpy(&td->last_rate_check_time[DDIR_WRITE], &td->bw_sample_time,
 					sizeof(td->bw_sample_time));
-	        memcpy(&td->lastrate[DDIR_TRIM], &td->bw_sample_time,
+	        memcpy(&td->last_rate_check_time[DDIR_TRIM], &td->bw_sample_time,
 					sizeof(td->bw_sample_time));
 	}
 
@@ -2452,7 +2432,10 @@ reap:
 							strerror(ret));
 			} else {
 				pid_t pid;
+				struct fio_file **files;
 				dprint(FD_PROCESS, "will fork\n");
+				files = td->files;
+				read_barrier();
 				pid = fork();
 				if (!pid) {
 					int ret;
@@ -2461,6 +2444,11 @@ reap:
 					_exit(ret);
 				} else if (i == fio_debug_jobno)
 					*fio_debug_jobp = pid;
+				// freeing previously allocated memory for files
+				// this memory freed MUST NOT be shared between processes, only the pointer itself may be shared within TD
+				free(files);
+				free(fd);
+				fd = NULL;
 			}
 			dprint(FD_MUTEX, "wait on startup_sem\n");
 			if (fio_sem_down_timeout(startup_sem, 10000)) {
@@ -2611,6 +2599,9 @@ int fio_backend(struct sk_out *sk_out)
 	}
 
 	for_each_td(td, i) {
+		struct thread_stat *ts = &td->ts;
+
+		free_clat_prio_stats(ts);
 		steadystate_free(td);
 		fio_options_free(td);
 		fio_dump_options_free(td);

@@ -10,7 +10,7 @@ tailored test case again and again.
 
 A test work load is difficult to define, though. There can be any number of
 processes or threads involved, and they can each be using their own way of
-generating I/O. You could have someone dirtying large amounts of memory in an
+generating I/O. You could have someone dirtying large amounts of memory in a
 memory mapped file, or maybe several threads issuing reads using asynchronous
 I/O. fio needed to be flexible enough to simulate both of these cases, and many
 more.
@@ -71,6 +71,10 @@ email to majordomo@vger.kernel.org with
 in the body of the email. Archives can be found here:
 
 	http://www.spinics.net/lists/fio/
+
+or here:
+
+	https://lore.kernel.org/fio/
 
 and archives for the old list can be found here:
 

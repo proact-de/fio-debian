@@ -22,7 +22,8 @@
 BLK_SIZE=
 BLOCK_SIZE=4k
 SEQ=-1
-TEMPLATE=/tmp/template.fio
+TEMPLATE=$(mktemp "${TMPDIR:-${TEMP:-/tmp}}/template.fio.XXXXXX") || exit $?
+trap 'rm -f "$TEMPLATE"' EXIT
 OUTFILE=
 DISKS=
 PRINTABLE_DISKS=
@@ -48,7 +49,7 @@ show_help() {
 					one test after another then one disk after another
 					Disabled by default
 -p				: Run parallel test
-					one test after anoter but all disks at the same time
+					one test after another but all disks at the same time
 					Enabled by default
 -D iodepth			: Run with the specified iodepth
 					Default is $IODEPTH

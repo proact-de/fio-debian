@@ -248,6 +248,8 @@ for opt do
   ;;
   --disable-dfs) dfs="no"
   ;;
+  --enable-asan) asan="yes"
+  ;;
   --help)
     show_help="yes"
     ;;
@@ -290,9 +292,10 @@ if test "$show_help" = "yes" ; then
   echo "--enable-libiscsi       Enable iscsi support"
   echo "--enable-libnbd         Enable libnbd (NBD engine) support"
   echo "--disable-libzbc        Disable libzbc even if found"
-  echo "--disable-tcmalloc	Disable tcmalloc support"
-  echo "--dynamic-libengines	Lib-based ioengines as dynamic libraries"
-  echo "--disable-dfs		Disable DAOS File System support even if found"
+  echo "--disable-tcmalloc      Disable tcmalloc support"
+  echo "--dynamic-libengines    Lib-based ioengines as dynamic libraries"
+  echo "--disable-dfs           Disable DAOS File System support even if found"
+  echo "--enable-asan           Enable address sanitizer"
   exit $exit_val
 fi
 
@@ -646,6 +649,25 @@ fi
 print_config "zlib" "$zlib"
 
 ##########################################
+# fcntl(F_FULLFSYNC) support
+if test "$fcntl_sync" != "yes" ; then
+  fcntl_sync="no"
+fi
+cat > $TMPC << EOF
+#include <unistd.h>
+#include <fcntl.h>
+
+int main(int argc, char **argv)
+{
+  return fcntl(0, F_FULLFSYNC);
+}
+EOF
+if compile_prog "" "" "fcntl(F_FULLFSYNC)" ; then
+    fcntl_sync="yes"
+fi
+print_config "fcntl(F_FULLFSYNC)" "$fcntl_sync"
+
+##########################################
 # linux-aio probe
 if test "$libaio" != "yes" ; then
   libaio="no"
@@ -955,17 +977,16 @@ print_config "rdmacm" "$rdmacm"
 
 ##########################################
 # librpma probe
+# The librpma engines require librpma>=v0.11.0 with rpma_cq_get_wc().
 if test "$librpma" != "yes" ; then
   librpma="no"
 fi
 cat > $TMPC << EOF
-#include <stdio.h>
 #include <librpma.h>
-int main(int argc, char **argv)
+int main(void)
 {
-  enum rpma_conn_event event = RPMA_CONN_REJECTED;
-  (void) event; /* unused */
-  rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
+  void *ptr = rpma_cq_get_wc;
+  (void) ptr; /* unused */
   return 0;
 }
 EOF
@@ -2080,7 +2101,7 @@ if test "$libhdfs" = "yes" ; then
     hdfs_conf_error=1
   fi
   if test "$FIO_LIBHDFS_INCLUDE" = "" ; then
-    echo "configure: FIO_LIBHDFS_INCLUDE should be defined to libhdfs inlude path"
+    echo "configure: FIO_LIBHDFS_INCLUDE should be defined to libhdfs include path"
     hdfs_conf_error=1
   fi
   if test "$FIO_LIBHDFS_LIB" = "" ; then
@@ -3175,7 +3196,13 @@ fi
 if test "$pdb" = yes; then
   output_sym "CONFIG_PDB"
 fi
-
+if test "$fcntl_sync" = "yes" ; then
+  output_sym "CONFIG_FCNTL_SYNC"
+fi
+if test "$asan" = "yes"; then
+  CFLAGS="$CFLAGS -fsanitize=address"
+  LDFLAGS="$LDFLAGS -fsanitize=address"
+fi
 print_config "Lib-based ioengines dynamic" "$dynamic_engines"
 cat > $TMPC << EOF
 int main(int argc, char **argv)

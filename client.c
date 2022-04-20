@@ -284,9 +284,10 @@ static int fio_client_dec_jobs_eta(struct client_eta *eta, client_eta_op eta_fn)
 static void fio_drain_client_text(struct fio_client *client)
 {
 	do {
-		struct fio_net_cmd *cmd;
+		struct fio_net_cmd *cmd = NULL;
 
-		cmd = fio_net_recv_cmd(client->fd, false);
+		if (fio_server_poll_fd(client->fd, POLLIN, 0))
+			cmd = fio_net_recv_cmd(client->fd, false);
 		if (!cmd)
 			break;
 
@@ -953,6 +954,8 @@ static void convert_ts(struct thread_stat *dst, struct thread_stat *src)
 	dst->pid		= le32_to_cpu(src->pid);
 	dst->members		= le32_to_cpu(src->members);
 	dst->unified_rw_rep	= le32_to_cpu(src->unified_rw_rep);
+	dst->ioprio		= le32_to_cpu(src->ioprio);
+	dst->disable_prio_stat	= le32_to_cpu(src->disable_prio_stat);
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
 		convert_io_stat(&dst->clat_stat[i], &src->clat_stat[i]);
@@ -1035,14 +1038,6 @@ static void convert_ts(struct thread_stat *dst, struct thread_stat *src)
 	dst->nr_block_infos	= le64_to_cpu(src->nr_block_infos);
 	for (i = 0; i < dst->nr_block_infos; i++)
 		dst->block_infos[i] = le32_to_cpu(src->block_infos[i]);
-	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
-		for (j = 0; j < FIO_IO_U_PLAT_NR; j++) {
-			dst->io_u_plat_high_prio[i][j] = le64_to_cpu(src->io_u_plat_high_prio[i][j]);
-			dst->io_u_plat_low_prio[i][j] = le64_to_cpu(src->io_u_plat_low_prio[i][j]);
-		}
-		convert_io_stat(&dst->clat_high_prio_stat[i], &src->clat_high_prio_stat[i]);
-		convert_io_stat(&dst->clat_low_prio_stat[i], &src->clat_low_prio_stat[i]);
-	}
 
 	dst->ss_dur		= le64_to_cpu(src->ss_dur);
 	dst->ss_state		= le32_to_cpu(src->ss_state);
@@ -1051,6 +1046,19 @@ static void convert_ts(struct thread_stat *dst, struct thread_stat *src)
 	dst->ss_slope.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_slope.u.i));
 	dst->ss_deviation.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_deviation.u.i));
 	dst->ss_criterion.u.f 	= fio_uint64_to_double(le64_to_cpu(src->ss_criterion.u.i));
+
+	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+		dst->nr_clat_prio[i] = le32_to_cpu(src->nr_clat_prio[i]);
+		for (j = 0; j < dst->nr_clat_prio[i]; j++) {
+			for (k = 0; k < FIO_IO_U_PLAT_NR; k++)
+				dst->clat_prio[i][j].io_u_plat[k] =
+					le64_to_cpu(src->clat_prio[i][j].io_u_plat[k]);
+			convert_io_stat(&dst->clat_prio[i][j].clat_stat,
+					&src->clat_prio[i][j].clat_stat);
+			dst->clat_prio[i][j].ioprio =
+				le32_to_cpu(dst->clat_prio[i][j].ioprio);
+		}
+	}
 
 	if (dst->ss_state & FIO_SS_DATA) {
 		for (i = 0; i < dst->ss_dur; i++ ) {
@@ -1111,7 +1119,7 @@ static void handle_ts(struct fio_client *client, struct fio_net_cmd *cmd)
 	if (sum_stat_clients <= 1)
 		return;
 
-	sum_thread_stats(&client_ts, &p->ts, sum_stat_nr == 1);
+	sum_thread_stats(&client_ts, &p->ts);
 	sum_group_stats(&client_gs, &p->rs);
 
 	client_ts.members++;
@@ -1760,7 +1768,6 @@ int fio_handle_client(struct fio_client *client)
 {
 	struct client_ops *ops = client->ops;
 	struct fio_net_cmd *cmd;
-	int size;
 
 	dprint(FD_NET, "client: handle %s\n", client->hostname);
 
@@ -1794,14 +1801,26 @@ int fio_handle_client(struct fio_client *client)
 		}
 	case FIO_NET_CMD_TS: {
 		struct cmd_ts_pdu *p = (struct cmd_ts_pdu *) cmd->payload;
+		uint64_t offset;
+		int i;
+
+		for (i = 0; i < DDIR_RWDIR_CNT; i++) {
+			if (le32_to_cpu(p->ts.nr_clat_prio[i])) {
+				offset = le64_to_cpu(p->ts.clat_prio_offset[i]);
+				p->ts.clat_prio[i] =
+					(struct clat_prio_stat *)((char *)p + offset);
+			}
+		}
 
 		dprint(FD_NET, "client: ts->ss_state = %u\n", (unsigned int) le32_to_cpu(p->ts.ss_state));
 		if (le32_to_cpu(p->ts.ss_state) & FIO_SS_DATA) {
 			dprint(FD_NET, "client: received steadystate ring buffers\n");
 
-			size = le64_to_cpu(p->ts.ss_dur);
-			p->ts.ss_iops_data = (uint64_t *) ((struct cmd_ts_pdu *)cmd->payload + 1);
-			p->ts.ss_bw_data = p->ts.ss_iops_data + size;
+			offset = le64_to_cpu(p->ts.ss_iops_data_offset);
+			p->ts.ss_iops_data = (uint64_t *)((char *)p + offset);
+
+			offset = le64_to_cpu(p->ts.ss_bw_data_offset);
+			p->ts.ss_bw_data = (uint64_t *)((char *)p + offset);
 		}
 
 		convert_ts(&p->ts, &p->ts);
@@ -2152,6 +2171,7 @@ int fio_handle_clients(struct client_ops *ops)
 
 	fio_client_json_fini();
 
+	free_clat_prio_stats(&client_ts);
 	free(pfds);
 	return retval || error_clients;
 }

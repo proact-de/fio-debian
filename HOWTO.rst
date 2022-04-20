@@ -1063,6 +1063,12 @@ Target file/device
 	Limit on the number of simultaneously opened zones per single
 	thread/process.
 
+.. option:: ignore_zone_limits=bool
+	If this option is used, fio will ignore the maximum number of open
+	zones limit of the zoned block device in use, thus allowing the
+	option :option:`max_open_zones` value to be larger than the device
+	reported limit. Default: false.
+
 .. option:: zone_reset_threshold=float
 
 	A number between zero and one that indicates the ratio of logical
@@ -1338,7 +1344,7 @@ I/O type
 .. option:: fdatasync=int
 
 	Like :option:`fsync` but uses :manpage:`fdatasync(2)` to only sync data and
-	not metadata blocks. In Windows, FreeBSD, DragonFlyBSD or OSX there is no
+	not metadata blocks. In Windows, DragonFlyBSD or OSX there is no
 	:manpage:`fdatasync(2)` so this falls back to using :manpage:`fsync(2)`.
 	Defaults to 0, which means fio does not periodically issue and wait for a
 	data-only sync to complete.
@@ -1437,7 +1443,7 @@ I/O type
 	range of possible random values.
 	Defaults are: random for **pareto** and **zipf**, and 0.5 for **normal**.
 	If you wanted to use **zipf** with a `theta` of 1.2 centered on 1/4 of allowed value range,
-	you would use ``random_distibution=zipf:1.2:0.25``.
+	you would use ``random_distribution=zipf:1.2:0.25``.
 
 	For a **zoned** distribution, fio supports specifying percentages of I/O
 	access that should fall within what range of the file or device. For
@@ -1880,11 +1886,12 @@ I/O size
 
 .. option:: filesize=irange(int)
 
-	Individual file sizes. May be a range, in which case fio will select sizes
-	for files at random within the given range and limited to :option:`size` in
-	total (if that is given). If not given, each created file is the same size.
-	This option overrides :option:`size` in terms of file size, which means
-	this value is used as a fixed size or possible range of each file.
+	Individual file sizes. May be a range, in which case fio will select sizes for
+	files at random within the given range. If not given, each created file is the
+	same size. This option overrides :option:`size` in terms of file size, i.e. if
+	:option:`filesize` is specified then :option:`size` becomes merely the default
+	for :option:`io_size` and has no effect at all if :option:`io_size` is set
+	explicitly.
 
 .. option:: file_append=bool
 
@@ -2130,8 +2137,10 @@ I/O engine
 			Asynchronous read and write using DDN's Infinite Memory Engine (IME).
 			This engine will try to stack as much IOs as possible by creating
 			requests for IME. FIO will then decide when to commit these requests.
+
 		**libiscsi**
 			Read and write iscsi lun with libiscsi.
+
 		**nbd**
 			Read and write a Network Block Device (NBD).
 
@@ -2142,6 +2151,7 @@ I/O engine
 			unless :option:`verify` is set or :option:`cuda_io` is `posix`.
 			:option:`iomem` must not be `cudamalloc`. This ioengine defines
 			engine specific options.
+
 		**dfs**
 			I/O engine supporting asynchronous read and write operations to the
 			DAOS File System (DFS) via libdfs.
@@ -2167,10 +2177,13 @@ with the caveat that when used on the command line, they must come after the
 
     Set the percentage of I/O that will be issued with the highest priority.
     Default: 0. A single value applies to reads and writes. Comma-separated
-    values may be specified for reads and writes. This option cannot be used
-    with the :option:`prio` or :option:`prioclass` options. For this option
-    to be effective, NCQ priority must be supported and enabled, and `direct=1'
-    option must be used. fio must also be run as the root user.
+    values may be specified for reads and writes. For this option to be
+    effective, NCQ priority must be supported and enabled, and the :option:`direct`
+    option must be set. fio must also be run as the root user. Unlike
+    slat/clat/lat stats, which can be tracked and reported independently, per
+    priority stats only track and report a single type of latency. By default,
+    completion latency (clat) will be reported, if :option:`lat_percentiles` is
+    set, total latency (lat) will be reported.
 
 .. option:: cmdprio_class=int[,int] : [io_uring] [libaio]
 
@@ -2197,15 +2210,34 @@ with the caveat that when used on the command line, they must come after the
 	meaning of priority may differ. See also the :option:`prio` option.
 
 .. option:: cmdprio_bssplit=str[,str] : [io_uring] [libaio]
+
 	To get a finer control over I/O priority, this option allows
 	specifying the percentage of IOs that must have a priority set
 	depending on the block size of the IO. This option is useful only
 	when used together with the :option:`bssplit` option, that is,
 	multiple different block sizes are used for reads and writes.
-	The format for this option is the same as the format of the
-	:option:`bssplit` option, with the exception that values for
-	trim IOs are ignored. This option is mutually exclusive with the
-	:option:`cmdprio_percentage` option.
+
+	The first accepted format for this option is the same as the format of
+	the :option:`bssplit` option:
+
+		cmdprio_bssplit=blocksize/percentage:blocksize/percentage
+
+	In this case, each entry will use the priority class and priority
+	level defined by the options :option:`cmdprio_class` and
+	:option:`cmdprio` respectively.
+
+	The second accepted format for this option is:
+
+		cmdprio_bssplit=blocksize/percentage/class/level:blocksize/percentage/class/level
+
+	In this case, the priority class and priority level is defined inside
+	each entry. In comparison with the first accepted format, the second
+	accepted format does not restrict all entries to have the same priority
+	class and priority level.
+
+	For both formats, only the read and write data directions are supported,
+	values for trim IOs are ignored. This option is mutually exclusive with
+	the :option:`cmdprio_percentage` option.
 
 .. option:: fixedbufs : [io_uring]
 
@@ -2214,14 +2246,6 @@ with the caveat that when used on the command line, they must come after the
     pages are pre-mapped before IO is started. This eliminates the need to
     map and release for each IO. This is more efficient, and reduces the
     IO latency as well.
-
-.. option:: hipri : [io_uring]
-
-    If this option is set, fio will attempt to use polled IO completions.
-    Normal IO completions generate interrupts to signal the completion of
-    IO, polled completions do not. Hence they are require active reaping
-    by the application. The benefits are more efficient IO for high IOPS
-    scenarios, and lower latencies for low queue depth IO.
 
 .. option:: registerfiles : [io_uring]
 
@@ -2243,6 +2267,33 @@ with the caveat that when used on the command line, they must come after the
 	When :option:`sqthread_poll` is set, this option provides a way to
 	define which CPU should be used for the polling thread.
 
+.. option:: hipri
+
+   [io_uring]
+
+        If this option is set, fio will attempt to use polled IO completions.
+        Normal IO completions generate interrupts to signal the completion of
+        IO, polled completions do not. Hence they are require active reaping
+        by the application. The benefits are more efficient IO for high IOPS
+        scenarios, and lower latencies for low queue depth IO.
+
+   [pvsync2]
+
+	Set RWF_HIPRI on I/O, indicating to the kernel that it's of higher priority
+	than normal.
+
+   [sg]
+
+	If this option is set, fio will attempt to use polled IO completions.
+	This will have a similar effect as (io_uring)hipri. Only SCSI READ and
+	WRITE commands will have the SGV4_FLAG_HIPRI set (not UNMAP (trim) nor
+	VERIFY). Older versions of the Linux sg driver that do not support
+	hipri will simply ignore this flag and do normal IO. The Linux SCSI
+	Low Level Driver (LLD) that "owns" the device also needs to support
+	hipri (also known as iopoll and mq_poll). The MegaRAID driver is an
+	example of a SCSI LLD. Default: clear (0) which does normal
+	(interrupted based) IO.
+
 .. option:: userspace_reap : [libaio]
 
 	Normally, with the libaio engine in use, fio will use the
@@ -2250,11 +2301,6 @@ with the caveat that when used on the command line, they must come after the
 	this flag turned on, the AIO ring will be read directly from user-space to
 	reap events. The reaping mode is only enabled when polling for a minimum of
 	0 events (e.g. when :option:`iodepth_batch_complete` `=0`).
-
-.. option:: hipri : [pvsync2]
-
-	Set RWF_HIPRI on I/O, indicating to the kernel that it's of higher priority
-	than normal.
 
 .. option:: hipri_percentage : [pvsync2]
 
@@ -2289,6 +2335,16 @@ with the caveat that when used on the command line, they must come after the
 .. option:: cpuchunks=int : [cpuio]
 
 	Split the load into cycles of the given time. In microseconds.
+
+.. option:: cpumode=str : [cpuio]
+
+	Specify how to stress the CPU. It can take these two values:
+
+	**noop**
+		This is the default where the CPU executes noop instructions.
+	**qsort**
+		Replace the default noop instructions loop with a qsort algorithm to
+		consume more energy.
 
 .. option:: exit_on_io_done=bool : [cpuio]
 
@@ -2416,10 +2472,6 @@ with the caveat that when used on the command line, they must come after the
 
 	Specifies the name of the RBD.
 
-.. option:: pool=str : [rbd,rados]
-
-	Specifies the name of the Ceph pool containing RBD or RADOS data.
-
 .. option:: clientname=str : [rbd,rados]
 
 	Specifies the username (without the 'client.' prefix) used to access the
@@ -2438,6 +2490,36 @@ with the caveat that when used on the command line, they must come after the
         Touching all objects affects ceph caches and likely impacts test results.
         Enabled by default.
 
+.. option:: pool=str :
+
+   [rbd,rados]
+
+	Specifies the name of the Ceph pool containing RBD or RADOS data.
+
+   [dfs]
+
+	Specify the label or UUID of the DAOS pool to connect to.
+
+.. option:: cont=str : [dfs]
+
+	Specify the label or UUID of the DAOS container to open.
+
+.. option:: chunk_size=int
+
+   [dfs]
+
+	Specificy a different chunk size (in bytes) for the dfs file.
+	Use DAOS container's chunk size by default.
+
+   [libhdfs]
+
+	The size of the chunk to use for each file.
+
+.. option:: object_class=str : [dfs]
+
+	Specificy a different object class for the dfs file.
+	Use DAOS container's object class by default.
+
 .. option:: skip_bad=bool : [mtd]
 
 	Skip operations against known bad blocks.
@@ -2445,10 +2527,6 @@ with the caveat that when used on the command line, they must come after the
 .. option:: hdfsdirectory : [libhdfs]
 
 	libhdfs will create chunk in this HDFS directory.
-
-.. option:: chunk_size : [libhdfs]
-
-	The size of the chunk to use for each file.
 
 .. option:: verb=str : [rdma]
 
@@ -2487,11 +2565,13 @@ with the caveat that when used on the command line, they must come after the
 
 	**write**
 		This is the default where write opcodes are issued as usual.
-	**verify**
+	**write_and_verify**
 		Issue WRITE AND VERIFY commands. The BYTCHK bit is set to 0. This
 		directs the device to carry out a medium verification with no data
 		comparison. The writefua option is ignored with this selection.
-	**same**
+	**verify**
+		This option is deprecated. Use write_and_verify instead.
+	**write_same**
 		Issue WRITE SAME commands. This transfers a single block to the device
 		and writes this same block of data to a contiguous sequence of LBAs
 		beginning at the specified offset. fio's block size parameter specifies
@@ -2502,18 +2582,36 @@ with the caveat that when used on the command line, they must come after the
 		for each command but only the first 512 bytes will be used and
 		transferred to the device. The writefua option is ignored with this
 		selection.
+	**same**
+		This option is deprecated. Use write_same instead.
+	**write_same_ndob**
+		Issue WRITE SAME(16) commands as above but with the No Data Output
+		Buffer (NDOB) bit set. No data will be transferred to the device with
+		this bit set. Data written will be a pre-determined pattern such as
+		all zeroes.
+	**write_stream**
+		Issue WRITE STREAM(16) commands. Use the **stream_id** option to specify
+		the stream identifier.
+	**verify_bytchk_00**
+		Issue VERIFY commands with BYTCHK set to 00. This directs the
+		device to carry out a medium verification with no data comparison.
+	**verify_bytchk_01**
+		Issue VERIFY commands with BYTCHK set to 01. This directs the device to
+		compare the data on the device with the data transferred to the device.
+	**verify_bytchk_11**
+		Issue VERIFY commands with BYTCHK set to 11. This transfers a
+		single block to the device and compares the contents of this block with the
+		data on the device beginning at the specified offset. fio's block size
+		parameter specifies the total amount of data compared with this command.
+		However, only one block (sector) worth of data is transferred to the device.
+		This is similar to the WRITE SAME command except that data is compared instead
+		of written.
 
-.. option:: hipri : [sg]
+.. option:: stream_id=int : [sg]
 
-	If this option is set, fio will attempt to use polled IO completions.
-	This will have a similar effect as (io_uring)hipri. Only SCSI READ and
-	WRITE commands will have the SGV4_FLAG_HIPRI set (not UNMAP (trim) nor
-	VERIFY). Older versions of the Linux sg driver that do not support
-	hipri will simply ignore this flag and do normal IO. The Linux SCSI
-	Low Level Driver (LLD) that "owns" the device also needs to support
-	hipri (also known as iopoll and mq_poll). The MegaRAID driver is an
-	example of a SCSI LLD. Default: clear (0) which does normal
-	(interrupted based) IO.
+	Set the stream identifier for WRITE STREAM commands. If this is set to 0 (which is not
+	a valid stream identifier) fio will open a stream and then close it when done. Default
+	is 0.
 
 .. option:: http_host=str : [http]
 
@@ -2593,24 +2691,6 @@ with the caveat that when used on the command line, they must come after the
 		to transfer data between RAM and the GPUs. Data is copied from
 		GPU to RAM before a write and copied from RAM to GPU after a
 		read. :option:`verify` does not affect use of cudaMemcpy.
-
-.. option:: pool=str : [dfs]
-
-	Specify the label or UUID of the DAOS pool to connect to.
-
-.. option:: cont=str : [dfs]
-
-	Specify the label or UUID of the DAOS container to open.
-
-.. option:: chunk_size=int : [dfs]
-
-	Specificy a different chunk size (in bytes) for the dfs file.
-	Use DAOS container's chunk size by default.
-
-.. option:: object_class=str : [dfs]
-
-	Specificy a different object class for the dfs file.
-	Use DAOS container's object class by default.
 
 .. option:: nfs_url=str : [nfs]
 
@@ -3290,7 +3370,7 @@ Verification
 	To avoid false verification errors, do not use the norandommap option when
 	verifying data with async I/O engines and I/O depths > 1.  Or use the
 	norandommap and the lfsr random generator together to avoid writing to the
-	same offset with muliple outstanding I/Os.
+	same offset with multiple outstanding I/Os.
 
 .. option:: verify_offset=int
 
@@ -3538,6 +3618,18 @@ Measurements and reporting
 	:option:`write_bw_log` for details about the filename format and `Log
 	File Formats`_ for how data is structured within the file.
 
+.. option:: log_entries=int
+
+	By default, fio will log an entry in the iops, latency, or bw log for
+	every I/O that completes. The initial number of I/O log entries is 1024.
+	When the log entries are all used, new log entries are dynamically
+	allocated.  This dynamic log entry allocation may negatively impact
+	time-related statistics such as I/O tail latencies (e.g. 99.9th percentile
+	completion latency). This option allows specifying a larger initial
+	number of log entries to avoid run-time allocations of new log entries,
+	resulting in more precise time-related I/O statistics.
+	Also see :option:`log_avg_msec`. Defaults to 1024.
+
 .. option:: log_avg_msec=int
 
 	By default, fio will log an entry in the iops, latency, or bw log for every
@@ -3608,6 +3700,19 @@ Measurements and reporting
 	If set, fio will log Unix timestamps to the log files produced by enabling
 	write_type_log for each log type, instead of the default zero-based
 	timestamps.
+
+.. option:: log_alternate_epoch=bool
+
+	If set, fio will log timestamps based on the epoch used by the clock specified
+	in the log_alternate_epoch_clock_id option, to the log files produced by
+	enabling write_type_log for each log type, instead of the default zero-based
+	timestamps.
+
+.. option:: log_alternate_epoch_clock_id=int
+
+	Specifies the clock_id to be used by clock_gettime to obtain the alternate epoch
+	if either log_unix_epoch or log_alternate_epoch are true. Otherwise has no
+	effect. Default value is 0, or CLOCK_REALTIME.
 
 .. option:: block_error_percentiles=bool
 

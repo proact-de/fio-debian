@@ -66,8 +66,13 @@
 
 enum {
 	FIO_SG_WRITE		= 1,
-	FIO_SG_WRITE_VERIFY	= 2,
-	FIO_SG_WRITE_SAME	= 3
+	FIO_SG_WRITE_VERIFY,
+	FIO_SG_WRITE_SAME,
+	FIO_SG_WRITE_SAME_NDOB,
+	FIO_SG_WRITE_STREAM,
+	FIO_SG_VERIFY_BYTCHK_00,
+	FIO_SG_VERIFY_BYTCHK_01,
+	FIO_SG_VERIFY_BYTCHK_11,
 };
 
 struct sg_options {
@@ -76,6 +81,7 @@ struct sg_options {
 	unsigned int readfua;
 	unsigned int writefua;
 	unsigned int write_mode;
+	uint16_t stream_id;
 };
 
 static struct fio_option options[] = {
@@ -120,15 +126,55 @@ static struct fio_option options[] = {
 			    .oval = FIO_SG_WRITE,
 			    .help = "Issue standard SCSI WRITE commands",
 			  },
-			  { .ival = "verify",
+			  { .ival = "write_and_verify",
 			    .oval = FIO_SG_WRITE_VERIFY,
 			    .help = "Issue SCSI WRITE AND VERIFY commands",
 			  },
-			  { .ival = "same",
+			  { .ival = "verify",
+			    .oval = FIO_SG_WRITE_VERIFY,
+			    .help = "Issue SCSI WRITE AND VERIFY commands. This "
+				    "option is deprecated. Use write_and_verify instead.",
+			  },
+			  { .ival = "write_same",
 			    .oval = FIO_SG_WRITE_SAME,
 			    .help = "Issue SCSI WRITE SAME commands",
 			  },
+			  { .ival = "same",
+			    .oval = FIO_SG_WRITE_SAME,
+			    .help = "Issue SCSI WRITE SAME commands. This "
+				    "option is deprecated. Use write_same instead.",
+			  },
+			  { .ival = "write_same_ndob",
+			    .oval = FIO_SG_WRITE_SAME_NDOB,
+			    .help = "Issue SCSI WRITE SAME(16) commands with NDOB flag set",
+			  },
+			  { .ival = "verify_bytchk_00",
+			    .oval = FIO_SG_VERIFY_BYTCHK_00,
+			    .help = "Issue SCSI VERIFY commands with BYTCHK set to 00",
+			  },
+			  { .ival = "verify_bytchk_01",
+			    .oval = FIO_SG_VERIFY_BYTCHK_01,
+			    .help = "Issue SCSI VERIFY commands with BYTCHK set to 01",
+			  },
+			  { .ival = "verify_bytchk_11",
+			    .oval = FIO_SG_VERIFY_BYTCHK_11,
+			    .help = "Issue SCSI VERIFY commands with BYTCHK set to 11",
+			  },
+			  { .ival = "write_stream",
+			    .oval = FIO_SG_WRITE_STREAM,
+			    .help = "Issue SCSI WRITE STREAM(16) commands",
+			  },
 		},
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_SG,
+	},
+	{
+		.name	= "stream_id",
+		.lname	= "stream id for WRITE STREAM(16) commands",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct sg_options, stream_id),
+		.help	= "Stream ID for WRITE STREAM(16) commands",
+		.def	= "0",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_SG,
 	},
@@ -170,6 +216,11 @@ struct sgio_data {
 	unsigned int *trim_queue_map;
 #endif
 };
+
+static inline uint16_t sgio_get_be16(uint8_t *buf)
+{
+	return be16_to_cpu(*((uint16_t *) buf));
+}
 
 static inline uint32_t sgio_get_be32(uint8_t *buf)
 {
@@ -471,10 +522,9 @@ static enum fio_q_status fio_sgio_rw_doio(struct thread_data *td,
 			if (__io_u == io_u)
 				break;
 
-			if (io_u_sync_complete(td, __io_u)) {
-				ret = -1;
+			if (io_u_sync_complete(td, __io_u))
 				break;
-			}
+
 		} while (1);
 
 		return FIO_Q_COMPLETED;
@@ -503,9 +553,9 @@ static enum fio_q_status fio_sgio_doio(struct thread_data *td,
 }
 
 static void fio_sgio_rw_lba(struct sg_io_hdr *hdr, unsigned long long lba,
-			    unsigned long long nr_blocks)
+			    unsigned long long nr_blocks, bool override16)
 {
-	if (lba < MAX_10B_LBA) {
+	if (lba < MAX_10B_LBA && !override16) {
 		sgio_set_be32((uint32_t) lba, &hdr->cmdp[2]);
 		sgio_set_be16((uint16_t) nr_blocks, &hdr->cmdp[7]);
 	} else {
@@ -546,7 +596,7 @@ static int fio_sgio_prep(struct thread_data *td, struct io_u *io_u)
 		if (o->readfua)
 			hdr->cmdp[1] |= 0x08;
 
-		fio_sgio_rw_lba(hdr, lba, nr_blocks);
+		fio_sgio_rw_lba(hdr, lba, nr_blocks, false);
 
 	} else if (io_u->ddir == DDIR_WRITE) {
 		sgio_hdr_init(sd, hdr, io_u, 1);
@@ -577,9 +627,46 @@ static int fio_sgio_prep(struct thread_data *td, struct io_u *io_u)
 			else
 				hdr->cmdp[0] = 0x93; // write same(16)
 			break;
+		case FIO_SG_WRITE_SAME_NDOB:
+			hdr->cmdp[0] = 0x93; // write same(16)
+			hdr->cmdp[1] |= 0x1; // no data output buffer
+			hdr->dxfer_len = 0;
+			break;
+		case FIO_SG_WRITE_STREAM:
+			hdr->cmdp[0] = 0x9a; // write stream (16)
+			if (o->writefua)
+				hdr->cmdp[1] |= 0x08;
+			sgio_set_be64(lba, &hdr->cmdp[2]);
+			sgio_set_be16((uint16_t) io_u->file->engine_pos, &hdr->cmdp[10]);
+			sgio_set_be16((uint16_t) nr_blocks, &hdr->cmdp[12]);
+			break;
+		case FIO_SG_VERIFY_BYTCHK_00:
+			if (lba < MAX_10B_LBA)
+				hdr->cmdp[0] = 0x2f; // VERIFY(10)
+			else
+				hdr->cmdp[0] = 0x8f; // VERIFY(16)
+			hdr->dxfer_len = 0;
+			break;
+		case FIO_SG_VERIFY_BYTCHK_01:
+			if (lba < MAX_10B_LBA)
+				hdr->cmdp[0] = 0x2f; // VERIFY(10)
+			else
+				hdr->cmdp[0] = 0x8f; // VERIFY(16)
+			hdr->cmdp[1] |= 0x02;		// BYTCHK = 01b
+			break;
+		case FIO_SG_VERIFY_BYTCHK_11:
+			if (lba < MAX_10B_LBA)
+				hdr->cmdp[0] = 0x2f; // VERIFY(10)
+			else
+				hdr->cmdp[0] = 0x8f; // VERIFY(16)
+			hdr->cmdp[1] |= 0x06;		// BYTCHK = 11b
+			hdr->dxfer_len = sd->bs;
+			break;
 		};
 
-		fio_sgio_rw_lba(hdr, lba, nr_blocks);
+		if (o->write_mode != FIO_SG_WRITE_STREAM)
+			fio_sgio_rw_lba(hdr, lba, nr_blocks,
+				o->write_mode == FIO_SG_WRITE_SAME_NDOB);
 
 	} else if (io_u->ddir == DDIR_TRIM) {
 		struct sgio_trim *st;
@@ -971,9 +1058,60 @@ static int fio_sgio_type_check(struct thread_data *td, struct fio_file *f)
 	return 0;
 }
 
+static int fio_sgio_stream_control(struct fio_file *f, bool open_stream, uint16_t *stream_id)
+{
+	struct sg_io_hdr hdr;
+	unsigned char cmd[16];
+	unsigned char sb[64];
+	unsigned char buf[8];
+	int ret;
+
+	memset(&hdr, 0, sizeof(hdr));
+	memset(cmd, 0, sizeof(cmd));
+	memset(sb, 0, sizeof(sb));
+	memset(buf, 0, sizeof(buf));
+
+	hdr.interface_id = 'S';
+	hdr.cmdp = cmd;
+	hdr.cmd_len = 16;
+	hdr.sbp = sb;
+	hdr.mx_sb_len = sizeof(sb);
+	hdr.timeout = SCSI_TIMEOUT_MS;
+	hdr.cmdp[0] = 0x9e;
+	hdr.dxfer_direction = SG_DXFER_FROM_DEV;
+	hdr.dxferp = buf;
+	hdr.dxfer_len = sizeof(buf);
+	sgio_set_be32(sizeof(buf), &hdr.cmdp[10]);
+
+	if (open_stream)
+		hdr.cmdp[1] = 0x34;
+	else {
+		hdr.cmdp[1] = 0x54;
+		sgio_set_be16(*stream_id, &hdr.cmdp[4]);
+	}
+
+	ret = ioctl(f->fd, SG_IO, &hdr);
+
+	if (ret < 0)
+		return ret;
+
+	if (hdr.info & SG_INFO_CHECK)
+		return 1;
+
+	if (open_stream) {
+		*stream_id = sgio_get_be16(&buf[4]);
+		dprint(FD_FILE, "sgio_stream_control: opened stream %u\n", (unsigned int) *stream_id);
+		assert(*stream_id != 0);
+	} else
+		dprint(FD_FILE, "sgio_stream_control: closed stream %u\n", (unsigned int) *stream_id);
+
+	return 0;
+}
+
 static int fio_sgio_open(struct thread_data *td, struct fio_file *f)
 {
 	struct sgio_data *sd = td->io_ops_data;
+	struct sg_options *o = td->eo;
 	int ret;
 
 	ret = generic_open_file(td, f);
@@ -982,10 +1120,34 @@ static int fio_sgio_open(struct thread_data *td, struct fio_file *f)
 
 	if (sd && !sd->type_checked && fio_sgio_type_check(td, f)) {
 		ret = generic_close_file(td, f);
-		return 1;
+		return ret;
+	}
+
+	if (o->write_mode == FIO_SG_WRITE_STREAM) {
+		if (o->stream_id)
+			f->engine_pos = o->stream_id;
+		else {
+			ret = fio_sgio_stream_control(f, true, (uint16_t *) &f->engine_pos);
+			if (ret)
+				return ret;
+		}
 	}
 
 	return 0;
+}
+
+int fio_sgio_close(struct thread_data *td, struct fio_file *f)
+{
+	struct sg_options *o = td->eo;
+	int ret;
+
+	if (!o->stream_id && o->write_mode == FIO_SG_WRITE_STREAM) {
+		ret = fio_sgio_stream_control(f, false, (uint16_t *) &f->engine_pos);
+		if (ret)
+			return ret;
+	}
+
+	return generic_close_file(td, f);
 }
 
 /*
@@ -1262,7 +1424,7 @@ static struct ioengine_ops ioengine = {
 	.event		= fio_sgio_event,
 	.cleanup	= fio_sgio_cleanup,
 	.open_file	= fio_sgio_open,
-	.close_file	= generic_close_file,
+	.close_file	= fio_sgio_close,
 	.get_file_size	= fio_sgio_get_file_size,
 	.flags		= FIO_SYNCIO | FIO_RAWIO,
 	.options	= options,

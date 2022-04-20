@@ -28,7 +28,7 @@ PROGS	= fio
 SCRIPTS = $(addprefix $(SRCDIR)/,tools/fio_generate_plots tools/plot/fio2gnuplot tools/genfio tools/fiologparser.py tools/hist/fiologparser_hist.py tools/hist/fio-histo-log-pctiles.py tools/fio_jsonplus_clat2csv)
 
 ifndef CONFIG_FIO_NO_OPT
-  FIO_CFLAGS += -O3 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2
+  FIO_CFLAGS += -O3
 endif
 ifdef CONFIG_BUILD_NATIVE
   FIO_CFLAGS += -march=native
@@ -98,6 +98,8 @@ else ifdef CONFIG_32BIT
 endif
 ifdef CONFIG_LIBAIO
   libaio_SRCS = engines/libaio.c
+  cmdprio_SRCS = engines/cmdprio.c
+  LIBS += -laio
   libaio_LIBS = -laio
   ENGINES += libaio
 endif
@@ -225,6 +227,7 @@ endif
 ifeq ($(CONFIG_TARGET_OS), Linux)
   SOURCE += diskutil.c fifo.c blktrace.c cgroup.c trim.c engines/sg.c \
 		oslib/linux-dev-lookup.c engines/io_uring.c
+  cmdprio_SRCS = engines/cmdprio.c
 ifdef CONFIG_HAS_BLKZONED
   SOURCE += oslib/linux-blkzoned.c
 endif
@@ -233,7 +236,8 @@ endif
 endif
 ifeq ($(CONFIG_TARGET_OS), Android)
   SOURCE += diskutil.c fifo.c blktrace.c cgroup.c trim.c profiles/tiobench.c \
-		oslib/linux-dev-lookup.c
+		oslib/linux-dev-lookup.c engines/io_uring.c
+  cmdprio_SRCS = engines/cmdprio.c
 ifdef CONFIG_HAS_BLKZONED
   SOURCE += oslib/linux-blkzoned.c
 endif
@@ -275,10 +279,14 @@ ifeq ($(CONFIG_TARGET_OS), Darwin)
   LIBS	 += -lpthread -ldl
 endif
 ifneq (,$(findstring CYGWIN,$(CONFIG_TARGET_OS)))
-  SOURCE += os/windows/cpu-affinity.c os/windows/posix.c
-  WINDOWS_OBJS = os/windows/cpu-affinity.o os/windows/posix.o lib/hweight.o
+  SOURCE += os/windows/cpu-affinity.c os/windows/posix.c os/windows/dlls.c
+  WINDOWS_OBJS = os/windows/cpu-affinity.o os/windows/posix.o os/windows/dlls.o lib/hweight.o
   LIBS	 += -lpthread -lpsapi -lws2_32 -lssp
   FIO_CFLAGS += -DPSAPI_VERSION=1 -Ios/windows/posix/include -Wno-format
+endif
+
+ifdef cmdprio_SRCS
+  SOURCE += $(cmdprio_SRCS)
 endif
 
 ifdef CONFIG_DYNAMIC_ENGINES
@@ -287,7 +295,7 @@ define engine_template =
 $(1)_OBJS := $$($(1)_SRCS:.c=.o)
 $$($(1)_OBJS): CFLAGS := -fPIC $$($(1)_CFLAGS) $(CFLAGS)
 engines/fio-$(1).so: $$($(1)_OBJS)
-	$$(QUIET_LINK)$(CC) -shared -rdynamic -fPIC -Wl,-soname,fio-$(1).so.1 -o $$@ $$< $$($(1)_LIBS)
+	$$(QUIET_LINK)$(CC) $(LDFLAGS) -shared -rdynamic -fPIC -Wl,-soname,fio-$(1).so.1 -o $$@ $$< $$($(1)_LIBS)
 ENGS_OBJS += engines/fio-$(1).so
 endef
 else # !CONFIG_DYNAMIC_ENGINES
@@ -368,8 +376,7 @@ T_VS_PROGS = t/fio-verify-state
 T_PIPE_ASYNC_OBJS = t/read-to-pipe-async.o
 T_PIPE_ASYNC_PROGS = t/read-to-pipe-async
 
-T_IOU_RING_OBJS = t/io_uring.o
-T_IOU_RING_OBJS += t/arch.o
+T_IOU_RING_OBJS = t/io_uring.o lib/rand.o lib/pattern.o lib/strntol.o
 T_IOU_RING_PROGS = t/io_uring
 
 T_MEMLOCK_OBJS = t/memlock.o
@@ -378,14 +385,16 @@ T_MEMLOCK_PROGS = t/memlock
 T_TT_OBJS = t/time-test.o
 T_TT_PROGS = t/time-test
 
+ifneq (,$(findstring -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION,$(CFLAGS)))
 T_FUZZ_OBJS = t/fuzz/fuzz_parseini.o
 T_FUZZ_OBJS += $(OBJS)
 ifdef CONFIG_ARITHMETIC
 T_FUZZ_OBJS += lex.yy.o y.tab.o
 endif
+# For proper fio code teardown CFLAGS needs to include -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 # in case there is no fuzz driver defined by environment variable LIB_FUZZING_ENGINE, use a simple one
 # For instance, with compiler clang, address sanitizer and libFuzzer as a fuzzing engine, you should define
-# export CFLAGS="-fsanitize=address,fuzzer-no-link"
+# export CFLAGS="-fsanitize=address,fuzzer-no-link -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION"
 # export LIB_FUZZING_ENGINE="-fsanitize=address"
 # export CC=clang
 # before running configure && make
@@ -394,6 +403,10 @@ ifndef LIB_FUZZING_ENGINE
 T_FUZZ_OBJS += t/fuzz/onefile.o
 endif
 T_FUZZ_PROGS = t/fuzz/fuzz_parseini
+else	# CFLAGS includes -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+T_FUZZ_OBJS =
+T_FUZZ_PROGS =
+endif
 
 T_OBJS = $(T_SMALLOC_OBJS)
 T_OBJS += $(T_IEEE_OBJS)
@@ -423,7 +436,9 @@ T_TEST_PROGS += $(T_AXMAP_PROGS)
 T_TEST_PROGS += $(T_LFSR_TEST_PROGS)
 T_TEST_PROGS += $(T_GEN_RAND_PROGS)
 T_PROGS += $(T_BTRACE_FIO_PROGS)
+ifdef CONFIG_ZLIB
 T_PROGS += $(T_DEDUPE_PROGS)
+endif
 T_PROGS += $(T_VS_PROGS)
 T_TEST_PROGS += $(T_MEMLOCK_PROGS)
 ifdef CONFIG_PREAD
@@ -611,8 +626,10 @@ t/fio-btrace2fio: $(T_BTRACE_FIO_OBJS)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) -o $@ $(T_BTRACE_FIO_OBJS) $(LIBS)
 endif
 
+ifdef CONFIG_ZLIB
 t/fio-dedupe: $(T_DEDUPE_OBJS)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) -o $@ $(T_DEDUPE_OBJS) $(LIBS)
+endif
 
 t/fio-verify-state: $(T_VS_OBJS)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) -o $@ $(T_VS_OBJS) $(LIBS)
@@ -626,7 +643,7 @@ unittests/unittest: $(UT_OBJS) $(UT_TARGET_OBJS)
 endif
 
 clean: FORCE
-	@rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(UT_OBJS) $(PROGS) $(T_PROGS) $(T_TEST_PROGS) core.* core gfio unittests/unittest FIO-VERSION-FILE *.[do] lib/*.d oslib/*.[do] crc/*.d engines/*.[do] engines/*.so profiles/*.[do] t/*.[do] unittests/*.[do] unittests/*/*.[do] config-host.mak config-host.h y.tab.[ch] lex.yy.c exp/*.[do] lexer.h
+	@rm -f .depend $(FIO_OBJS) $(GFIO_OBJS) $(OBJS) $(T_OBJS) $(UT_OBJS) $(PROGS) $(T_PROGS) $(T_TEST_PROGS) core.* core gfio unittests/unittest FIO-VERSION-FILE *.[do] lib/*.d oslib/*.[do] crc/*.d engines/*.[do] engines/*.so profiles/*.[do] t/*.[do] t/*/*.[do] unittests/*.[do] unittests/*/*.[do] config-host.mak config-host.h y.tab.[ch] lex.yy.c exp/*.[do] lexer.h
 	@rm -f t/fio-btrace2fio t/io_uring t/read-to-pipe-async
 	@rm -rf  doc/output
 
