@@ -1064,6 +1064,7 @@ Target file/device
 	thread/process.
 
 .. option:: ignore_zone_limits=bool
+
 	If this option is used, fio will ignore the maximum number of open
 	zones limit of the zoned block device in use, thus allowing the
 	option :option:`max_open_zones` value to be larger than the device
@@ -1300,7 +1301,7 @@ I/O type
 	effectively caps the file size at `real_size - offset`. Can be combined with
 	:option:`size` to constrain the start and end range of the I/O workload.
 	A percentage can be specified by a number between 1 and 100 followed by '%',
-	for example, ``offset=20%`` to specify 20%. In ZBD mode, value can be set as 
+	for example, ``offset=20%`` to specify 20%. In ZBD mode, value can be set as
         number of zones using 'z'.
 
 .. option:: offset_align=int
@@ -1749,6 +1750,12 @@ Buffers and memory
 	Note that size needs to be explicitly provided and only 1 file per
 	job is supported
 
+.. option:: dedupe_global=bool
+
+	This controls whether the deduplication buffers will be shared amongst
+	all jobs that have this option set. The buffers are spread evenly between
+	participating jobs.
+
 .. option:: invalidate=bool
 
 	Invalidate the buffer/page cache parts of the files to be used prior to
@@ -1816,13 +1823,14 @@ Buffers and memory
 	**mmaphuge** to work, the system must have free huge pages allocated. This
 	can normally be checked and set by reading/writing
 	:file:`/proc/sys/vm/nr_hugepages` on a Linux system. Fio assumes a huge page
-	is 4MiB in size. So to calculate the number of huge pages you need for a
-	given job file, add up the I/O depth of all jobs (normally one unless
-	:option:`iodepth` is used) and multiply by the maximum bs set. Then divide
-	that number by the huge page size. You can see the size of the huge pages in
-	:file:`/proc/meminfo`. If no huge pages are allocated by having a non-zero
-	number in `nr_hugepages`, using **mmaphuge** or **shmhuge** will fail. Also
-	see :option:`hugepage-size`.
+        is 2 or 4MiB in size depending on the platform. So to calculate the
+        number of huge pages you need for a given job file, add up the I/O
+        depth of all jobs (normally one unless :option:`iodepth` is used) and
+        multiply by the maximum bs set. Then divide that number by the huge
+        page size. You can see the size of the huge pages in
+        :file:`/proc/meminfo`. If no huge pages are allocated by having a
+        non-zero number in `nr_hugepages`, using **mmaphuge** or **shmhuge**
+        will fail. Also see :option:`hugepage-size`.
 
 	**mmaphuge** also needs to have hugetlbfs mounted and the file location
 	should point there. So if it's mounted in :file:`/huge`, you would use
@@ -1841,10 +1849,12 @@ Buffers and memory
 
 .. option:: hugepage-size=int
 
-	Defines the size of a huge page. Must at least be equal to the system
-	setting, see :file:`/proc/meminfo`. Defaults to 4MiB.  Should probably
-	always be a multiple of megabytes, so using ``hugepage-size=Xm`` is the
-	preferred way to set this to avoid setting a non-pow-2 bad value.
+        Defines the size of a huge page. Must at least be equal to the system
+        setting, see :file:`/proc/meminfo` and
+        :file:`/sys/kernel/mm/hugepages/`. Defaults to 2 or 4MiB depending on
+        the platform.  Should probably always be a multiple of megabytes, so
+        using ``hugepage-size=Xm`` is the preferred way to set this to avoid
+        setting a non-pow-2 bad value.
 
 .. option:: lockmem=int
 
@@ -1867,7 +1877,7 @@ I/O size
 	If this option is not specified, fio will use the full size of the given
 	files or devices.  If the files do not exist, size must be given. It is also
 	possible to give size as a percentage between 1 and 100. If ``size=20%`` is
-	given, fio will use 20% of the full size of the given files or devices. 
+	given, fio will use 20% of the full size of the given files or devices.
 	In ZBD mode, value can also be set as number of zones using 'z'.
 	Can be combined with :option:`offset` to constrain the start and end range
 	that I/O will be done within.
@@ -1940,6 +1950,10 @@ I/O engine
 		**io_uring**
 			Fast Linux native asynchronous I/O. Supports async IO
 			for both direct and buffered IO.
+			This engine defines engine specific options.
+
+		**io_uring_cmd**
+			Fast Linux native asynchronous I/O for pass through commands.
 			This engine defines engine specific options.
 
 		**libaio**
@@ -2165,6 +2179,12 @@ I/O engine
 		**exec**
 			Execute 3rd party tools. Could be used to perform monitoring during jobs runtime.
 
+		**xnvme**
+			I/O engine using the xNVMe C API, for NVMe devices. The xnvme engine provides
+			flexibility to access GNU/Linux Kernel NVMe driver via libaio, IOCTLs, io_uring,
+			the SPDK NVMe driver, or your own custom NVMe driver. The xnvme engine includes
+			engine specific options. (See https://xnvme.io).
+
 I/O engine specific parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2239,22 +2259,34 @@ with the caveat that when used on the command line, they must come after the
 	values for trim IOs are ignored. This option is mutually exclusive with
 	the :option:`cmdprio_percentage` option.
 
-.. option:: fixedbufs : [io_uring]
+.. option:: fixedbufs : [io_uring] [io_uring_cmd]
 
-    If fio is asked to do direct IO, then Linux will map pages for each
-    IO call, and release them when IO is done. If this option is set, the
-    pages are pre-mapped before IO is started. This eliminates the need to
-    map and release for each IO. This is more efficient, and reduces the
-    IO latency as well.
+	If fio is asked to do direct IO, then Linux will map pages for each
+	IO call, and release them when IO is done. If this option is set, the
+	pages are pre-mapped before IO is started. This eliminates the need to
+	map and release for each IO. This is more efficient, and reduces the
+	IO latency as well.
 
-.. option:: registerfiles : [io_uring]
+.. option:: nonvectored : [io_uring] [io_uring_cmd]
+
+	With this option, fio will use non-vectored read/write commands, where
+	address must contain the address directly. Default is -1.
+
+.. option:: force_async=int : [io_uring] [io_uring_cmd]
+
+	Normal operation for io_uring is to try and issue an sqe as
+	non-blocking first, and if that fails, execute it in an async manner.
+	With this option set to N, then every N request fio will ask sqe to
+	be issued in an async manner. Default is 0.
+
+.. option:: registerfiles : [io_uring] [io_uring_cmd]
 
 	With this option, fio registers the set of files being used with the
 	kernel. This avoids the overhead of managing file counts in the kernel,
 	making the submission and completion part more lightweight. Required
 	for the below :option:`sqthread_poll` option.
 
-.. option:: sqthread_poll : [io_uring]
+.. option:: sqthread_poll : [io_uring] [io_uring_cmd] [xnvme]
 
 	Normally fio will submit IO by issuing a system call to notify the
 	kernel of available items in the SQ ring. If this option is set, the
@@ -2262,14 +2294,19 @@ with the caveat that when used on the command line, they must come after the
 	This frees up cycles for fio, at the cost of using more CPU in the
 	system.
 
-.. option:: sqthread_poll_cpu : [io_uring]
+.. option:: sqthread_poll_cpu : [io_uring] [io_uring_cmd]
 
 	When :option:`sqthread_poll` is set, this option provides a way to
 	define which CPU should be used for the polling thread.
 
+.. option:: cmd_type=str : [io_uring_cmd]
+
+	Specifies the type of uring passthrough command to be used. Supported
+	value is nvme. Default is nvme.
+
 .. option:: hipri
 
-   [io_uring]
+   [io_uring] [io_uring_cmd] [xnvme]
 
         If this option is set, fio will attempt to use polled IO completions.
         Normal IO completions generate interrupts to signal the completion of
@@ -2479,6 +2516,11 @@ with the caveat that when used on the command line, they must come after the
 	the full *type.id* string. If no type. prefix is given, fio will add
 	'client.' by default.
 
+.. option:: conf=str : [rados]
+
+    Specifies the configuration path of ceph cluster, so conf file does not
+    have to be /etc/ceph/ceph.conf.
+
 .. option:: busy_poll=bool : [rbd,rados]
 
         Poll store instead of waiting for completion. Usually this provides better
@@ -2650,6 +2692,20 @@ with the caveat that when used on the command line, they must come after the
 
 	The S3 key/access id.
 
+.. option:: http_s3_sse_customer_key=str : [http]
+
+        The encryption customer key in SSE server side.
+
+.. option:: http_s3_sse_customer_algorithm=str : [http]
+
+        The encryption customer algorithm in SSE server side.
+        Default is **AES256**
+
+.. option:: http_s3_storage_class=str : [http]
+
+        Which storage class to access. User-customizable settings.
+        Default is **STANDARD**
+
 .. option:: http_swift_auth_token=str : [http]
 
 	The Swift auth token. See the example configuration file on how
@@ -2718,6 +2774,66 @@ with the caveat that when used on the command line, they must come after the
 .. option:: std_redirect=bool : [exec]
 
 	If set, stdout and stderr streams are redirected to files named from the job name. Default is true.
+
+.. option:: xnvme_async=str : [xnvme]
+
+	Select the xnvme async command interface. This can take these values.
+
+	**emu**
+		This is default and use to emulate asynchronous I/O by using a
+		single thread to create a queue pair on top of a synchronous
+		I/O interface using the NVMe driver IOCTL.
+	**thrpool**
+		Emulate an asynchronous I/O interface with a pool of userspace
+		threads on top of a synchronous I/O interface using the NVMe
+		driver IOCTL. By default four threads are used.
+	**io_uring**
+		Linux native asynchronous I/O interface which supports both
+		direct and buffered I/O.
+	**io_uring_cmd**
+		Fast Linux native asynchronous I/O interface for NVMe pass
+		through commands. This only works with NVMe character device
+		(/dev/ngXnY).
+	**libaio**
+		Use Linux aio for Asynchronous I/O.
+	**posix**
+		Use the posix asynchronous I/O interface to perform one or
+		more I/O operations asynchronously.
+	**nil**
+		Do not transfer any data; just pretend to. This is mainly used
+		for introspective performance evaluation.
+
+.. option:: xnvme_sync=str : [xnvme]
+
+	Select the xnvme synchronous command interface. This can take these values.
+
+	**nvme**
+		This is default and uses Linux NVMe Driver ioctl() for
+		synchronous I/O.
+	**psync**
+		This supports regular as well as vectored pread() and pwrite()
+		commands.
+	**block**
+		This is the same as psync except that it also supports zone
+		management commands using Linux block layer IOCTLs.
+
+.. option:: xnvme_admin=str : [xnvme]
+
+	Select the xnvme admin command interface. This can take these values.
+
+	**nvme**
+		This is default and uses linux NVMe Driver ioctl() for admin
+		commands.
+	**block**
+		Use Linux Block Layer ioctl() and sysfs for admin commands.
+
+.. option:: xnvme_dev_nsid=int : [xnvme]
+
+	xnvme namespace identifier for userspace NVMe driver, such as SPDK.
+
+.. option:: xnvme_iovec=int : [xnvme]
+
+	If this option is set. xnvme will use vectored read/write commands.
 
 I/O depth
 ~~~~~~~~~
@@ -2962,7 +3078,8 @@ I/O replay
 
 	Write the issued I/O patterns to the specified file. See
 	:option:`read_iolog`.  Specify a separate file for each job, otherwise the
-	iologs will be interspersed and the file may be corrupt.
+        iologs will be interspersed and the file may be corrupt. This file will
+        be opened in append mode.
 
 .. option:: read_iolog=str
 
@@ -3810,6 +3927,13 @@ Error handling
 	appended, the total error count and the first error. The error field given
 	in the stats is the first error that was hit during the run.
 
+	Note: a write error from the device may go unnoticed by fio when using
+	buffered IO, as the write() (or similar) system call merely dirties the
+	kernel pages, unless :option:`sync` or :option:`direct` is used. Device IO
+	errors occur when the dirty data is actually written out to disk. If fully
+	sync writes aren't desirable, :option:`fsync` or :option:`fdatasync` can be
+	used as well. This is specific to writes, as reads are always synchronous.
+
 	The allowed values are:
 
 		**none**
@@ -4078,24 +4202,31 @@ writes in the example above).  In the order listed, they denote:
 **slat**
 		Submission latency (**min** being the minimum, **max** being the
 		maximum, **avg** being the average, **stdev** being the standard
-		deviation).  This is the time it took to submit the I/O.  For
-		sync I/O this row is not displayed as the slat is really the
-		completion latency (since queue/complete is one operation there).
-		This value can be in nanoseconds, microseconds or milliseconds ---
-		fio will choose the most appropriate base and print that (in the
-		example above nanoseconds was the best scale).  Note: in :option:`--minimal` mode
-		latencies are always expressed in microseconds.
+                deviation).  This is the time from when fio initialized the I/O
+                to submission.  For synchronous ioengines this includes the time
+                up until just before the ioengine's queue function is called.
+                For asynchronous ioengines this includes the time up through the
+                completion of the ioengine's queue function (and commit function
+                if it is defined). For sync I/O this row is not displayed as the
+                slat is negligible.  This value can be in nanoseconds,
+                microseconds or milliseconds --- fio will choose the most
+                appropriate base and print that (in the example above
+                nanoseconds was the best scale).  Note: in :option:`--minimal`
+                mode latencies are always expressed in microseconds.
 
 **clat**
 		Completion latency. Same names as slat, this denotes the time from
-		submission to completion of the I/O pieces. For sync I/O, clat will
-		usually be equal (or very close) to 0, as the time from submit to
-		complete is basically just CPU time (I/O has already been done, see slat
-		explanation).
+                submission to completion of the I/O pieces. For sync I/O, this
+                represents the time from when the I/O was submitted to the
+                operating system to when it was completed. For asynchronous
+                ioengines this is the time from when the ioengine's queue (and
+                commit if available) functions were completed to when the I/O's
+                completion was reaped by fio.
 
 **lat**
 		Total latency. Same names as slat and clat, this denotes the time from
 		when fio created the I/O unit to completion of the I/O operation.
+                It is the sum of submission and completion latency.
 
 **bw**
 		Bandwidth statistics based on samples. Same names as the xlat stats,
@@ -4398,7 +4529,9 @@ given in bytes. The `action` can be one of these:
 
 **wait**
 	   Wait for `offset` microseconds. Everything below 100 is discarded.
-	   The time is relative to the previous `wait` statement.
+	   The time is relative to the previous `wait` statement. Note that
+	   action `wait` is not allowed as of version 3, as the same behavior
+	   can be achieved using timestamps.
 **read**
 	   Read `length` bytes beginning from `offset`.
 **write**
@@ -4409,6 +4542,31 @@ given in bytes. The `action` can be one of these:
 	   :manpage:`fdatasync(2)` the file.
 **trim**
 	   Trim the given file from the given `offset` for `length` bytes.
+
+
+Trace file format v3
+~~~~~~~~~~~~~~~~~~~~
+
+The third version of the trace file format was added in fio version 3.31. It
+forces each action to have a timestamp associated with it.
+
+The first line of the trace file has to be::
+
+    fio version 3 iolog
+
+Following this can be lines in two different formats, which are described below.
+
+The file management format::
+
+    timestamp filename action
+
+The file I/O action format::
+
+    timestamp filename action offset length
+
+The `timestamp` is relative to the beginning of the run (ie starts at 0). The
+`filename`, `action`, `offset` and `length`  are identical to version 2, except
+that version 3 does not allow the `wait` action.
 
 
 I/O Replay - Merging Traces

@@ -24,6 +24,13 @@
 
 static FLIST_HEAD(engine_list);
 
+static inline bool async_ioengine_sync_trim(struct thread_data *td,
+					    struct io_u	*io_u)
+{
+	return td_ioengine_flagged(td, FIO_ASYNCIO_SYNC_TRIM) &&
+		io_u->ddir == DDIR_TRIM;
+}
+
 static bool check_engine_ops(struct thread_data *td, struct ioengine_ops *ops)
 {
 	if (ops->version != FIO_IOOPS_VERSION) {
@@ -223,6 +230,8 @@ struct ioengine_ops *load_ioengine(struct thread_data *td)
  */
 void free_ioengine(struct thread_data *td)
 {
+	assert(td != NULL && td->io_ops != NULL);
+
 	dprint(FD_IO, "free ioengine %s\n", td->io_ops->name);
 
 	if (td->eo && td->io_ops->options) {
@@ -348,17 +357,17 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	io_u->resid = 0;
 
 	if (td_ioengine_flagged(td, FIO_SYNCIO) ||
-		(td_ioengine_flagged(td, FIO_ASYNCIO_SYNC_TRIM) && 
-		io_u->ddir == DDIR_TRIM)) {
-		if (fio_fill_issue_time(td))
+		async_ioengine_sync_trim(td, io_u)) {
+		if (fio_fill_issue_time(td)) {
 			fio_gettime(&io_u->issue_time, NULL);
 
-		/*
-		 * only used for iolog
-		 */
-		if (td->o.read_iolog_file)
-			memcpy(&td->last_issue, &io_u->issue_time,
-					sizeof(io_u->issue_time));
+			/*
+			 * only used for iolog
+			 */
+			if (td->o.read_iolog_file)
+				memcpy(&td->last_issue, &io_u->issue_time,
+						sizeof(io_u->issue_time));
+		}
 	}
 
 
@@ -433,17 +442,18 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	}
 
 	if (!td_ioengine_flagged(td, FIO_SYNCIO) &&
-		(!td_ioengine_flagged(td, FIO_ASYNCIO_SYNC_TRIM) ||
-		 io_u->ddir != DDIR_TRIM)) {
-		if (fio_fill_issue_time(td))
+		!async_ioengine_sync_trim(td, io_u)) {
+		if (fio_fill_issue_time(td) &&
+			!td_ioengine_flagged(td, FIO_ASYNCIO_SETS_ISSUE_TIME)) {
 			fio_gettime(&io_u->issue_time, NULL);
 
-		/*
-		 * only used for iolog
-		 */
-		if (td->o.read_iolog_file)
-			memcpy(&td->last_issue, &io_u->issue_time,
-					sizeof(io_u->issue_time));
+			/*
+			 * only used for iolog
+			 */
+			if (td->o.read_iolog_file)
+				memcpy(&td->last_issue, &io_u->issue_time,
+						sizeof(io_u->issue_time));
+		}
 	}
 
 	return ret;

@@ -1541,7 +1541,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 	if (fixup_options(td))
 		goto err;
 
-	if (init_dedupe_working_set_seeds(td))
+	if (!td->o.dedupe_global && init_dedupe_working_set_seeds(td, 0))
 		goto err;
 
 	/*
@@ -2810,6 +2810,15 @@ int parse_cmd_line(int argc, char *argv[], int client_type)
 				break;
 
 			ret = fio_cmd_ioengine_option_parse(td, opt, val);
+
+			if (ret) {
+				if (td) {
+					put_job(td);
+					td = NULL;
+				}
+				do_exit++;
+				exit_val = 1;
+			}
 			break;
 		}
 		case 'w':

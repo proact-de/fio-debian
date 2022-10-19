@@ -23,25 +23,21 @@ DPKGCFG
         libcunit1-dev
         libcurl4-openssl-dev
         libfl-dev
-        libibverbs-dev
         libnuma-dev
-        librdmacm-dev
+	libnfs-dev
         valgrind
     )
     case "${CI_TARGET_ARCH}" in
         "i686")
             sudo dpkg --add-architecture i386
-            opts="--allow-downgrades"
             pkgs=("${pkgs[@]/%/:i386}")
             pkgs+=(
                 gcc-multilib
                 pkg-config:i386
                 zlib1g-dev:i386
-		libpcre2-8-0=10.34-7
             )
             ;;
         "x86_64")
-            opts=""
             pkgs+=(
                 libglusterfs-dev
                 libgoogle-perftools-dev
@@ -52,7 +48,11 @@ DPKGCFG
                 librbd-dev
                 libtcmalloc-minimal4
                 nvidia-cuda-dev
+                libibverbs-dev
+                librdmacm-dev
             )
+	    echo "Removing libunwind-14-dev because of conflicts with libunwind-dev"
+	    sudo apt remove -y libunwind-14-dev
             ;;
     esac
 
@@ -65,8 +65,8 @@ DPKGCFG
 
     echo "Updating APT..."
     sudo apt-get -qq update
-    echo "Installing packages..."
-    sudo apt-get install "$opts" -o APT::Immediate-Configure=false --no-install-recommends -qq -y "${pkgs[@]}"
+    echo "Installing packages... ${pkgs[@]}"
+    sudo apt-get install -o APT::Immediate-Configure=false --no-install-recommends -qq -y "${pkgs[@]}"
 }
 
 install_linux() {
@@ -78,11 +78,18 @@ install_macos() {
     #echo "Updating homebrew..."
     #brew update >/dev/null 2>&1
     echo "Installing packages..."
-    HOMEBREW_NO_AUTO_UPDATE=1 brew install cunit
+    HOMEBREW_NO_AUTO_UPDATE=1 brew install cunit libnfs
     pip3 install scipy six sphinx
 }
 
 main() {
+    if [ "${CI_TARGET_BUILD}" = "android" ]; then
+	echo "Installing Android NDK..."
+	wget --quiet https://dl.google.com/android/repository/android-ndk-r24-linux.zip
+	unzip -q android-ndk-r24-linux.zip
+	return 0
+    fi
+
     set_ci_target_os
 
     install_function="install_${CI_TARGET_OS}"

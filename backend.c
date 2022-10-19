@@ -90,6 +90,25 @@ static void sig_int(int sig)
 	}
 }
 
+#ifdef WIN32
+static void sig_break(int sig)
+{
+	struct thread_data *td;
+	int i;
+
+	sig_int(sig);
+
+	/**
+	 * Windows terminates all job processes on SIGBREAK after the handler
+	 * returns, so give them time to wrap-up and give stats
+	 */
+	for_each_td(td, i) {
+		while (td->runstate < TD_EXITED)
+			sleep(1);
+	}
+}
+#endif
+
 void sig_show_status(int sig)
 {
 	show_running_run_stats();
@@ -112,7 +131,7 @@ static void set_sig_handlers(void)
 /* Windows uses SIGBREAK as a quit signal from other applications */
 #ifdef WIN32
 	memset(&act, 0, sizeof(act));
-	act.sa_handler = sig_int;
+	act.sa_handler = sig_break;
 	act.sa_flags = SA_RESTART;
 	sigaction(SIGBREAK, &act, NULL);
 #endif
@@ -2021,7 +2040,7 @@ static void reap_threads(unsigned int *nr_running, uint64_t *t_rate,
 	for_each_td(td, i) {
 		int flags = 0;
 
-		 if (!strcmp(td->o.ioengine, "cpuio"))
+		if (!strcmp(td->o.ioengine, "cpuio"))
 			cputhreads++;
 		else
 			realthreads++;
@@ -2432,9 +2451,9 @@ reap:
 							strerror(ret));
 			} else {
 				pid_t pid;
-				struct fio_file **files;
+				void *eo;
 				dprint(FD_PROCESS, "will fork\n");
-				files = td->files;
+				eo = td->eo;
 				read_barrier();
 				pid = fork();
 				if (!pid) {
@@ -2444,9 +2463,7 @@ reap:
 					_exit(ret);
 				} else if (i == fio_debug_jobno)
 					*fio_debug_jobp = pid;
-				// freeing previously allocated memory for files
-				// this memory freed MUST NOT be shared between processes, only the pointer itself may be shared within TD
-				free(files);
+				free(eo);
 				free(fd);
 				fd = NULL;
 			}
@@ -2565,6 +2582,11 @@ int fio_backend(struct sk_out *sk_out)
 		setup_log(&agg_io_log[DDIR_READ], &p, "agg-read_bw.log");
 		setup_log(&agg_io_log[DDIR_WRITE], &p, "agg-write_bw.log");
 		setup_log(&agg_io_log[DDIR_TRIM], &p, "agg-trim_bw.log");
+	}
+
+	if (init_global_dedupe_working_set_seeds()) {
+		log_err("fio: failed to initialize global dedupe working set\n");
+		return 1;
 	}
 
 	startup_sem = fio_sem_init(FIO_SEM_LOCKED);

@@ -2140,9 +2140,14 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .help = "DAOS File System (dfs) IO engine",
 			  },
 #endif
-#ifdef CONFIG_NFS
+#ifdef CONFIG_LIBNFS
 			  { .ival = "nfs",
 			    .help = "NFS IO engine",
+			  },
+#endif
+#ifdef CONFIG_LIBXNVME
+			  { .ival = "xnvme",
+			    .help = "XNVME IO engine",
 			  },
 #endif
 		},
@@ -4662,6 +4667,16 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.minval	= 0,
 		.help	= "Percentage of buffers that are dedupable",
 		.interval = 1,
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_IO_BUF,
+	},
+	{
+		.name	= "dedupe_global",
+		.lname	= "Global deduplication",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct thread_options, dedupe_global),
+		.help	= "Share deduplication buffers across jobs",
+		.def	= "0",
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_IO_BUF,
 	},
