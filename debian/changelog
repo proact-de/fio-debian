@@ -1,4 +1,4 @@
-fio (3.32-2) UNRELEASED; urgency=medium
+fio (3.32-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.32 (Closes: #1022045).
   * control:
