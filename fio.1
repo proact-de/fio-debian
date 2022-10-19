@@ -292,7 +292,7 @@ For Zone Block Device Mode:
 .RS
 .P
 .PD 0
-z means Zone 
+z means Zone
 .P
 .PD
 .RE
@@ -1083,7 +1083,7 @@ provided. Data before the given offset will not be touched. This
 effectively caps the file size at `real_size \- offset'. Can be combined with
 \fBsize\fR to constrain the start and end range of the I/O workload.
 A percentage can be specified by a number between 1 and 100 followed by '%',
-for example, `offset=20%' to specify 20%. In ZBD mode, value can be set as 
+for example, `offset=20%' to specify 20%. In ZBD mode, value can be set as
 number of zones using 'z'.
 .TP
 .BI offset_align \fR=\fPint
@@ -1099,7 +1099,7 @@ specified). This option is useful if there are several jobs which are
 intended to operate on a file in parallel disjoint segments, with even
 spacing between the starting points. Percentages can be used for this option.
 If a percentage is given, the generated offset will be aligned to the minimum
-\fBblocksize\fR or to the value of \fBoffset_align\fR if provided.In ZBD mode, value 
+\fBblocksize\fR or to the value of \fBoffset_align\fR if provided.In ZBD mode, value
 can be set as number of zones using 'z'.
 .TP
 .BI number_ios \fR=\fPint
@@ -1553,6 +1553,15 @@ Note that \fBsize\fR needs to be explicitly provided and only 1 file
 per job is supported
 .RE
 .TP
+.BI dedupe_global \fR=\fPbool
+This controls whether the deduplication buffers will be shared amongst
+all jobs that have this option set. The buffers are spread evenly between
+participating jobs.
+.P
+.RS
+Note that \fBdedupe_mode\fR must be set to \fBworking_set\fR for this to work.
+Can be used in combination with compression
+.TP
 .BI invalidate \fR=\fPbool
 Invalidate the buffer/page cache parts of the files to be used prior to
 starting I/O if the platform and file type support it. Defaults to true.
@@ -1622,11 +1631,11 @@ multiplied by the I/O depth given. Note that for \fBshmhuge\fR and
 \fBmmaphuge\fR to work, the system must have free huge pages allocated. This
 can normally be checked and set by reading/writing
 `/proc/sys/vm/nr_hugepages' on a Linux system. Fio assumes a huge page
-is 4MiB in size. So to calculate the number of huge pages you need for a
-given job file, add up the I/O depth of all jobs (normally one unless
-\fBiodepth\fR is used) and multiply by the maximum bs set. Then divide
-that number by the huge page size. You can see the size of the huge pages in
-`/proc/meminfo'. If no huge pages are allocated by having a non-zero
+is 2 or 4MiB in size depending on the platform. So to calculate the number of
+huge pages you need for a given job file, add up the I/O depth of all jobs
+(normally one unless \fBiodepth\fR is used) and multiply by the maximum bs set.
+Then divide that number by the huge page size. You can see the size of the huge
+pages in `/proc/meminfo'. If no huge pages are allocated by having a non-zero
 number in `nr_hugepages', using \fBmmaphuge\fR or \fBshmhuge\fR will fail. Also
 see \fBhugepage\-size\fR.
 .P
@@ -1646,10 +1655,11 @@ of subsequent I/O memory buffers is the sum of the \fBiomem_align\fR and
 \fBbs\fR used.
 .TP
 .BI hugepage\-size \fR=\fPint
-Defines the size of a huge page. Must at least be equal to the system
-setting, see `/proc/meminfo'. Defaults to 4MiB. Should probably
-always be a multiple of megabytes, so using `hugepage\-size=Xm' is the
-preferred way to set this to avoid setting a non-pow-2 bad value.
+Defines the size of a huge page. Must at least be equal to the system setting,
+see `/proc/meminfo' and `/sys/kernel/mm/hugepages/'. Defaults to 2 or 4MiB
+depending on the platform. Should probably always be a multiple of megabytes,
+so using `hugepage\-size=Xm' is the preferred way to set this to avoid setting
+a non-pow-2 bad value.
 .TP
 .BI lockmem \fR=\fPint
 Pin the specified amount of memory with \fBmlock\fR\|(2). Can be used to
@@ -1668,7 +1678,7 @@ If this option is not specified, fio will use the full size of the given
 files or devices. If the files do not exist, size must be given. It is also
 possible to give size as a percentage between 1 and 100. If `size=20%' is
 given, fio will use 20% of the full size of the given files or devices. In ZBD mode,
-size can be given in units of number of zones using 'z'. Can be combined with \fBoffset\fR to 
+size can be given in units of number of zones using 'z'. Can be combined with \fBoffset\fR to
 constrain the start and end range that I/O will be done within.
 .TP
 .BI io_size \fR=\fPint[%|z] "\fR,\fB io_limit" \fR=\fPint[%|z]
@@ -1687,7 +1697,7 @@ also be set as number of zones using 'z'.
 .BI filesize \fR=\fPirange(int)
 Individual file sizes. May be a range, in which case fio will select sizes
 for files at random within the given range. If not given, each created file
-is the same size. This option overrides \fBsize\fR in terms of file size, 
+is the same size. This option overrides \fBsize\fR in terms of file size,
 i.e. \fBsize\fR becomes merely the default for \fBio_size\fR (and
 has no effect it all if \fBio_size\fR is set explicitly).
 .TP
@@ -1728,6 +1738,15 @@ Basic \fBpreadv\fR\|(2) or \fBpwritev\fR\|(2) I/O.
 .TP
 .B pvsync2
 Basic \fBpreadv2\fR\|(2) or \fBpwritev2\fR\|(2) I/O.
+.TP
+.B io_uring
+Fast Linux native asynchronous I/O. Supports async IO
+for both direct and buffered IO.
+This engine defines engine specific options.
+.TP
+.B io_uring_cmd
+Fast Linux native asynchronous I/O for passthrough commands.
+This engine defines engine specific options.
 .TP
 .B libaio
 Linux native asynchronous I/O. Note that Linux may only support
@@ -1956,6 +1975,12 @@ via kernel NFS.
 .TP
 .B exec
 Execute 3rd party tools. Could be used to perform monitoring during jobs runtime.
+.TP
+.B xnvme
+I/O engine using the xNVMe C API, for NVMe devices. The xnvme engine provides
+flexibility to access GNU/Linux Kernel NVMe driver via libaio, IOCTLs, io_uring,
+the SPDK NVMe driver, or your own custom NVMe driver. The xnvme engine includes
+engine specific options. (See \fIhttps://xnvme.io/\fR).
 .SS "I/O engine specific parameters"
 In addition, there are some parameters which are only valid when a specific
 \fBioengine\fR is in use. These are used identically to normal parameters,
@@ -2024,34 +2049,48 @@ for trim IOs are ignored. This option is mutually exclusive with the
 \fBcmdprio_percentage\fR option.
 .RE
 .TP
-.BI (io_uring)fixedbufs
+.BI (io_uring,io_uring_cmd)fixedbufs
 If fio is asked to do direct IO, then Linux will map pages for each IO call, and
 release them when IO is done. If this option is set, the pages are pre-mapped
 before IO is started. This eliminates the need to map and release for each IO.
 This is more efficient, and reduces the IO latency as well.
 .TP
-.BI (io_uring)hipri
+.BI (io_uring,io_uring_cmd)nonvectored
+With this option, fio will use non-vectored read/write commands, where address
+must contain the address directly. Default is -1.
+.TP
+.BI (io_uring,io_uring_cmd)force_async
+Normal operation for io_uring is to try and issue an sqe as non-blocking first,
+and if that fails, execute it in an async manner. With this option set to N,
+then every N request fio will ask sqe to be issued in an async manner. Default
+is 0.
+.TP
+.BI (io_uring,io_uring_cmd,xnvme)hipri
 If this option is set, fio will attempt to use polled IO completions. Normal IO
 completions generate interrupts to signal the completion of IO, polled
 completions do not. Hence they are require active reaping by the application.
 The benefits are more efficient IO for high IOPS scenarios, and lower latencies
 for low queue depth IO.
 .TP
-.BI (io_uring)registerfiles
+.BI (io_uring,io_uring_cmd)registerfiles
 With this option, fio registers the set of files being used with the kernel.
 This avoids the overhead of managing file counts in the kernel, making the
 submission and completion part more lightweight. Required for the below
 sqthread_poll option.
 .TP
-.BI (io_uring)sqthread_poll
+.BI (io_uring,io_uring_cmd,xnvme)sqthread_poll
 Normally fio will submit IO by issuing a system call to notify the kernel of
 available items in the SQ ring. If this option is set, the act of submitting IO
 will be done by a polling thread in the kernel. This frees up cycles for fio, at
 the cost of using more CPU in the system.
 .TP
-.BI (io_uring)sqthread_poll_cpu
+.BI (io_uring,io_uring_cmd)sqthread_poll_cpu
 When `sqthread_poll` is set, this option provides a way to define which CPU
 should be used for the polling thread.
+.TP
+.BI (io_uring_cmd)cmd_type \fR=\fPstr
+Specifies the type of uring passthrough command to be used. Supported
+value is nvme. Default is nvme.
 .TP
 .BI (libaio)userspace_reap
 Normally, with the libaio engine in use, fio will use the
@@ -2228,6 +2267,10 @@ Ceph cluster. If the \fBclustername\fR is specified, the \fBclientname\fR shall 
 the full *type.id* string. If no type. prefix is given, fio will add 'client.'
 by default.
 .TP
+.BI (rados)conf \fR=\fPstr
+Specifies the configuration path of ceph cluster, so conf file does not
+have to be /etc/ceph/ceph.conf.
+.TP
 .BI (rbd,rados)busy_poll \fR=\fPbool
 Poll store instead of waiting for completion. Usually this provides better
 throughput at cost of higher(up to 100%) CPU utilization.
@@ -2264,6 +2307,15 @@ The S3 secret key.
 .TP
 .BI (http)http_s3_keyid \fR=\fPstr
 The S3 key/access id.
+.TP
+.BI (http)http_s3_sse_customer_key \fR=\fPstr
+The encryption customer key in SSE server side.
+.TP
+.BI (http)http_s3_sse_customer_algorithm \fR=\fPstr
+The encryption customer algorithm in SSE server side. Default is \fBAES256\fR
+.TP
+.BI (http)http_s3_storage_class \fR=\fPstr
+Which storage class to access. User-customizable settings. Default is \fBSTANDARD\fR
 .TP
 .BI (http)http_swift_auth_token \fR=\fPstr
 The Swift auth token. See the example configuration file on how to
@@ -2471,6 +2523,74 @@ Defines the time between the SIGTERM and SIGKILL signals. Default is 1 second.
 .TP
 .BI (exec)std_redirect\fR=\fbool
 If set, stdout and stderr streams are redirected to files named from the job name. Default is true.
+.TP
+.BI (xnvme)xnvme_async\fR=\fPstr
+Select the xnvme async command interface. This can take these values.
+.RS
+.RS
+.TP
+.B emu
+This is default and use to emulate asynchronous I/O by using a single thread to
+create a queue pair on top of a synchronous I/O interface using the NVMe driver
+IOCTL.
+.TP
+.BI thrpool
+Emulate an asynchronous I/O interface with a pool of userspace threads on top
+of a synchronous I/O interface using the NVMe driver IOCTL. By default four
+threads are used.
+.TP
+.BI io_uring
+Linux native asynchronous I/O interface which supports both direct and buffered
+I/O.
+.TP
+.BI libaio
+Use Linux aio for Asynchronous I/O
+.TP
+.BI posix
+Use the posix asynchronous I/O interface to perform one or more I/O operations
+asynchronously.
+.TP
+.BI nil
+Do not transfer any data; just pretend to. This is mainly used for
+introspective performance evaluation.
+.RE
+.RE
+.TP
+.BI (xnvme)xnvme_sync\fR=\fPstr
+Select the xnvme synchronous command interface. This can take these values.
+.RS
+.RS
+.TP
+.B nvme
+This is default and uses Linux NVMe Driver ioctl() for synchronous I/O.
+.TP
+.BI psync
+This supports regular as well as vectored pread() and pwrite() commands.
+.TP
+.BI block
+This is the same as psync except that it also supports zone management
+commands using Linux block layer IOCTLs.
+.RE
+.RE
+.TP
+.BI (xnvme)xnvme_admin\fR=\fPstr
+Select the xnvme admin command interface. This can take these values.
+.RS
+.RS
+.TP
+.B nvme
+This is default and uses Linux NVMe Driver ioctl() for admin commands.
+.TP
+.BI block
+Use Linux Block Layer ioctl() and sysfs for admin commands.
+.RE
+.RE
+.TP
+.BI (xnvme)xnvme_dev_nsid\fR=\fPint
+xnvme namespace identifier for userspace NVMe driver such as SPDK.
+.TP
+.BI (xnvme)xnvme_iovec
+If this option is set, xnvme will use vectored read/write commands.
 .SS "I/O depth"
 .TP
 .BI iodepth \fR=\fPint
@@ -2690,7 +2810,8 @@ of milliseconds. Defaults to 1000.
 .BI write_iolog \fR=\fPstr
 Write the issued I/O patterns to the specified file. See
 \fBread_iolog\fR. Specify a separate file for each job, otherwise the
-iologs will be interspersed and the file may be corrupt.
+iologs will be interspersed and the file may be corrupt. This file will be
+opened in append mode.
 .TP
 .BI read_iolog \fR=\fPstr
 Open an iolog with the specified filename and replay the I/O patterns it
@@ -3485,6 +3606,16 @@ EILSEQ) until the runtime is exceeded or the I/O size specified is
 completed. If this option is used, there are two more stats that are
 appended, the total error count and the first error. The error field given
 in the stats is the first error that was hit during the run.
+.RS
+.P
+Note: a write error from the device may go unnoticed by fio when using buffered
+IO, as the write() (or similar) system call merely dirties the kernel pages,
+unless `sync' or `direct' is used. Device IO errors occur when the dirty data is
+actually written out to disk. If fully sync writes aren't desirable, `fsync' or
+`fdatasync' can be used as well. This is specific to writes, as reads are always
+synchronous.
+.RS
+.P
 The allowed values are:
 .RS
 .RS
@@ -4117,7 +4248,9 @@ given in bytes. The `action' can be one of these:
 .TP
 .B wait
 Wait for `offset' microseconds. Everything below 100 is discarded.
-The time is relative to the previous `wait' statement.
+The time is relative to the previous `wait' statement. Note that action `wait`
+is not allowed as of version 3, as the same behavior can be achieved using
+timestamps.
 .TP
 .B read
 Read `length' bytes beginning from `offset'.
@@ -4133,6 +4266,37 @@ Write `length' bytes beginning from `offset'.
 .TP
 .B trim
 Trim the given file from the given `offset' for `length' bytes.
+.RE
+.RE
+.RE
+.TP
+.B Trace file format v3
+The third version of the trace file format was added in fio version 3.31. It
+forces each action to have a timestamp associated with it.
+.RS
+.P
+The first line of the trace file has to be:
+.RS
+.P
+"fio version 3 iolog"
+.RE
+.P
+Following this can be lines in two different formats, which are described below.
+.P
+.B
+The file management format:
+.RS
+timestamp filename action
+.P
+.RE
+.B
+The file I/O action format:
+.RS
+timestamp filename action offset length
+.P
+The `timestamp` is relative to the beginning of the run (ie starts at 0). The
+`filename`, `action`, `offset` and `length`  are identical to version 2, except
+that version 3 does not allow the `wait` action.
 .RE
 .RE
 .SH I/O REPLAY \- MERGING TRACES

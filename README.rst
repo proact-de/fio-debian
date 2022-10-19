@@ -27,30 +27,19 @@ Source
 
 Fio resides in a git repo, the canonical place is:
 
-	git://git.kernel.dk/fio.git
-
-When inside a corporate firewall, git:// URL sometimes does not work.
-If git:// does not work, use the http protocol instead:
-
-	http://git.kernel.dk/fio.git
+	https://git.kernel.dk/cgit/fio/
 
 Snapshots are frequently generated and :file:`fio-git-*.tar.gz` include the git
 meta data as well. Other tarballs are archives of official fio releases.
 Snapshots can download from:
 
-	http://brick.kernel.dk/snaps/
+	https://brick.kernel.dk/snaps/
 
 There are also two official mirrors. Both of these are automatically synced with
 the main repository, when changes are pushed. If the main repo is down for some
 reason, either one of these is safe to use as a backup:
 
-	git://git.kernel.org/pub/scm/linux/kernel/git/axboe/fio.git
-
 	https://git.kernel.org/pub/scm/linux/kernel/git/axboe/fio.git
-
-or
-
-	git://github.com/axboe/fio.git
 
 	https://github.com/axboe/fio.git
 
@@ -70,7 +59,7 @@ email to majordomo@vger.kernel.org with
 
 in the body of the email. Archives can be found here:
 
-	http://www.spinics.net/lists/fio/
+	https://www.spinics.net/lists/fio/
 
 or here:
 
@@ -92,22 +81,33 @@ benchmark/test tools out there weren't flexible enough to do what he wanted.
 Jens Axboe <axboe@kernel.dk> 20060905
 
 
+Maintainers
+-----------
+
+Fio is maintained by Jens Axboe <axboe@kernel.dk and
+Vincent Fu <vincentfu@gmail.com> - however, for reporting bugs please use
+the fio reflector or the GitHub page rather than email any of them
+directly. By using the public resources, others will be able to learn from
+the responses too. Chances are also good that other members will be able to
+help with your inquiry as well.
+
+
 Binary packages
 ---------------
 
 Debian:
 	Starting with Debian "Squeeze", fio packages are part of the official
-	Debian repository. http://packages.debian.org/search?keywords=fio .
+	Debian repository. https://packages.debian.org/search?keywords=fio .
 
 Ubuntu:
 	Starting with Ubuntu 10.04 LTS (aka "Lucid Lynx"), fio packages are part
 	of the Ubuntu "universe" repository.
-	http://packages.ubuntu.com/search?keywords=fio .
+	https://packages.ubuntu.com/search?keywords=fio .
 
 Red Hat, Fedora, CentOS & Co:
 	Starting with Fedora 9/Extra Packages for Enterprise Linux 4, fio
 	packages are part of the Fedora/EPEL repositories.
-	https://apps.fedoraproject.org/packages/fio .
+	https://packages.fedoraproject.org/pkgs/fio/ .
 
 Mandriva:
 	Mandriva has integrated fio into their package repository, so installing
@@ -123,10 +123,12 @@ Solaris:
 	``pkgutil -i fio``.
 
 Windows:
-	Rebecca Cran <rebecca@bsdio.com> has fio packages for Windows at
-	https://bsdio.com/fio/ . The latest builds for Windows can also
-	be grabbed from https://ci.appveyor.com/project/axboe/fio by clicking
-	the latest x86 or x64 build, then selecting the ARTIFACTS tab.
+        Beginning with fio 3.31 Windows installers are available on GitHub at
+        https://github.com/axboe/fio/releases.  Rebecca Cran
+        <rebecca@bsdio.com> has fio packages for Windows at
+        https://bsdio.com/fio/ . The latest builds for Windows can also be
+        grabbed from https://ci.appveyor.com/project/axboe/fio by clicking the
+        latest x86 or x64 build and then selecting the Artifacts tab.
 
 BSDs:
 	Packages for BSDs may be available from their binary package repositories.
@@ -176,7 +178,7 @@ directory.
 
 How to compile fio on 64-bit Windows:
 
- 1. Install Cygwin (http://www.cygwin.com/). Install **make** and all
+ 1. Install Cygwin (https://www.cygwin.com/). Install **make** and all
     packages starting with **mingw64-x86_64**. Ensure
     **mingw64-x86_64-zlib** are installed if you wish
     to enable fio's log compression functionality.
@@ -205,8 +207,8 @@ browser to :file:`./doc/output/html/index.html`.  To build manual page run
 ``make -C doc man`` and then ``man doc/output/man/fio.1``.  To see what other
 output formats are supported run ``make -C doc help``.
 
-.. _reStructuredText: http://www.sphinx-doc.org/rest.html
-.. _Sphinx: http://www.sphinx-doc.org
+.. _reStructuredText: https://www.sphinx-doc.org/rest.html
+.. _Sphinx: https://www.sphinx-doc.org
 
 
 Platforms

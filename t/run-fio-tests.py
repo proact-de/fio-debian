@@ -311,21 +311,15 @@ class FioJobTest(FioExeTest):
         #
         # Sometimes fio informational messages are included at the top of the
         # JSON output, especially under Windows. Try to decode output as JSON
-        # data, lopping off up to the first four lines
+        # data, skipping everything until the first {
         #
         lines = file_data.splitlines()
-        for i in range(5):
-            file_data = '\n'.join(lines[i:])
-            try:
-                self.json_data = json.loads(file_data)
-            except json.JSONDecodeError:
-                continue
-            else:
-                logging.debug("Test %d: skipped %d lines decoding JSON data", self.testnum, i)
-                return
-
-        self.failure_reason = "{0} unable to decode JSON data,".format(self.failure_reason)
-        self.passed = False
+        file_data = '\n'.join(lines[lines.index("{"):])
+        try:
+            self.json_data = json.loads(file_data)
+        except json.JSONDecodeError:
+            self.failure_reason = "{0} unable to decode JSON data,".format(self.failure_reason)
+            self.passed = False
 
 
 class FioJobTest_t0005(FioJobTest):
@@ -533,6 +527,128 @@ class FioJobTest_t0014(FioJobTest):
             return
 
 
+class FioJobTest_t0015(FioJobTest):
+    """Test consists of fio test jobs t0015 and t0016
+    Confirm that mean(slat) + mean(clat) = mean(tlat)"""
+
+    def check_result(self):
+        super(FioJobTest_t0015, self).check_result()
+
+        if not self.passed:
+            return
+
+        slat = self.json_data['jobs'][0]['read']['slat_ns']['mean']
+        clat = self.json_data['jobs'][0]['read']['clat_ns']['mean']
+        tlat = self.json_data['jobs'][0]['read']['lat_ns']['mean']
+        logging.debug('Test %d: slat %f, clat %f, tlat %f', self.testnum, slat, clat, tlat)
+
+        if abs(slat + clat - tlat) > 1:
+            self.failure_reason = "{0} slat {1} + clat {2} = {3} != tlat {4},".format(
+                self.failure_reason, slat, clat, slat+clat, tlat)
+            self.passed = False
+
+
+class FioJobTest_t0019(FioJobTest):
+    """Test consists of fio test job t0019
+    Confirm that all offsets were touched sequentially"""
+
+    def check_result(self):
+        super(FioJobTest_t0019, self).check_result()
+
+        bw_log_filename = os.path.join(self.test_dir, "test_bw.log")
+        file_data, success = self.get_file(bw_log_filename)
+        log_lines = file_data.split('\n')
+
+        prev = -4096
+        for line in log_lines:
+            if len(line.strip()) == 0:
+                continue
+            cur = int(line.split(',')[4])
+            if cur - prev != 4096:
+                self.passed = False
+                self.failure_reason = "offsets {0}, {1} not sequential".format(prev, cur)
+                return
+            prev = cur
+
+        if cur/4096 != 255:
+            self.passed = False
+            self.failure_reason = "unexpected last offset {0}".format(cur)
+
+
+class FioJobTest_t0020(FioJobTest):
+    """Test consists of fio test jobs t0020 and t0021
+    Confirm that almost all offsets were touched non-sequentially"""
+
+    def check_result(self):
+        super(FioJobTest_t0020, self).check_result()
+
+        bw_log_filename = os.path.join(self.test_dir, "test_bw.log")
+        file_data, success = self.get_file(bw_log_filename)
+        log_lines = file_data.split('\n')
+
+        seq_count = 0
+        offsets = set()
+
+        prev = int(log_lines[0].split(',')[4])
+        for line in log_lines[1:]:
+            offsets.add(prev/4096)
+            if len(line.strip()) == 0:
+                continue
+            cur = int(line.split(',')[4])
+            if cur - prev == 4096:
+                seq_count += 1
+            prev = cur
+
+        # 10 is an arbitrary threshold
+        if seq_count > 10:
+            self.passed = False
+            self.failure_reason = "too many ({0}) consecutive offsets".format(seq_count)
+
+        if len(offsets) != 256:
+            self.passed = False
+            self.failure_reason += " number of offsets is {0} instead of 256".format(len(offsets))
+
+        for i in range(256):
+            if not i in offsets:
+                self.passed = False
+                self.failure_reason += " missing offset {0}".format(i*4096)
+
+
+class FioJobTest_t0022(FioJobTest):
+    """Test consists of fio test job t0022"""
+
+    def check_result(self):
+        super(FioJobTest_t0022, self).check_result()
+
+        bw_log_filename = os.path.join(self.test_dir, "test_bw.log")
+        file_data, success = self.get_file(bw_log_filename)
+        log_lines = file_data.split('\n')
+
+        filesize = 1024*1024
+        bs = 4096
+        seq_count = 0
+        offsets = set()
+
+        prev = int(log_lines[0].split(',')[4])
+        for line in log_lines[1:]:
+            offsets.add(prev/bs)
+            if len(line.strip()) == 0:
+                continue
+            cur = int(line.split(',')[4])
+            if cur - prev == bs:
+                seq_count += 1
+            prev = cur
+
+        # 10 is an arbitrary threshold
+        if seq_count > 10:
+            self.passed = False
+            self.failure_reason = "too many ({0}) consecutive offsets".format(seq_count)
+
+        if len(offsets) == filesize/bs:
+            self.passed = False
+            self.failure_reason += " no duplicate offsets found with norandommap=1".format(len(offsets))
+
+
 class FioJobTest_iops_rate(FioJobTest):
     """Test consists of fio test job t0009
     Confirm that job0 iops == 1000
@@ -546,9 +662,10 @@ class FioJobTest_iops_rate(FioJobTest):
             return
 
         iops1 = self.json_data['jobs'][0]['read']['iops']
-        iops2 = self.json_data['jobs'][1]['read']['iops']
-        ratio = iops2 / iops1
         logging.debug("Test %d: iops1: %f", self.testnum, iops1)
+        iops2 = self.json_data['jobs'][1]['read']['iops']
+        logging.debug("Test %d: iops2: %f", self.testnum, iops2)
+        ratio = iops2 / iops1
         logging.debug("Test %d: ratio: %f", self.testnum, ratio)
 
         if iops1 < 950 or iops1 > 1050:
@@ -566,6 +683,7 @@ class Requirements(object):
 
     _linux = False
     _libaio = False
+    _io_uring = False
     _zbd = False
     _root = False
     _zoned_nullb = False
@@ -589,6 +707,12 @@ class Requirements(object):
                 Requirements._zbd = "CONFIG_HAS_BLKZONED" in contents
                 Requirements._libaio = "CONFIG_LIBAIO" in contents
 
+            contents, success = FioJobTest.get_file("/proc/kallsyms")
+            if not success:
+                print("Unable to open '/proc/kallsyms' to probe for io_uring support")
+            else:
+                Requirements._io_uring = "io_uring_setup" in contents
+
             Requirements._root = (os.geteuid() == 0)
             if Requirements._zbd and Requirements._root:
                 try:
@@ -611,6 +735,7 @@ class Requirements(object):
 
         req_list = [Requirements.linux,
                     Requirements.libaio,
+                    Requirements.io_uring,
                     Requirements.zbd,
                     Requirements.root,
                     Requirements.zoned_nullb,
@@ -631,6 +756,11 @@ class Requirements(object):
     def libaio(cls):
         """Is libaio available?"""
         return Requirements._libaio, "libaio required"
+
+    @classmethod
+    def io_uring(cls):
+        """Is io_uring available?"""
+        return Requirements._io_uring, "io_uring required"
 
     @classmethod
     def zbd(cls):
@@ -819,6 +949,81 @@ TEST_LIST = [
         'pre_job':          None,
         'pre_success':      None,
         'output_format':    'json',
+        'requirements':     [],
+    },
+    {
+        'test_id':          15,
+        'test_class':       FioJobTest_t0015,
+        'job':              't0015-e78980ff.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'output_format':    'json',
+        'requirements':     [Requirements.linux, Requirements.libaio],
+    },
+    {
+        'test_id':          16,
+        'test_class':       FioJobTest_t0015,
+        'job':              't0016-d54ae22.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'output_format':    'json',
+        'requirements':     [],
+    },
+    {
+        'test_id':          17,
+        'test_class':       FioJobTest_t0015,
+        'job':              't0017.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'output_format':    'json',
+        'requirements':     [Requirements.not_windows],
+    },
+    {
+        'test_id':          18,
+        'test_class':       FioJobTest,
+        'job':              't0018.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'requirements':     [Requirements.linux, Requirements.io_uring],
+    },
+    {
+        'test_id':          19,
+        'test_class':       FioJobTest_t0019,
+        'job':              't0019.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'requirements':     [],
+    },
+    {
+        'test_id':          20,
+        'test_class':       FioJobTest_t0020,
+        'job':              't0020.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'requirements':     [],
+    },
+    {
+        'test_id':          21,
+        'test_class':       FioJobTest_t0020,
+        'job':              't0021.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'requirements':     [],
+    },
+    {
+        'test_id':          22,
+        'test_class':       FioJobTest_t0022,
+        'job':              't0022.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
         'requirements':     [],
     },
     {

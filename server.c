@@ -1323,7 +1323,7 @@ static int handle_xmits(struct sk_out *sk_out)
 	sk_unlock(sk_out);
 
 	while (!flist_empty(&list)) {
-		entry = flist_entry(list.next, struct sk_entry, list);
+		entry = flist_first_entry(&list, struct sk_entry, list);
 		flist_del(&entry->list);
 		ret += handle_sk_entry(sk_out, entry);
 	}
@@ -2284,7 +2284,8 @@ int fio_send_iolog(struct thread_data *td, struct io_log *log, const char *name)
 			struct io_sample *s = get_sample(log, cur_log, i);
 
 			s->time		= cpu_to_le64(s->time);
-			s->data.val	= cpu_to_le64(s->data.val);
+			if (log->log_type != IO_LOG_TYPE_HIST)
+				s->data.val	= cpu_to_le64(s->data.val);
 			s->__ddir	= __cpu_to_le32(s->__ddir);
 			s->bs		= cpu_to_le64(s->bs);
 

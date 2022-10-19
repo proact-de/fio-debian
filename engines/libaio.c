@@ -368,6 +368,12 @@ static void fio_libaio_queued(struct thread_data *td, struct io_u **io_us,
 		memcpy(&io_u->issue_time, &now, sizeof(now));
 		io_u_queued(td, io_u);
 	}
+
+	/*
+	 * only used for iolog
+	 */
+	if (td->o.read_iolog_file)
+		memcpy(&td->last_issue, &now, sizeof(now));
 }
 
 static int fio_libaio_commit(struct thread_data *td)
@@ -511,7 +517,8 @@ static int fio_libaio_init(struct thread_data *td)
 FIO_STATIC struct ioengine_ops ioengine = {
 	.name			= "libaio",
 	.version		= FIO_IOOPS_VERSION,
-	.flags			= FIO_ASYNCIO_SYNC_TRIM,
+	.flags			= FIO_ASYNCIO_SYNC_TRIM |
+					FIO_ASYNCIO_SETS_ISSUE_TIME,
 	.init			= fio_libaio_init,
 	.post_init		= fio_libaio_post_init,
 	.prep			= fio_libaio_prep,

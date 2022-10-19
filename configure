@@ -116,6 +116,10 @@ has() {
   type "$1" >/dev/null 2>&1
 }
 
+num() {
+  echo "$1" | grep -P -q "^[0-9]+$"
+}
+
 check_define() {
   cat > $TMPC <<EOF
 #if !defined($1)
@@ -170,9 +174,11 @@ disable_native="no"
 march_set="no"
 libiscsi="no"
 libnbd="no"
-libnfs="no"
+libnfs=""
+xnvme=""
 libzbc=""
 dfs=""
+seed_buckets=""
 dynamic_engines="no"
 prefix=/usr/local
 
@@ -240,15 +246,21 @@ for opt do
   ;;
   --disable-libzbc) libzbc="no"
   ;;
+  --disable-xnvme) xnvme="no"
+  ;;
   --disable-tcmalloc) disable_tcmalloc="yes"
   ;;
-  --disable-nfs) disable_nfs="yes"
+  --disable-libnfs) libnfs="no"
+  ;;
+  --enable-libnfs) libnfs="yes"
   ;;
   --dynamic-libengines) dynamic_engines="yes"
   ;;
   --disable-dfs) dfs="no"
   ;;
   --enable-asan) asan="yes"
+  ;;
+  --seed-buckets=*) seed_buckets="$optarg"
   ;;
   --help)
     show_help="yes"
@@ -276,10 +288,10 @@ if test "$show_help" = "yes" ; then
   echo "--disable-rados         Disable Rados support even if found"
   echo "--disable-rbd           Disable Rados Block Device even if found"
   echo "--disable-http          Disable HTTP support even if found"
-  echo "--disable-nfs           Disable userspace NFS support even if found"
   echo "--disable-gfapi         Disable gfapi"
   echo "--enable-libhdfs        Enable hdfs support"
   echo "--enable-libnfs         Enable nfs support"
+  echo "--disable-libnfs        Disable nfs support"
   echo "--disable-lex           Disable use of lex/yacc for math"
   echo "--disable-pmem          Disable pmem based engines even if found"
   echo "--enable-lex            Enable use of lex/yacc for math"
@@ -291,11 +303,13 @@ if test "$show_help" = "yes" ; then
   echo "--with-ime=             Install path for DDN's Infinite Memory Engine"
   echo "--enable-libiscsi       Enable iscsi support"
   echo "--enable-libnbd         Enable libnbd (NBD engine) support"
+  echo "--disable-xnvme         Disable xnvme support even if found"
   echo "--disable-libzbc        Disable libzbc even if found"
   echo "--disable-tcmalloc      Disable tcmalloc support"
   echo "--dynamic-libengines    Lib-based ioengines as dynamic libraries"
   echo "--disable-dfs           Disable DAOS File System support even if found"
   echo "--enable-asan           Enable address sanitizer"
+  echo "--seed-buckets=         Number of seed buckets for the refill-buffer"
   exit $exit_val
 fi
 
@@ -1124,7 +1138,8 @@ cat > $TMPC << EOF
 #include <sched.h>
 int main(int argc, char **argv)
 {
-  cpu_set_t mask;
+  cpu_set_t mask = { };
+
   return sched_setaffinity(0, sizeof(mask), &mask);
 }
 EOF
@@ -1135,7 +1150,8 @@ else
 #include <sched.h>
 int main(int argc, char **argv)
 {
-  cpu_set_t mask;
+  cpu_set_t mask = { };
+
   return sched_setaffinity(0, &mask);
 }
 EOF
@@ -1617,7 +1633,8 @@ cat > $TMPC << EOF
 #include <sched.h>
 int main(int argc, char **argv)
 {
-  struct sched_param p;
+  struct sched_param p = { };
+
   return sched_setscheduler(0, SCHED_IDLE, &p);
 }
 EOF
@@ -1739,7 +1756,9 @@ cat > $TMPC << EOF
 #include <sys/uio.h>
 int main(int argc, char **argv)
 {
-  return pwritev(0, NULL, 1, 0) + preadv(0, NULL, 1, 0);
+  struct iovec iov[1] = { };
+
+  return pwritev(0, iov, 1, 0) + preadv(0, iov, 1, 0);
 }
 EOF
 if compile_prog "" "" "pwritev"; then
@@ -1757,7 +1776,9 @@ cat > $TMPC << EOF
 #include <sys/uio.h>
 int main(int argc, char **argv)
 {
-  return pwritev2(0, NULL, 1, 0, 0) + preadv2(0, NULL, 1, 0, 0);
+  struct iovec iov[1] = { };
+
+  return pwritev2(0, iov, 1, 0, 0) + preadv2(0, iov, 1, 0, 0);
 }
 EOF
 if compile_prog "" "" "pwritev2"; then
@@ -1783,14 +1804,14 @@ cat > $TMPC << EOF
 #include <stdio.h>
 int main(int argc, char **argv)
 {
-  struct addrinfo hints;
-  struct in6_addr addr;
+  struct addrinfo hints = { };
+  struct in6_addr addr = in6addr_any;
   int ret;
 
   ret = getaddrinfo(NULL, NULL, &hints, NULL);
   freeaddrinfo(NULL);
-  printf("%s\n", gai_strerror(ret));
-  addr = in6addr_any;
+  printf("%s %d\n", gai_strerror(ret), addr.s6_addr[0]);
+
   return 0;
 }
 EOF
@@ -2151,9 +2172,7 @@ cat > $TMPC << EOF
 #include <stdlib.h>
 int main(int argc, char **argv)
 {
-  int rc;
-  rc = pmem_is_pmem(NULL, 0);
-  return 0;
+  return pmem_is_pmem(NULL, 0);
 }
 EOF
 if compile_prog "" "-lpmem" "libpmem"; then
@@ -2172,7 +2191,7 @@ if test "$libpmem" = "yes"; then
 #include <stdlib.h>
 int main(int argc, char **argv)
 {
-  pmem_memcpy(NULL, NULL, NULL, NULL);
+  pmem_memcpy(NULL, NULL, 0, 0);
   return 0;
 }
 EOF
@@ -2305,15 +2324,16 @@ print_config "DAOS File System (dfs) Engine" "$dfs"
 
 ##########################################
 # Check if we have libnfs (for userspace nfs support).
-if test "$disable_nfs" != "yes"; then
+if test "$libnfs" != "no" ; then
   if $(pkg-config libnfs > /dev/null 2>&1); then
     libnfs="yes"
     libnfs_cflags=$(pkg-config --cflags libnfs)
     libnfs_libs=$(pkg-config --libs libnfs)
   else
     if test "$libnfs" = "yes" ; then
-      echo "libnfs" "Install libnfs"
+      feature_not_found "libnfs" "libnfs"
     fi
+    libnfs="no"
   fi
 fi
 print_config "NFS engine" "$libnfs"
@@ -2388,7 +2408,7 @@ int main(int argc, char **argv)
   FILE *mtab = setmntent(NULL, "r");
   struct mntent *mnt = getmntent(mtab);
   endmntent(mtab);
-  return 0;
+  return mnt != NULL;
 }
 EOF
 if compile_prog "" "" "getmntent"; then
@@ -2569,6 +2589,10 @@ int main(int argc, char **argv)
 }
 EOF
 if test "$libzbc" != "no" ; then
+  if [ -e /usr/include/libzbc/libzbc ]; then
+    # SUSE Linux.
+    CFLAGS="$CFLAGS -I/usr/include/libzbc"
+  fi
   if compile_prog "" "-lzbc" "libzbc"; then
     libzbc="yes"
     if ! check_min_lib_version libzbc 5; then
@@ -2582,6 +2606,40 @@ if test "$libzbc" != "no" ; then
   fi
 fi
 print_config "libzbc engine" "$libzbc"
+
+if test "$targetos" = "Linux" ; then
+##########################################
+# Check NVME_URING_CMD support
+cat > $TMPC << EOF
+#include <linux/nvme_ioctl.h>
+int main(void)
+{
+  struct nvme_uring_cmd *cmd;
+
+  return sizeof(struct nvme_uring_cmd);
+}
+EOF
+if compile_prog "" "" "nvme uring cmd"; then
+  output_sym "CONFIG_NVME_URING_CMD"
+  nvme_uring_cmd="yes"
+else
+  nvme_uring_cmd="no"
+fi
+print_config "NVMe uring command support" "$nvme_uring_cmd"
+fi
+
+##########################################
+# Check if we have xnvme
+if test "$xnvme" != "no" ; then
+  if check_min_lib_version xnvme 0.2.0; then
+    xnvme="yes"
+    xnvme_cflags=$(pkg-config --cflags xnvme)
+    xnvme_libs=$(pkg-config --libs xnvme)
+  else
+    xnvme="no"
+  fi
+fi
+print_config "xnvme engine" "$xnvme"
 
 ##########################################
 # check march=armv8-a+crc+crypto
@@ -3125,7 +3183,7 @@ if test "$libzbc" = "yes" ; then
   output_sym "CONFIG_LIBZBC"
 fi
 if test "$zlib" = "no" ; then
-  echo "Consider installing zlib-dev (zlib-devel, some fio features depend on it."
+  echo "Consider installing zlib1g-dev (zlib-devel) as some fio features depend on it."
   if test "$build_static" = "yes"; then
     echo "Note that some distros have separate packages for static libraries."
   fi
@@ -3141,9 +3199,6 @@ if test "$libcufile" = "yes" ; then
 fi
 if test "$dfs" = "yes" ; then
   output_sym "CONFIG_DFS"
-fi
-if test "$libnfs" = "yes" ; then
-  output_sym "CONFIG_NFS"
 fi
 if test "$march_set" = "no" && test "$build_native" = "yes" ; then
   output_sym "CONFIG_BUILD_NATIVE"
@@ -3186,9 +3241,13 @@ if test "$libnbd" = "yes" ; then
 fi
 if test "$libnfs" = "yes" ; then
   output_sym "CONFIG_LIBNFS"
-  echo "CONFIG_LIBNFS=m" >> $config_host_mak
   echo "LIBNFS_CFLAGS=$libnfs_cflags" >> $config_host_mak
   echo "LIBNFS_LIBS=$libnfs_libs" >> $config_host_mak
+fi
+if test "$xnvme" = "yes" ; then
+  output_sym "CONFIG_LIBXNVME"
+  echo "LIBXNVME_CFLAGS=$xnvme_cflags" >> $config_host_mak
+  echo "LIBXNVME_LIBS=$xnvme_libs" >> $config_host_mak
 fi
 if test "$dynamic_engines" = "yes" ; then
   output_sym "CONFIG_DYNAMIC_ENGINES"
@@ -3222,6 +3281,15 @@ if test "$disable_tcmalloc" != "yes"; then
   fi
 fi
 print_config "TCMalloc support" "$tcmalloc"
+if ! num "$seed_buckets"; then
+  seed_buckets=4
+elif test "$seed_buckets" -lt 2; then
+  seed_buckets=2
+elif test "$seed_buckets" -gt 16; then
+  seed_buckets=16
+fi
+echo "#define CONFIG_SEED_BUCKETS $seed_buckets" >> $config_host_h
+print_config "seed_buckets" "$seed_buckets"
 
 echo "LIBS+=$LIBS" >> $config_host_mak
 echo "GFIO_LIBS+=$GFIO_LIBS" >> $config_host_mak
