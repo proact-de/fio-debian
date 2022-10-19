@@ -1,5 +1,6 @@
 Description: Remove config.log to fix dpkg-source error about changed files.
 Author: Martin Steigerwald <martin.steigerwald@proact.de>
+Forwarded: not-needed
 
 --- a/configure
 +++ b/configure
