@@ -11,7 +11,7 @@
 
 include /usr/share/dpkg/architecture.mk
 
-export DEB_LDFLAGS_MAINT_PREPEND := -Wl,-z,defs -Wl,--as-needed
+export DEB_LDFLAGS_MAINT_PREPEND := -Wl,-z,defs
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 

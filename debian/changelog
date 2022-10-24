@@ -3,6 +3,8 @@ fio (3.32-1) unstable; urgency=medium
   * Imported new upstream version 3.32 (Closes: #1022045).
   * control: Bumped standards version to 4.6.1. No changes needed.
   * copyright: Updated copyright years for files in "debian". 
+  * rules: Removed "-Wl,--as-needed". No need to support for a backport
+    to Debian Buster anymore.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 24 Oct 2022 10:47:27 +0200
 
