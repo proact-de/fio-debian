@@ -5,7 +5,7 @@ fio (3.32-2) UNRELEASED; urgency=medium
   * control: suggest package "fio-examples".
   * NEWS: explain that example job files are now in package "fio-examples".
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 25 Oct 2022 14:56:59 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 25 Oct 2022 15:35:00 +0200
 
 fio (3.32-1) unstable; urgency=medium
 
