@@ -2,7 +2,6 @@ README.rst
 HOWTO.rst
 MORAL-LICENSE
 REPORTING-BUGS
-examples/
 tools/hist/half-bins.py
 usr/bin/fiologparser.py
 usr/bin/fiologparser_hist.py
