@@ -1,0 +1,9 @@
+fio (3.32-2) UNRELEASED; urgency=medium
+
+  Since fio 3.32-2 there is an extra package for the example job files
+  for flexible I/O tester. These example job files are not installed by
+  default anymore.
+
+  If you like to install them, just install the package "fio-examples".
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 25 Oct 2022 14:56:59 +0200
