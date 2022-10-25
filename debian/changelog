@@ -2,6 +2,7 @@ fio (3.32-2) UNRELEASED; urgency=medium
 
   * control and docs: Put example files and images into extra package to
     make it possible to only install them where needed.
+  * control: suggest package "fio-examples".
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 25 Oct 2022 14:56:59 +0200
 
