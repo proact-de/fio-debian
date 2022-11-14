@@ -3,6 +3,8 @@ HOWTO.rst
 MORAL-LICENSE
 REPORTING-BUGS
 tools/hist/half-bins.py
+tools/fiograph/fiograph.py
+tools/fiograph/fiograph.conf
 usr/bin/fiologparser.py
 usr/bin/fiologparser_hist.py
 usr/share/man/man1/fiologparser_hist.py.1
