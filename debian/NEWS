@@ -2,8 +2,14 @@ fio (3.32-2) unstable; urgency=medium
 
   Since fio 3.32-2 there is an extra package for the example job files
   for flexible I/O tester. These example job files are not installed by
-  default anymore.
+  default anymore due to the size added by the fiograph images.
 
-  If you like to install them, just install the package "fio-examples".
+  Those images visualize what the examples are doing. So it is easier to
+  understand what jobs are running in parallel for example. Read commit
+  log from upstream commit d61215e076fe3b51c0ed92dd985101b84bbcd757 by
+  Erwan Velu for details.
+
+  If you like to install the examples, just install the package
+  "fio-examples".
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 25 Oct 2022 15:35:54 +0200
