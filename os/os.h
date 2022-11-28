@@ -33,9 +33,7 @@ typedef enum {
 } cpu_features;
 
 /* IWYU pragma: begin_exports */
-#if defined(__ANDROID__)
-#include "os-android.h"
-#elif defined(__linux__)
+#if defined(__linux__)
 #include "os-linux.h"
 #elif defined(__FreeBSD__)
 #include "os-freebsd.h"
@@ -354,10 +352,10 @@ static inline unsigned long long get_fs_free_size(const char *path)
 }
 #endif
 
-#ifndef FIO_HAVE_CPU_ONLINE_SYSCONF
-static inline unsigned int cpus_online(void)
+#ifndef FIO_HAVE_CPU_CONF_SYSCONF
+static inline unsigned int cpus_configured(void)
 {
-	return sysconf(_SC_NPROCESSORS_ONLN);
+	return sysconf(_SC_NPROCESSORS_CONF);
 }
 #endif
 
@@ -365,7 +363,7 @@ static inline unsigned int cpus_online(void)
 #ifdef FIO_HAVE_CPU_AFFINITY
 static inline int CPU_COUNT(os_cpu_mask_t *mask)
 {
-	int max_cpus = cpus_online();
+	int max_cpus = cpus_configured();
 	int nr_cpus, i;
 
 	for (i = 0, nr_cpus = 0; i < max_cpus; i++)

@@ -449,6 +449,8 @@ static int io_uring_register_files(struct submitter *s)
 
 static int io_uring_setup(unsigned entries, struct io_uring_params *p)
 {
+	int ret;
+
 	/*
 	 * Clamp CQ ring size at our SQ ring size, we don't need more entries
 	 * than that.
@@ -456,7 +458,28 @@ static int io_uring_setup(unsigned entries, struct io_uring_params *p)
 	p->flags |= IORING_SETUP_CQSIZE;
 	p->cq_entries = entries;
 
-	return syscall(__NR_io_uring_setup, entries, p);
+	p->flags |= IORING_SETUP_COOP_TASKRUN;
+	p->flags |= IORING_SETUP_SINGLE_ISSUER;
+	p->flags |= IORING_SETUP_DEFER_TASKRUN;
+retry:
+	ret = syscall(__NR_io_uring_setup, entries, p);
+	if (!ret)
+		return 0;
+
+	if (errno == EINVAL && p->flags & IORING_SETUP_COOP_TASKRUN) {
+		p->flags &= ~IORING_SETUP_COOP_TASKRUN;
+		goto retry;
+	}
+	if (errno == EINVAL && p->flags & IORING_SETUP_SINGLE_ISSUER) {
+		p->flags &= ~IORING_SETUP_SINGLE_ISSUER;
+		goto retry;
+	}
+	if (errno == EINVAL && p->flags & IORING_SETUP_DEFER_TASKRUN) {
+		p->flags &= ~IORING_SETUP_DEFER_TASKRUN;
+		goto retry;
+	}
+
+	return ret;
 }
 
 static void io_uring_probe(int fd)
@@ -501,12 +524,28 @@ static unsigned file_depth(struct submitter *s)
 	return (depth + s->nr_files - 1) / s->nr_files;
 }
 
+static unsigned long long get_offset(struct submitter *s, struct file *f)
+{
+	unsigned long long offset;
+	long r;
+
+	if (random_io) {
+		r = __rand64(&s->rand_state);
+		offset = (r % (f->max_blocks - 1)) * bs;
+	} else {
+		offset = f->cur_off;
+		f->cur_off += bs;
+		if (f->cur_off + bs > f->max_size)
+			f->cur_off = 0;
+	}
+
+	return offset;
+}
+
 static void init_io(struct submitter *s, unsigned index)
 {
 	struct io_uring_sqe *sqe = &s->sqes[index];
-	unsigned long offset;
 	struct file *f;
-	long r;
 
 	if (do_nop) {
 		sqe->opcode = IORING_OP_NOP;
@@ -525,16 +564,6 @@ static void init_io(struct submitter *s, unsigned index)
 		}
 	}
 	f->pending_ios++;
-
-	if (random_io) {
-		r = __rand64(&s->rand_state);
-		offset = (r % (f->max_blocks - 1)) * bs;
-	} else {
-		offset = f->cur_off;
-		f->cur_off += bs;
-		if (f->cur_off + bs > f->max_size)
-			f->cur_off = 0;
-	}
 
 	if (register_files) {
 		sqe->flags = IOSQE_FIXED_FILE;
@@ -560,7 +589,7 @@ static void init_io(struct submitter *s, unsigned index)
 		sqe->buf_index = 0;
 	}
 	sqe->ioprio = 0;
-	sqe->off = offset;
+	sqe->off = get_offset(s, f);
 	sqe->user_data = (unsigned long) f->fileno;
 	if (stats && stats_running)
 		sqe->user_data |= ((uint64_t)s->clock_index << 32);
@@ -621,6 +650,10 @@ static void init_io_pt(struct submitter *s, unsigned index)
 	cmd->cdw12 = nlb;
 	cmd->addr = (unsigned long) s->iovecs[index].iov_base;
 	cmd->data_len = bs;
+	if (fixedbufs) {
+		sqe->uring_cmd_flags = IORING_URING_CMD_FIXED;
+		sqe->buf_index = index;
+	}
 	cmd->nsid = f->nsid;
 	cmd->opcode = 2;
 }
@@ -628,12 +661,17 @@ static void init_io_pt(struct submitter *s, unsigned index)
 static int prep_more_ios_uring(struct submitter *s, int max_ios)
 {
 	struct io_sq_ring *ring = &s->sq_ring;
-	unsigned index, tail, next_tail, prepped = 0;
+	unsigned head, index, tail, next_tail, prepped = 0;
+
+	if (sq_thread_poll)
+		head = atomic_load_acquire(ring->head);
+	else
+		head = *ring->head;
 
 	next_tail = tail = *ring->tail;
 	do {
 		next_tail++;
-		if (next_tail == atomic_load_acquire(ring->head))
+		if (next_tail == head)
 			break;
 
 		index = tail & sq_ring_mask;
@@ -641,7 +679,6 @@ static int prep_more_ios_uring(struct submitter *s, int max_ios)
 			init_io_pt(s, index);
 		else
 			init_io(s, index);
-		ring->array[index] = index;
 		prepped++;
 		tail = next_tail;
 	} while (prepped < max_ios);
@@ -708,7 +745,6 @@ static int reap_events_uring(struct submitter *s)
 	do {
 		struct file *f;
 
-		read_barrier();
 		if (head == atomic_load_acquire(ring->tail))
 			break;
 		cqe = &ring->cqes[head & cq_ring_mask];
@@ -763,7 +799,6 @@ static int reap_events_uring_pt(struct submitter *s)
 	do {
 		struct file *f;
 
-		read_barrier();
 		if (head == atomic_load_acquire(ring->tail))
 			break;
 		index = head & cq_ring_mask;
@@ -827,7 +862,10 @@ static int detect_node(struct submitter *s, const char *name)
 	char str[128];
 	int ret, fd, node;
 
-	sprintf(str, "/sys/block/%s/device/numa_node", base);
+	if (pt)
+		sprintf(str, "/sys/class/nvme-generic/%s/device/numa_node", base);
+	else
+		sprintf(str, "/sys/block/%s/device/numa_node", base);
 	fd = open(str, O_RDONLY);
 	if (fd < 0)
 		return -1;
@@ -879,7 +917,7 @@ static int setup_ring(struct submitter *s)
 	struct io_sq_ring *sring = &s->sq_ring;
 	struct io_cq_ring *cring = &s->cq_ring;
 	struct io_uring_params p;
-	int ret, fd;
+	int ret, fd, i;
 	void *ptr;
 	size_t len;
 
@@ -974,6 +1012,10 @@ static int setup_ring(struct submitter *s)
 	cring->ring_entries = ptr + p.cq_off.ring_entries;
 	cring->cqes = ptr + p.cq_off.cqes;
 	cq_ring_mask = *cring->ring_mask;
+
+	for (i = 0; i < p.sq_entries; i++)
+		sring->array[i] = i;
+
 	return 0;
 }
 
@@ -1072,10 +1114,8 @@ static int submitter_init(struct submitter *s)
 static int prep_more_ios_aio(struct submitter *s, int max_ios, struct iocb *iocbs)
 {
 	uint64_t data;
-	long long offset;
 	struct file *f;
 	unsigned index;
-	long r;
 
 	index = 0;
 	while (index < max_ios) {
@@ -1094,10 +1134,8 @@ static int prep_more_ios_aio(struct submitter *s, int max_ios, struct iocb *iocb
 		}
 		f->pending_ios++;
 
-		r = lrand48();
-		offset = (r % (f->max_blocks - 1)) * bs;
 		io_prep_pread(iocb, f->real_fd, s->iovecs[index].iov_base,
-				s->iovecs[index].iov_len, offset);
+				s->iovecs[index].iov_len, get_offset(s, f));
 
 		data = f->fileno;
 		if (stats && stats_running)
@@ -1380,7 +1418,6 @@ static void *submitter_sync_fn(void *data)
 	do {
 		uint64_t offset;
 		struct file *f;
-		long r;
 
 		if (s->nr_files == 1) {
 			f = &s->files[0];
@@ -1395,16 +1432,6 @@ static void *submitter_sync_fn(void *data)
 		}
 		f->pending_ios++;
 
-		if (random_io) {
-			r = __rand64(&s->rand_state);
-			offset = (r % (f->max_blocks - 1)) * bs;
-		} else {
-			offset = f->cur_off;
-			f->cur_off += bs;
-			if (f->cur_off + bs > f->max_size)
-				f->cur_off = 0;
-		}
-
 #ifdef ARCH_HAVE_CPU_CLOCK
 		if (stats)
 			s->clock_batch[s->clock_index] = get_cpu_clock();
@@ -1413,6 +1440,7 @@ static void *submitter_sync_fn(void *data)
 		s->inflight++;
 		s->calls++;
 
+		offset = get_offset(s, f);
 		if (polled)
 			ret = preadv2(f->real_fd, &s->iovecs[0], 1, offset, RWF_HIPRI);
 		else

@@ -356,6 +356,7 @@ struct thread_data {
 	 * Issue side
 	 */
 	uint64_t io_issues[DDIR_RWDIR_CNT];
+	uint64_t verify_read_issues;
 	uint64_t io_issue_bytes[DDIR_RWDIR_CNT];
 	uint64_t loops;
 
@@ -370,6 +371,7 @@ struct thread_data {
 	uint64_t zone_bytes;
 	struct fio_sem *sem;
 	uint64_t bytes_done[DDIR_RWDIR_CNT];
+	uint64_t bytes_verified;
 
 	uint64_t *thinktime_blocks_counter;
 	struct timespec last_thinktime;

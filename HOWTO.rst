@@ -167,9 +167,9 @@ Command line options
 	defined by `ioengine`.  If no `ioengine` is given, list all
 	available ioengines.
 
-.. option:: --showcmd=jobfile
+.. option:: --showcmd
 
-	Convert `jobfile` to a set of command-line options.
+	Convert given job files to a set of command-line options.
 
 .. option:: --readonly
 
@@ -1129,7 +1129,14 @@ I/O type
 				Random mixed reads and writes.
 		**trimwrite**
 				Sequential trim+write sequences. Blocks will be trimmed first,
-				then the same blocks will be written to.
+				then the same blocks will be written to. So if ``io_size=64K``
+				is specified, Fio will trim a total of 64K bytes and also
+				write 64K bytes on the same trimmed blocks. This behaviour
+				will be consistent with ``number_ios`` or other Fio options
+				limiting the total bytes or number of I/O's.
+		**randtrimwrite**
+				Like trimwrite, but uses random offsets rather
+				than sequential writes.
 
 	Fio defaults to read if the option is not specified.  For the mixed I/O
 	types, the default is to split them 50/50.  For certain types of I/O the
@@ -2267,7 +2274,7 @@ with the caveat that when used on the command line, they must come after the
 	map and release for each IO. This is more efficient, and reduces the
 	IO latency as well.
 
-.. option:: nonvectored : [io_uring] [io_uring_cmd]
+.. option:: nonvectored=int : [io_uring] [io_uring_cmd]
 
 	With this option, fio will use non-vectored read/write commands, where
 	address must contain the address directly. Default is -1.
@@ -2294,7 +2301,7 @@ with the caveat that when used on the command line, they must come after the
 	This frees up cycles for fio, at the cost of using more CPU in the
 	system.
 
-.. option:: sqthread_poll_cpu : [io_uring] [io_uring_cmd]
+.. option:: sqthread_poll_cpu=int : [io_uring] [io_uring_cmd]
 
 	When :option:`sqthread_poll` is set, this option provides a way to
 	define which CPU should be used for the polling thread.
@@ -2344,7 +2351,7 @@ with the caveat that when used on the command line, they must come after the
 	When hipri is set this determines the probability of a pvsync2 I/O being high
 	priority. The default is 100%.
 
-.. option:: nowait : [pvsync2] [libaio] [io_uring]
+.. option:: nowait=bool : [pvsync2] [libaio] [io_uring] [io_uring_cmd]
 
 	By default if a request cannot be executed immediately (e.g. resource starvation,
 	waiting on locks) it is queued and the initiating process will be blocked until
@@ -2550,7 +2557,7 @@ with the caveat that when used on the command line, they must come after the
 
    [dfs]
 
-	Specificy a different chunk size (in bytes) for the dfs file.
+	Specify a different chunk size (in bytes) for the dfs file.
 	Use DAOS container's chunk size by default.
 
    [libhdfs]
@@ -2559,7 +2566,7 @@ with the caveat that when used on the command line, they must come after the
 
 .. option:: object_class=str : [dfs]
 
-	Specificy a different object class for the dfs file.
+	Specify a different object class for the dfs file.
 	Use DAOS container's object class by default.
 
 .. option:: skip_bad=bool : [mtd]
@@ -3322,13 +3329,13 @@ Threads, processes and job synchronization
 
 .. option:: flow=int
 
-	Weight in token-based flow control. If this value is used, then there is a
-	'flow counter' which is used to regulate the proportion of activity between
-	two or more jobs. Fio attempts to keep this flow counter near zero. The
-	``flow`` parameter stands for how much should be added or subtracted to the
-	flow counter on each iteration of the main I/O loop. That is, if one job has
-	``flow=8`` and another job has ``flow=-1``, then there will be a roughly 1:8
-	ratio in how much one runs vs the other.
+        Weight in token-based flow control. If this value is used, then fio
+        regulates the activity between two or more jobs sharing the same
+        flow_id. Fio attempts to keep each job activity proportional to other
+        jobs' activities in the same flow_id group, with respect to requested
+        weight per job. That is, if one job has `flow=3', another job has
+        `flow=2' and another with `flow=1`, then there will be a roughly 3:2:1
+        ratio in how much one runs vs the others.
 
 .. option:: flow_sleep=int
 
@@ -3349,10 +3356,10 @@ Threads, processes and job synchronization
 	make fio terminate all jobs in the same group, as soon as one job of that
 	group finishes.
 
-.. option:: exit_what
+.. option:: exit_what=str
 
 	By default, fio will continue running all other jobs when one job finishes.
-	Sometimes this is not the desired action. Setting ``exit_all`` will
+	Sometimes this is not the desired action. Setting ``exitall`` will
 	instead make fio terminate all jobs in the same group. The option
         ``exit_what`` allows to control which jobs get terminated when ``exitall`` is
         enabled. The default is ``group`` and does not change the behaviour of

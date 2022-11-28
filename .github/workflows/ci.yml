@@ -24,7 +24,7 @@ jobs:
           os: ubuntu-22.04
           cc: clang
         - build: macos
-          os: macos-11
+          os: macos-12
         - build: linux-i686-gcc
           os: ubuntu-22.04
           arch: i686
@@ -39,7 +39,7 @@ jobs:
 
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
     - name: Install dependencies
       run: ./ci/actions-install.sh
     - name: Build

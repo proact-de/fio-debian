@@ -682,7 +682,7 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 				break;
 			}
 		} else {
-			if (ddir_rw_sum(td->bytes_done) + td->o.rw_min_bs > verify_bytes)
+			if (td->bytes_verified + td->o.rw_min_bs > verify_bytes)
 				break;
 
 			while ((io_u = get_io_u(td)) != NULL) {
@@ -711,6 +711,8 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 					break;
 				} else if (io_u->ddir == DDIR_WRITE) {
 					io_u->ddir = DDIR_READ;
+					io_u->numberio = td->verify_read_issues;
+					td->verify_read_issues++;
 					populate_verify_io_u(td, io_u);
 					break;
 				} else {
@@ -971,9 +973,11 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 		total_bytes += td->o.size;
 
 	/* In trimwrite mode, each byte is trimmed and then written, so
-	 * allow total_bytes to be twice as big */
-	if (td_trimwrite(td))
+	 * allow total_bytes or number of ios to be twice as big */
+	if (td_trimwrite(td)) {
 		total_bytes += td->total_io_size;
+		td->o.number_ios *= 2;
+	}
 
 	while ((td->o.read_iolog_file && !flist_empty(&td->io_log_list)) ||
 		(!flist_empty(&td->trim_list)) || !io_issue_bytes_exceeded(td) ||
@@ -1028,8 +1032,10 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 			break;
 		}
 
-		if (io_u->ddir == DDIR_WRITE && td->flags & TD_F_DO_VERIFY)
+		if (io_u->ddir == DDIR_WRITE && td->flags & TD_F_DO_VERIFY) {
+			io_u->numberio = td->io_issues[io_u->ddir];
 			populate_verify_io_u(td, io_u);
+		}
 
 		ddir = io_u->ddir;
 
@@ -1788,6 +1794,11 @@ static void *thread_main(void *data)
 
 	if (td_io_init(td))
 		goto err;
+
+	if (td_ioengine_flagged(td, FIO_SYNCIO) && td->o.iodepth > 1) {
+		log_info("note: both iodepth >= 1 and synchronous I/O engine "
+			 "are selected, queue depth will be capped at 1\n");
+	}
 
 	if (init_io_u(td))
 		goto err;

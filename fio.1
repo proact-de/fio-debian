@@ -67,8 +67,8 @@ List all commands defined by \fIioengine\fR, or print help for \fIcommand\fR
 defined by \fIioengine\fR. If no \fIioengine\fR is given, list all
 available ioengines.
 .TP
-.BI \-\-showcmd \fR=\fPjobfile
-Convert \fIjobfile\fR to a set of command\-line options.
+.BI \-\-showcmd
+Convert given \fIjobfile\fRs to a set of command\-line options.
 .TP
 .BI \-\-readonly
 Turn on safety read\-only checks, preventing writes and trims. The \fB\-\-readonly\fR
@@ -900,7 +900,15 @@ Random mixed reads and writes.
 .TP
 .B trimwrite
 Sequential trim+write sequences. Blocks will be trimmed first,
-then the same blocks will be written to.
+then the same blocks will be written to. So if `io_size=64K' is specified,
+Fio will trim a total of 64K bytes and also write 64K bytes on the same
+trimmed blocks. This behaviour will be consistent with `number_ios' or
+other Fio options limiting the total bytes or number of I/O's.
+.TP
+.B randtrimwrite
+Like
+.B trimwrite ,
+but uses random offsets rather than sequential writes.
 .RE
 .P
 Fio defaults to read if the option is not specified. For the mixed I/O
@@ -2055,7 +2063,7 @@ release them when IO is done. If this option is set, the pages are pre-mapped
 before IO is started. This eliminates the need to map and release for each IO.
 This is more efficient, and reduces the IO latency as well.
 .TP
-.BI (io_uring,io_uring_cmd)nonvectored
+.BI (io_uring,io_uring_cmd)nonvectored \fR=\fPint
 With this option, fio will use non-vectored read/write commands, where address
 must contain the address directly. Default is -1.
 .TP
@@ -2084,7 +2092,7 @@ available items in the SQ ring. If this option is set, the act of submitting IO
 will be done by a polling thread in the kernel. This frees up cycles for fio, at
 the cost of using more CPU in the system.
 .TP
-.BI (io_uring,io_uring_cmd)sqthread_poll_cpu
+.BI (io_uring,io_uring_cmd)sqthread_poll_cpu \fR=\fPint
 When `sqthread_poll` is set, this option provides a way to define which CPU
 should be used for the polling thread.
 .TP
@@ -2107,7 +2115,7 @@ than normal.
 When hipri is set this determines the probability of a pvsync2 I/O being high
 priority. The default is 100%.
 .TP
-.BI (pvsync2,libaio,io_uring)nowait
+.BI (pvsync2,libaio,io_uring,io_uring_cmd)nowait \fR=\fPbool
 By default if a request cannot be executed immediately (e.g. resource starvation,
 waiting on locks) it is queued and the initiating process will be blocked until
 the required resource becomes free.
@@ -2488,11 +2496,11 @@ Specify the label or UUID of the DAOS pool to connect to.
 Specify the label or UUID of the DAOS container to open.
 .TP
 .BI (dfs)chunk_size
-Specificy a different chunk size (in bytes) for the dfs file.
+Specify a different chunk size (in bytes) for the dfs file.
 Use DAOS container's chunk size by default.
 .TP
 .BI (dfs)object_class
-Specificy a different object class for the dfs file.
+Specify a different object class for the dfs file.
 Use DAOS container's object class by default.
 .TP
 .BI (nfs)nfs_url
