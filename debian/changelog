@@ -7,7 +7,7 @@ fio (3.33-1) UNRELEASED; urgency=medium
     * Drop versioned constraint on dpkg-dev, since it is not
       necessary anymore since Debian buster.
   * control and rules: Enable NBD support. Thanks to Christian Ehrhardt
-    for initial merge request (Closes: #966222). 
+    for initial merge request (Closes: #966222).
   * Fix wrong day of week for changelog entry 1.59-1.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 28 Nov 2022 10:54:40 +0100
