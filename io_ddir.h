@@ -41,6 +41,7 @@ enum td_ddir {
 	TD_DDIR_RANDRW		= TD_DDIR_RW | TD_DDIR_RAND,
 	TD_DDIR_RANDTRIM	= TD_DDIR_TRIM | TD_DDIR_RAND,
 	TD_DDIR_TRIMWRITE	= TD_DDIR_TRIM | TD_DDIR_WRITE,
+	TD_DDIR_RANDTRIMWRITE	= TD_DDIR_RANDTRIM | TD_DDIR_WRITE,
 };
 
 #define td_read(td)		((td)->o.td_ddir & TD_DDIR_READ)
@@ -51,6 +52,8 @@ enum td_ddir {
 #define file_randommap(td, f)	(!(td)->o.norandommap && fio_file_axmap((f)))
 #define td_trimwrite(td)	(((td)->o.td_ddir & TD_DDIR_TRIMWRITE) \
 					== TD_DDIR_TRIMWRITE)
+#define td_randtrimwrite(td)	(((td)->o.td_ddir & TD_DDIR_RANDTRIMWRITE) \
+					== TD_DDIR_RANDTRIMWRITE)
 
 static inline int ddir_sync(enum fio_ddir ddir)
 {
@@ -67,7 +70,8 @@ static inline const char *ddir_str(enum td_ddir ddir)
 {
 	static const char *__str[] = { NULL, "read", "write", "rw", "rand",
 				"randread", "randwrite", "randrw",
-				"trim", NULL, "trimwrite", NULL, "randtrim" };
+				"trim", NULL, "trimwrite", NULL, "randtrim",
+				NULL, "randtrimwrite" };
 
 	return __str[ddir];
 }

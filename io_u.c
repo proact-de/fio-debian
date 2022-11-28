@@ -417,7 +417,13 @@ static int get_next_block(struct thread_data *td, struct io_u *io_u,
 
 	b = offset = -1ULL;
 
-	if (rw_seq) {
+	if (td_randtrimwrite(td) && ddir == DDIR_WRITE) {
+		/* don't mark randommap for these writes */
+		io_u_set(td, io_u, IO_U_F_BUSY_OK);
+		offset = f->last_start[DDIR_TRIM];
+		*is_random = true;
+		ret = 0;
+	} else if (rw_seq) {
 		if (td_random(td)) {
 			if (should_do_random(td, ddir)) {
 				ret = get_next_rand_block(td, f, ddir, &b);
@@ -507,6 +513,24 @@ static int get_next_offset(struct thread_data *td, struct io_u *io_u,
 		return 1;
 	}
 
+	/*
+	 * For randtrimwrite, we decide whether to issue a trim or a write
+	 * based on whether the offsets for the most recent trim and write
+	 * operations match. If they don't match that means we just issued a
+	 * new trim and the next operation should be a write. If they *do*
+	 * match that means we just completed a trim+write pair and the next
+	 * command should be a trim.
+	 *
+	 * This works fine for sequential workloads but for random workloads
+	 * it's possible to complete a trim+write pair and then have the next
+	 * randomly generated offset match the previous offset. If that happens
+	 * we need to alter the offset for the last write operation in order
+	 * to ensure that we issue a write operation the next time through.
+	 */
+	if (td_randtrimwrite(td) && ddir == DDIR_TRIM &&
+	    f->last_start[DDIR_TRIM] == io_u->offset)
+		f->last_start[DDIR_WRITE]--;
+
 	io_u->verify_offset = io_u->offset;
 	return 0;
 }
@@ -529,6 +553,12 @@ static unsigned long long get_next_buflen(struct thread_data *td, struct io_u *i
 	bool power_2;
 
 	assert(ddir_rw(ddir));
+
+	if (td_randtrimwrite(td) && ddir == DDIR_WRITE) {
+		struct fio_file *f = io_u->file;
+
+		return f->last_pos[DDIR_TRIM] - f->last_start[DDIR_TRIM];
+	}
 
 	if (td->o.bs_is_seq_rand)
 		ddir = is_random ? DDIR_WRITE : DDIR_READ;
@@ -768,7 +798,7 @@ static void set_rw_ddir(struct thread_data *td, struct io_u *io_u)
 
 	if (td_trimwrite(td)) {
 		struct fio_file *f = io_u->file;
-		if (f->last_pos[DDIR_WRITE] == f->last_pos[DDIR_TRIM])
+		if (f->last_start[DDIR_WRITE] == f->last_start[DDIR_TRIM])
 			ddir = DDIR_TRIM;
 		else
 			ddir = DDIR_WRITE;
@@ -2091,13 +2121,26 @@ static void ios_completed(struct thread_data *td,
 	}
 }
 
+static void io_u_update_bytes_done(struct thread_data *td,
+				   struct io_completion_data *icd)
+{
+	int ddir;
+
+	if (td->runstate == TD_VERIFYING) {
+		td->bytes_verified += icd->bytes_done[DDIR_READ];
+		return;
+	}
+
+	for (ddir = 0; ddir < DDIR_RWDIR_CNT; ddir++)
+		td->bytes_done[ddir] += icd->bytes_done[ddir];
+}
+
 /*
  * Complete a single io_u for the sync engines.
  */
 int io_u_sync_complete(struct thread_data *td, struct io_u *io_u)
 {
 	struct io_completion_data icd;
-	int ddir;
 
 	init_icd(td, &icd, 1);
 	io_completed(td, &io_u, &icd);
@@ -2110,8 +2153,7 @@ int io_u_sync_complete(struct thread_data *td, struct io_u *io_u)
 		return -1;
 	}
 
-	for (ddir = 0; ddir < DDIR_RWDIR_CNT; ddir++)
-		td->bytes_done[ddir] += icd.bytes_done[ddir];
+	io_u_update_bytes_done(td, &icd);
 
 	return 0;
 }
@@ -2123,7 +2165,7 @@ int io_u_queued_complete(struct thread_data *td, int min_evts)
 {
 	struct io_completion_data icd;
 	struct timespec *tvp = NULL;
-	int ret, ddir;
+	int ret;
 	struct timespec ts = { .tv_sec = 0, .tv_nsec = 0, };
 
 	dprint(FD_IO, "io_u_queued_complete: min=%d\n", min_evts);
@@ -2149,8 +2191,7 @@ int io_u_queued_complete(struct thread_data *td, int min_evts)
 		return -1;
 	}
 
-	for (ddir = 0; ddir < DDIR_RWDIR_CNT; ddir++)
-		td->bytes_done[ddir] += icd.bytes_done[ddir];
+	io_u_update_bytes_done(td, &icd);
 
 	return ret;
 }
