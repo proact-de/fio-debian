@@ -1,3 +1,9 @@
+fio (3.33-1) UNRELEASED; urgency=medium
+
+  * Imported new upstream version 3.33. 
+
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 28 Nov 2022 10:54:40 +0100
+
 fio (3.32-2) unstable; urgency=medium
 
   * control and docs: Put example job files and images into extra package
