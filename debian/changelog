@@ -1,8 +1,11 @@
 fio (3.33-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.33.
-  * control: Recommend fio for package fio-examples to make clear what
-    to install in order to run an example.
+  * control:
+    * Recommend fio for package fio-examples to make clear what
+      to install in order to run an example.
+    * Drop versioned constraint on dpkg-dev, since it is not
+      necessary anymore since Debian buster.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 28 Nov 2022 10:54:40 +0100
 
