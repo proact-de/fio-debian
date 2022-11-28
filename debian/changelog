@@ -8,6 +8,7 @@ fio (3.33-1) UNRELEASED; urgency=medium
       necessary anymore since Debian buster.
   * control and rules: Enable NBD support. Thanks to Christian Ehrhardt
     for initial merge request (Closes: #966222). 
+  * Fix wrong day of week for changelog entry 1.59-1.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 28 Nov 2022 10:54:40 +0100
 
@@ -481,7 +482,7 @@ fio (1.59-1) unstable; urgency=low
     * debian/rules: Add variables for makefile to build new rdma engine.
     * debian/control: Added build dependencies for new rdma engine.
 
- -- Martin Steigerwald <ms@teamix.de>  Wed, 10 Oct 2011 17:19:00 +0200
+ -- Martin Steigerwald <ms@teamix.de>  Mon, 10 Oct 2011 17:19:00 +0200
 
 fio (1.57-1) unstable; urgency=low
 
