@@ -1,4 +1,4 @@
-fio (3.33-1) UNRELEASED; urgency=medium
+fio (3.33-1) unstable; urgency=medium
 
   * Imported new upstream version 3.33.
   * control:
@@ -10,7 +10,7 @@ fio (3.33-1) UNRELEASED; urgency=medium
     for initial merge request (Closes: #966222).
   * Fix wrong day of week for changelog entry 1.59-1.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 28 Nov 2022 10:54:40 +0100
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 28 Nov 2022 11:47:27 +0100
 
 fio (3.32-2) unstable; urgency=medium
 
