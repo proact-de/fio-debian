@@ -45,6 +45,7 @@ Description: flexible I/O tester - gui frontend
 Package: fio-examples
 Architecture: all
 Depends: ${misc:Depends}
+Recommends: fio
 Description: flexible I/O tester - example job files
  fio is a tool that will spawn a number of threads or processes doing a
  particular type of I/O action as specified by the user. fio takes a
