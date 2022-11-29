@@ -1,0 +1,14 @@
+Description: Keep C++ hardening build flags.  
+Author: Martin Steigerwald <martin.steigerwald@proact.de>
+
+--- a/Makefile
++++ b/Makefile
+@@ -20,7 +20,7 @@
+ endif
+ 
+ DEBUGFLAGS = -DFIO_INC_DEBUG
+-CPPFLAGS= -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -DFIO_INTERNAL $(DEBUGFLAGS)
++CPPFLAGS+= -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -DFIO_INTERNAL $(DEBUGFLAGS)
+ OPTFLAGS= -g -ffast-math
+ FIO_CFLAGS= -std=gnu99 -Wwrite-strings -Wall -Wdeclaration-after-statement $(OPTFLAGS) $(EXTFLAGS) $(BUILD_CFLAGS) -I. -I$(SRCDIR)
+ LIBS	+= -lm $(EXTLIBS)
