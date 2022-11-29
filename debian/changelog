@@ -1,12 +1,12 @@
 fio (3.33-2) UNRELEASED; urgency=medium
 
-  * control: Mark package fio-examples as Multi-Arch: foreign. 
+  * control: Mark package fio-examples as Multi-Arch: foreign.
   * patches:
     * makefile-hardening: Readd part of the original patch I removed with
       commit d2242de28d9d0d2ea3a64849c9acc014b05b6318. The part for C++
       build flags is still needed.
     * fio2gnuplot-manpage: Fixed in upstream commit
-      aed4796b989d3b33f86fb3be6b915e532df2d59d. 
+      aed4796b989d3b33f86fb3be6b915e532df2d59d.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 29 Nov 2022 15:50:45 +0100
 
