@@ -4,7 +4,7 @@ Forwarded: not-needed
 
 --- a/configure
 +++ b/configure
-@@ -3046,3 +3046,5 @@
+@@ -3330,3 +3330,5 @@
  include \$(SRCDIR)/Makefile
  EOF
  fi
