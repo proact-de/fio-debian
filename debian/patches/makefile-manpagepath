@@ -4,7 +4,7 @@ Forwarded: not-needed
 
 --- a/Makefile
 +++ b/Makefile
-@@ -428,7 +428,7 @@
+@@ -511,7 +511,7 @@
  mandir = /usr/share/man
  sharedir = /usr/share/fio
  else
