@@ -20,7 +20,8 @@ fio (3.33-1) unstable; urgency=medium
       necessary anymore since Debian buster.
   * control and rules: Enable NBD support. Thanks to Christian Ehrhardt
     for initial merge request (Closes: #966222).
-  * Fix wrong day of week for changelog entry 1.59-1.
+  * Fix wrong day of week for changelog entry 1.59-1. Thanks to
+    Jelmer Vernooĳ.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 28 Nov 2022 11:47:27 +0100
 
