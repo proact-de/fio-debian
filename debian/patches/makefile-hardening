@@ -1,4 +1,4 @@
-Description: Keep C++ hardening build flags.  
+Description: Keep C pre processor hardening build flags.  
 Author: Martin Steigerwald <martin.steigerwald@proact.de>
 
 --- a/Makefile
