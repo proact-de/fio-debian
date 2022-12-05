@@ -1,4 +1,4 @@
-fio (3.33-3) UNRELEASED; urgency=medium
+fio (3.33-3) unstable; urgency=medium
 
   [ Sven Hoexter ]
   * control: Remove suggest for python-scipy. It was used in
@@ -10,7 +10,7 @@ fio (3.33-3) UNRELEASED; urgency=medium
     fix update failures. Thanks to Andreas Beckmann for bug report
     (Closes: #1025371).
 
- -- Sven Hoexter <hoexter@debian.org>  Wed, 30 Nov 2022 20:11:53 +0100
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 05 Dec 2022 11:07:42 +0100
 
 fio (3.33-2) unstable; urgency=medium
 
