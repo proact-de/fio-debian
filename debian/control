@@ -47,6 +47,8 @@ Architecture: all
 Multi-Arch: foreign
 Depends: ${misc:Depends}
 Recommends: fio
+Replaces: fio (<< 3.32-2)
+Breaks: fio (<< 3.32-2)
 Description: flexible I/O tester - example job files
  fio is a tool that will spawn a number of threads or processes doing a
  particular type of I/O action as specified by the user. fio takes a

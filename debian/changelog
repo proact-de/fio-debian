@@ -5,6 +5,11 @@ fio (3.33-3) UNRELEASED; urgency=medium
     the original implementation of fiologparser.py.
     Dropped upstream in commit f4042e41df95da9677220556c891ca6ba5649ec1
 
+  [ Martin Steigerwald ]
+  * control: Add Breaks+Replaces for fio version lower than 3.32-2 to
+    fix update failures. Thanks to Andreas Beckmann for bug report
+    (Closes: #1025371).
+
  -- Sven Hoexter <hoexter@debian.org>  Wed, 30 Nov 2022 20:11:53 +0100
 
 fio (3.33-2) unstable; urgency=medium
