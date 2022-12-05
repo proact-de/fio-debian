@@ -2,7 +2,7 @@ fio (3.33-3) unstable; urgency=medium
 
   [ Sven Hoexter ]
   * control: Remove suggest for python-scipy. It was used in
-    the original implementation of fiologparser.py.
+    the original implementation of fiologparser.py. (LP: #1950003)
     Dropped upstream in commit f4042e41df95da9677220556c891ca6ba5649ec1
 
   [ Martin Steigerwald ]
