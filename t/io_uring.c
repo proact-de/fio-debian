@@ -156,7 +156,7 @@ static float plist[] = { 1.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0,
 static int plist_len = 17;
 
 #ifndef IORING_REGISTER_MAP_BUFFERS
-#define IORING_REGISTER_MAP_BUFFERS	22
+#define IORING_REGISTER_MAP_BUFFERS	26
 struct io_uring_map_buffers {
 	__s32	fd;
 	__u32	buf_start;
@@ -487,11 +487,10 @@ static void io_uring_probe(int fd)
 	struct io_uring_probe *p;
 	int ret;
 
-	p = malloc(sizeof(*p) + 256 * sizeof(struct io_uring_probe_op));
+	p = calloc(1, sizeof(*p) + 256 * sizeof(struct io_uring_probe_op));
 	if (!p)
 		return;
 
-	memset(p, 0, sizeof(*p) + 256 * sizeof(struct io_uring_probe_op));
 	ret = syscall(__NR_io_uring_register, fd, IORING_REGISTER_PROBE, p, 256);
 	if (ret < 0)
 		goto out;
@@ -530,8 +529,11 @@ static unsigned long long get_offset(struct submitter *s, struct file *f)
 	long r;
 
 	if (random_io) {
+		unsigned long long block;
+
 		r = __rand64(&s->rand_state);
-		offset = (r % (f->max_blocks - 1)) * bs;
+		block = r % f->max_blocks;
+		offset = block * (unsigned long long) bs;
 	} else {
 		offset = f->cur_off;
 		f->cur_off += bs;
@@ -542,15 +544,9 @@ static unsigned long long get_offset(struct submitter *s, struct file *f)
 	return offset;
 }
 
-static void init_io(struct submitter *s, unsigned index)
+static struct file *init_new_io(struct submitter *s)
 {
-	struct io_uring_sqe *sqe = &s->sqes[index];
 	struct file *f;
-
-	if (do_nop) {
-		sqe->opcode = IORING_OP_NOP;
-		return;
-	}
 
 	if (s->nr_files == 1) {
 		f = &s->files[0];
@@ -563,7 +559,22 @@ static void init_io(struct submitter *s, unsigned index)
 			f = &s->files[s->cur_file];
 		}
 	}
+
 	f->pending_ios++;
+	return f;
+}
+
+static void init_io(struct submitter *s, unsigned index)
+{
+	struct io_uring_sqe *sqe = &s->sqes[index];
+	struct file *f;
+
+	if (do_nop) {
+		sqe->opcode = IORING_OP_NOP;
+		return;
+	}
+
+	f = init_new_io(s);
 
 	if (register_files) {
 		sqe->flags = IOSQE_FIXED_FILE;
@@ -603,30 +614,10 @@ static void init_io_pt(struct submitter *s, unsigned index)
 	struct nvme_uring_cmd *cmd;
 	unsigned long long slba;
 	unsigned long long nlb;
-	long r;
 
-	if (s->nr_files == 1) {
-		f = &s->files[0];
-	} else {
-		f = &s->files[s->cur_file];
-		if (f->pending_ios >= file_depth(s)) {
-			s->cur_file++;
-			if (s->cur_file == s->nr_files)
-				s->cur_file = 0;
-			f = &s->files[s->cur_file];
-		}
-	}
-	f->pending_ios++;
+	f = init_new_io(s);
 
-	if (random_io) {
-		r = __rand64(&s->rand_state);
-		offset = (r % (f->max_blocks - 1)) * bs;
-	} else {
-		offset = f->cur_off;
-		f->cur_off += bs;
-		if (f->cur_off + bs > f->max_size)
-			f->cur_off = 0;
-	}
+	offset = get_offset(s, f);
 
 	if (register_files) {
 		sqe->fd = f->fixed_fd;
@@ -712,7 +703,7 @@ static int get_file_size(struct file *f)
 					bs, lbs);
 			return -1;
 		}
-		f->max_blocks = nlba / bs;
+		f->max_blocks = nlba;
 		f->max_size = nlba;
 		f->lba_shift = ilog2(lbs);
 		return 0;
@@ -1058,7 +1049,7 @@ static int submitter_init(struct submitter *s)
 
 		buf = allocate_mem(s, bs);
 		if (!buf)
-			return 1;
+			return -1;
 		s->iovecs[i].iov_base = buf;
 		s->iovecs[i].iov_len = bs;
 	}
@@ -1068,14 +1059,15 @@ static int submitter_init(struct submitter *s)
 		err = 0;
 	} else if (!aio) {
 		err = setup_ring(s);
-		sprintf(buf, "Engine=io_uring, sq_ring=%d, cq_ring=%d\n", *s->sq_ring.ring_entries, *s->cq_ring.ring_entries);
+		if (!err)
+			sprintf(buf, "Engine=io_uring, sq_ring=%d, cq_ring=%d\n", *s->sq_ring.ring_entries, *s->cq_ring.ring_entries);
 	} else {
 		sprintf(buf, "Engine=aio\n");
 		err = setup_aio(s);
 	}
 	if (err) {
 		printf("queue setup failed: %s, %d\n", strerror(errno), err);
-		return 1;
+		return -1;
 	}
 
 	if (!init_printed) {
@@ -1121,18 +1113,7 @@ static int prep_more_ios_aio(struct submitter *s, int max_ios, struct iocb *iocb
 	while (index < max_ios) {
 		struct iocb *iocb = &iocbs[index];
 
-		if (s->nr_files == 1) {
-			f = &s->files[0];
-		} else {
-			f = &s->files[s->cur_file];
-			if (f->pending_ios >= file_depth(s)) {
-				s->cur_file++;
-				if (s->cur_file == s->nr_files)
-					s->cur_file = 0;
-				f = &s->files[s->cur_file];
-			}
-		}
-		f->pending_ios++;
+		f = init_new_io(s);
 
 		io_prep_pread(iocb, f->real_fd, s->iovecs[index].iov_base,
 				s->iovecs[index].iov_len, get_offset(s, f));
@@ -1192,9 +1173,15 @@ static void *submitter_aio_fn(void *data)
 	struct iocb *iocbs;
 	struct io_event *events;
 #ifdef ARCH_HAVE_CPU_CLOCK
-	int nr_batch = submitter_init(s);
-#else
-	submitter_init(s);
+	int nr_batch;
+#endif
+
+	ret = submitter_init(s);
+	if (ret < 0)
+		goto done;
+
+#ifdef ARCH_HAVE_CPU_CLOCK
+	nr_batch = ret;
 #endif
 
 	iocbsptr = calloc(depth, sizeof(struct iocb *));
@@ -1258,6 +1245,7 @@ static void *submitter_aio_fn(void *data)
 	free(iocbsptr);
 	free(iocbs);
 	free(events);
+done:
 	finish = 1;
 	return NULL;
 }
@@ -1297,9 +1285,15 @@ static void *submitter_uring_fn(void *data)
 	struct io_sq_ring *ring = &s->sq_ring;
 	int ret, prepped;
 #ifdef ARCH_HAVE_CPU_CLOCK
-	int nr_batch = submitter_init(s);
-#else
-	submitter_init(s);
+	int nr_batch;
+#endif
+
+	ret = submitter_init(s);
+	if (ret < 0)
+		goto done;
+
+#ifdef ARCH_HAVE_CPU_CLOCK
+	nr_batch = ret;
 #endif
 
 	if (register_ring)
@@ -1403,6 +1397,7 @@ submit:
 	if (register_ring)
 		io_uring_unregister_ring(s);
 
+done:
 	finish = 1;
 	return NULL;
 }
@@ -1413,24 +1408,14 @@ static void *submitter_sync_fn(void *data)
 	struct submitter *s = data;
 	int ret;
 
-	submitter_init(s);
+	if (submitter_init(s) < 0)
+		goto done;
 
 	do {
 		uint64_t offset;
 		struct file *f;
 
-		if (s->nr_files == 1) {
-			f = &s->files[0];
-		} else {
-			f = &s->files[s->cur_file];
-			if (f->pending_ios >= file_depth(s)) {
-				s->cur_file++;
-				if (s->cur_file == s->nr_files)
-					s->cur_file = 0;
-				f = &s->files[s->cur_file];
-			}
-		}
-		f->pending_ios++;
+		f = init_new_io(s);
 
 #ifdef ARCH_HAVE_CPU_CLOCK
 		if (stats)
@@ -1460,6 +1445,7 @@ static void *submitter_sync_fn(void *data)
 			add_stat(s, s->clock_index, 1);
 	} while (!s->finish);
 
+done:
 	finish = 1;
 	return NULL;
 }

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/sysmacros.h>
 
 #include "flist.h"
 #include "fio.h"
@@ -545,7 +546,8 @@ bool read_blktrace(struct thread_data* td)
 			td->o.max_bs[DDIR_TRIM] = max(td->o.max_bs[DDIR_TRIM], rw_bs[DDIR_TRIM]);
 			io_u_quiesce(td);
 			free_io_mem(td);
-			init_io_u_buffers(td);
+			if (init_io_u_buffers(td))
+				return false;
 		}
 		return true;
 	}

@@ -917,12 +917,6 @@ static int fixup_options(struct thread_data *td)
 	}
 
 	/*
-	 * O_ATOMIC implies O_DIRECT
-	 */
-	if (o->oatomic)
-		o->odirect = 1;
-
-	/*
 	 * If randseed is set, that overrides randrepeat
 	 */
 	if (fio_option_is_set(o, rand_seed))
@@ -987,6 +981,25 @@ static int fixup_options(struct thread_data *td)
 		}
 	}
 
+	for_each_td(td2) {
+		if (td->o.ss_check_interval != td2->o.ss_check_interval) {
+			log_err("fio: conflicting ss_check_interval: %llu and %llu, must be globally equal\n",
+					td->o.ss_check_interval, td2->o.ss_check_interval);
+			ret |= 1;
+		}
+	} end_for_each();
+	if (td->o.ss_dur && td->o.ss_check_interval / 1000L < 1000) {
+		log_err("fio: ss_check_interval must be at least 1s\n");
+		ret |= 1;
+
+	}
+	if (td->o.ss_dur && (td->o.ss_dur % td->o.ss_check_interval != 0 || td->o.ss_dur <= td->o.ss_check_interval)) {
+		log_err("fio: ss_duration %lluus must be multiple of ss_check_interval %lluus\n",
+				td->o.ss_dur, td->o.ss_check_interval);
+		ret |= 1;
+	}
+
+
 	return ret;
 }
 
@@ -1007,25 +1020,18 @@ static void init_rand_file_service(struct thread_data *td)
 	}
 }
 
-void td_fill_verify_state_seed(struct thread_data *td)
+void td_fill_rand_seeds(struct thread_data *td)
 {
+	uint64_t read_seed = td->rand_seeds[FIO_RAND_BS_OFF];
+	uint64_t write_seed = td->rand_seeds[FIO_RAND_BS1_OFF];
+	uint64_t trim_seed = td->rand_seeds[FIO_RAND_BS2_OFF];
+	int i;
 	bool use64;
 
 	if (td->o.random_generator == FIO_RAND_GEN_TAUSWORTHE64)
 		use64 = true;
 	else
 		use64 = false;
-
-	init_rand_seed(&td->verify_state, td->rand_seeds[FIO_RAND_VER_OFF],
-		use64);
-}
-
-static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
-{
-	uint64_t read_seed = td->rand_seeds[FIO_RAND_BS_OFF];
-	uint64_t write_seed = td->rand_seeds[FIO_RAND_BS1_OFF];
-	uint64_t trim_seed = td->rand_seeds[FIO_RAND_BS2_OFF];
-	int i;
 
 	/*
 	 * trimwrite is special in that we need to generate the same
@@ -1043,7 +1049,8 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 	init_rand_seed(&td->bsrange_state[DDIR_WRITE], write_seed, use64);
 	init_rand_seed(&td->bsrange_state[DDIR_TRIM], trim_seed, use64);
 
-	td_fill_verify_state_seed(td);
+	init_rand_seed(&td->verify_state, td->rand_seeds[FIO_RAND_VER_OFF],
+		use64);
 	init_rand_seed(&td->rwmix_state, td->rand_seeds[FIO_RAND_MIX_OFF], false);
 
 	if (td->o.file_service_type == FIO_FSERVICE_RANDOM)
@@ -1062,12 +1069,6 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 	init_rand_seed(&td->prio_state, td->rand_seeds[FIO_RAND_PRIO_CMDS], false);
 	init_rand_seed(&td->dedupe_working_set_index_state, td->rand_seeds[FIO_RAND_DEDUPE_WORKING_SET_IX], use64);
 
-	if (!td_random(td))
-		return;
-
-	if (td->o.rand_repeatable)
-		td->rand_seeds[FIO_RAND_BLOCK_OFF] = FIO_RANDSEED * td->thread_number;
-
 	init_rand_seed(&td->random_state, td->rand_seeds[FIO_RAND_BLOCK_OFF], use64);
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
@@ -1075,29 +1076,39 @@ static void td_fill_rand_seeds_internal(struct thread_data *td, bool use64)
 
 		init_rand_seed(s, td->rand_seeds[FIO_RAND_SEQ_RAND_READ_OFF], false);
 	}
-}
-
-void td_fill_rand_seeds(struct thread_data *td)
-{
-	bool use64;
-
-	if (td->o.allrand_repeatable) {
-		unsigned int i;
-
-		for (i = 0; i < FIO_RAND_NR_OFFS; i++)
-			td->rand_seeds[i] = FIO_RANDSEED * td->thread_number
-			       	+ i;
-	}
-
-	if (td->o.random_generator == FIO_RAND_GEN_TAUSWORTHE64)
-		use64 = true;
-	else
-		use64 = false;
-
-	td_fill_rand_seeds_internal(td, use64);
 
 	init_rand_seed(&td->buf_state, td->rand_seeds[FIO_RAND_BUF_OFF], use64);
 	frand_copy(&td->buf_state_prev, &td->buf_state);
+}
+
+static int setup_random_seeds(struct thread_data *td)
+{
+	uint64_t seed;
+	unsigned int i;
+
+	if (!td->o.rand_repeatable && !fio_option_is_set(&td->o, rand_seed)) {
+		int ret = init_random_seeds(td->rand_seeds, sizeof(td->rand_seeds));
+		dprint(FD_RANDOM, "using system RNG for random seeds\n");
+		if (ret)
+			return ret;
+	} else {
+		seed = td->o.rand_seed;
+		for (i = 0; i < 4; i++)
+			seed *= 0x9e370001UL;
+
+		for (i = 0; i < FIO_RAND_NR_OFFS; i++) {
+			td->rand_seeds[i] = seed * td->thread_number + i;
+			seed *= 0x9e370001UL;
+		}
+	}
+
+	td_fill_rand_seeds(td);
+
+	dprint(FD_RANDOM, "FIO_RAND_NR_OFFS=%d\n", FIO_RAND_NR_OFFS);
+	for (int i = 0; i < FIO_RAND_NR_OFFS; i++)
+		dprint(FD_RANDOM, "rand_seeds[%d]=%" PRIu64 "\n", i, td->rand_seeds[i]);
+
+	return 0;
 }
 
 /*
@@ -1231,31 +1242,6 @@ static void init_flags(struct thread_data *td)
 			break;
 		}
 	}
-}
-
-static int setup_random_seeds(struct thread_data *td)
-{
-	uint64_t seed;
-	unsigned int i;
-
-	if (!td->o.rand_repeatable && !fio_option_is_set(&td->o, rand_seed)) {
-		int ret = init_random_seeds(td->rand_seeds, sizeof(td->rand_seeds));
-		if (!ret)
-			td_fill_rand_seeds(td);
-		return ret;
-	}
-
-	seed = td->o.rand_seed;
-	for (i = 0; i < 4; i++)
-		seed *= 0x9e370001UL;
-
-	for (i = 0; i < FIO_RAND_NR_OFFS; i++) {
-		td->rand_seeds[i] = seed * td->thread_number + i;
-		seed *= 0x9e370001UL;
-	}
-
-	td_fill_rand_seeds(td);
-	return 0;
 }
 
 enum {
@@ -1411,15 +1397,14 @@ static void gen_log_name(char *name, size_t size, const char *logtype,
 
 static int check_waitees(char *waitee)
 {
-	struct thread_data *td;
-	int i, ret = 0;
+	int ret = 0;
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td->subjob_number)
 			continue;
 
 		ret += !strcmp(td->o.name, waitee);
-	}
+	} end_for_each();
 
 	return ret;
 }
@@ -1454,10 +1439,7 @@ static bool wait_for_ok(const char *jobname, struct thread_options *o)
 
 static int verify_per_group_options(struct thread_data *td, const char *jobname)
 {
-	struct thread_data *td2;
-	int i;
-
-	for_each_td(td2, i) {
+	for_each_td(td2) {
 		if (td->groupid != td2->groupid)
 			continue;
 
@@ -1467,7 +1449,7 @@ static int verify_per_group_options(struct thread_data *td, const char *jobname)
 				jobname);
 			return 1;
 		}
-	}
+	} end_for_each();
 
 	return 0;
 }
@@ -1964,8 +1946,7 @@ static int __parse_jobs_ini(struct thread_data *td,
 	 * it's really 256 + small bit, 280 should suffice
 	 */
 	if (!nested) {
-		name = malloc(280);
-		memset(name, 0, 280);
+		name = calloc(1, 280);
 	}
 
 	opts = NULL;

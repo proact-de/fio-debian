@@ -62,7 +62,7 @@ SOURCE :=	$(sort $(patsubst $(SRCDIR)/%,%,$(wildcard $(SRCDIR)/crc/*.c)) \
 		gettime-thread.c helpers.c json.c idletime.c td_error.c \
 		profiles/tiobench.c profiles/act.c io_u_queue.c filelock.c \
 		workqueue.c rate-submit.c optgroup.c helper_thread.c \
-		steadystate.c zone-dist.c zbd.c dedupe.c
+		steadystate.c zone-dist.c zbd.c dedupe.c fdp.c
 
 ifdef CONFIG_LIBHDFS
   HDFSFLAGS= -I $(JAVA_HOME)/include -I $(JAVA_HOME)/include/linux -I $(FIO_LIBHDFS_INCLUDE)
@@ -208,11 +208,6 @@ ifdef CONFIG_MTD
   SOURCE += oslib/libmtd.c
   SOURCE += oslib/libmtd_legacy.c
 endif
-ifdef CONFIG_PMEMBLK
-  pmemblk_SRCS = engines/pmemblk.c
-  pmemblk_LIBS = -lpmemblk
-  ENGINES += pmemblk
-endif
 ifdef CONFIG_LINUX_DEVDAX
   dev-dax_SRCS = engines/dev-dax.c
   dev-dax_LIBS = -lpmem
@@ -236,6 +231,12 @@ ifdef CONFIG_LIBXNVME
   xnvme_LIBS = $(LIBXNVME_LIBS)
   xnvme_CFLAGS = $(LIBXNVME_CFLAGS)
   ENGINES += xnvme
+endif
+ifdef CONFIG_LIBBLKIO
+  libblkio_SRCS = engines/libblkio.c
+  libblkio_LIBS = $(LIBBLKIO_LIBS)
+  libblkio_CFLAGS = $(LIBBLKIO_CFLAGS)
+  ENGINES += libblkio
 endif
 ifeq ($(CONFIG_TARGET_OS), Linux)
   SOURCE += diskutil.c fifo.c blktrace.c cgroup.c trim.c engines/sg.c \
@@ -548,11 +549,15 @@ ifneq (,$(findstring -Wimplicit-fallthrough,$(CFLAGS)))
 LEX_YY_CFLAGS := -Wno-implicit-fallthrough
 endif
 
+ifdef CONFIG_HAVE_NO_STRINGOP
+YTAB_YY_CFLAGS := -Wno-stringop-truncation
+endif
+
 lex.yy.o: lex.yy.c y.tab.h
 	$(QUIET_CC)$(CC) -o $@ $(CFLAGS) $(CPPFLAGS) $(LEX_YY_CFLAGS) -c $<
 
 y.tab.o: y.tab.c y.tab.h
-	$(QUIET_CC)$(CC) -o $@ $(CFLAGS) $(CPPFLAGS) -c $<
+	$(QUIET_CC)$(CC) -o $@ $(CFLAGS) $(CPPFLAGS) $(YTAB_YY_CFLAGS) -c $<
 
 y.tab.c: exp/expression-parser.y
 	$(QUIET_YACC)$(YACC) -o $@ -l -d -b y $<

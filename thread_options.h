@@ -144,7 +144,7 @@ struct thread_options {
 	unsigned int do_verify;
 	unsigned int verify_interval;
 	unsigned int verify_offset;
-	char verify_pattern[MAX_PATTERN_SIZE];
+	char *verify_pattern;
 	unsigned int verify_pattern_bytes;
 	struct pattern_fmt verify_fmt[8];
 	unsigned int verify_fmt_sz;
@@ -162,7 +162,6 @@ struct thread_options {
 	unsigned int do_disk_util;
 	unsigned int override_sync;
 	unsigned int rand_repeatable;
-	unsigned int allrand_repeatable;
 	unsigned long long rand_seed;
 	unsigned int log_avg_msec;
 	unsigned int log_hist_msec;
@@ -211,6 +210,7 @@ struct thread_options {
 	fio_fp64_t ss_limit;
 	unsigned long long ss_dur;
 	unsigned long long ss_ramp_time;
+	unsigned long long ss_check_interval;
 	unsigned int overwrite;
 	unsigned int bw_avg_time;
 	unsigned int iops_avg_time;
@@ -256,7 +256,7 @@ struct thread_options {
 	unsigned int zero_buffers;
 	unsigned int refill_buffers;
 	unsigned int scramble_buffers;
-	char buffer_pattern[MAX_PATTERN_SIZE];
+	char *buffer_pattern;
 	unsigned int buffer_pattern_bytes;
 	unsigned int compress_percentage;
 	unsigned int compress_chunk;
@@ -386,6 +386,11 @@ struct thread_options {
 	fio_fp64_t zrt;
 	fio_fp64_t zrf;
 
+#define FIO_MAX_PLIS 16
+	unsigned int fdp;
+	unsigned int fdp_plis[FIO_MAX_PLIS];
+	unsigned int fdp_nrpli;
+
 	unsigned int log_entries;
 	unsigned int log_prio;
 };
@@ -464,7 +469,6 @@ struct thread_options_pack {
 	uint32_t do_verify;
 	uint32_t verify_interval;
 	uint32_t verify_offset;
-	uint8_t verify_pattern[MAX_PATTERN_SIZE];
 	uint32_t verify_pattern_bytes;
 	uint32_t verify_fatal;
 	uint32_t verify_dump;
@@ -480,8 +484,6 @@ struct thread_options_pack {
 	uint32_t do_disk_util;
 	uint32_t override_sync;
 	uint32_t rand_repeatable;
-	uint32_t allrand_repeatable;
-	uint32_t pad2;
 	uint64_t rand_seed;
 	uint32_t log_avg_msec;
 	uint32_t log_hist_msec;
@@ -529,6 +531,7 @@ struct thread_options_pack {
 	uint64_t ss_ramp_time;
 	uint32_t ss_state;
 	fio_fp64_t ss_limit;
+	uint64_t ss_check_interval;
 	uint32_t overwrite;
 	uint32_t bw_avg_time;
 	uint32_t iops_avg_time;
@@ -572,7 +575,6 @@ struct thread_options_pack {
 	uint32_t zero_buffers;
 	uint32_t refill_buffers;
 	uint32_t scramble_buffers;
-	uint8_t buffer_pattern[MAX_PATTERN_SIZE];
 	uint32_t buffer_pattern_bytes;
 	uint32_t compress_percentage;
 	uint32_t compress_chunk;
@@ -699,9 +701,20 @@ struct thread_options_pack {
 
 	uint32_t log_entries;
 	uint32_t log_prio;
+
+	uint32_t fdp;
+	uint32_t fdp_plis[FIO_MAX_PLIS];
+	uint32_t fdp_nrpli;
+
+	/*
+	 * verify_pattern followed by buffer_pattern from the unpacked struct
+	 */
+	uint8_t patterns[];
 } __attribute__((packed));
 
-extern void convert_thread_options_to_cpu(struct thread_options *o, struct thread_options_pack *top);
+extern int convert_thread_options_to_cpu(struct thread_options *o,
+		struct thread_options_pack *top, size_t top_sz);
+extern size_t thread_options_pack_size(struct thread_options *o);
 extern void convert_thread_options_to_net(struct thread_options_pack *top, struct thread_options *);
 extern int fio_test_cconv(struct thread_options *);
 extern void options_default_fill(struct thread_options *o);

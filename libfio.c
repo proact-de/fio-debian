@@ -74,6 +74,7 @@ static const char *fio_arch_strings[arch_nr] = {
 	"hppa",
 	"mips",
 	"aarch64",
+	"loongarch64",
 	"generic"
 };
 
@@ -131,9 +132,13 @@ void clear_io_state(struct thread_data *td, int all)
 
 void reset_all_stats(struct thread_data *td)
 {
+	unsigned long long b;
 	int i;
 
 	reset_io_counters(td, 1);
+
+	b = ddir_rw_sum(td->thinktime_blocks_counter);
+	td->last_thinktime_blocks -= b;
 
 	for (i = 0; i < DDIR_RWDIR_CNT; i++) {
 		td->io_bytes[i] = 0;
@@ -148,6 +153,8 @@ void reset_all_stats(struct thread_data *td)
 	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->ss.prev_time, &td->epoch, sizeof(td->epoch));
+
+	td->last_thinktime = td->epoch;
 
 	lat_target_reset(td);
 	clear_rusage_stat(td);
@@ -240,13 +247,11 @@ void fio_mark_td_terminate(struct thread_data *td)
 
 void fio_terminate_threads(unsigned int group_id, unsigned int terminate)
 {
-	struct thread_data *td;
 	pid_t pid = getpid();
-	int i;
 
 	dprint(FD_PROCESS, "terminate group_id=%d\n", group_id);
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if ((terminate == TERMINATE_GROUP && group_id == TERMINATE_ALL) ||
 		    (terminate == TERMINATE_GROUP && group_id == td->groupid) ||
 		    (terminate == TERMINATE_STONEWALL && td->runstate >= TD_RUNNING) ||
@@ -274,22 +279,20 @@ void fio_terminate_threads(unsigned int group_id, unsigned int terminate)
 					ops->terminate(td);
 			}
 		}
-	}
+	} end_for_each();
 }
 
 int fio_running_or_pending_io_threads(void)
 {
-	struct thread_data *td;
-	int i;
 	int nr_io_threads = 0;
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td->io_ops_init && td_ioengine_flagged(td, FIO_NOIO))
 			continue;
 		nr_io_threads++;
 		if (td->runstate < TD_EXITED)
 			return 1;
-	}
+	} end_for_each();
 
 	if (!nr_io_threads)
 		return -1; /* we only had cpuio threads to begin with */

@@ -686,10 +686,12 @@ Time related parameters
 
 .. option:: runtime=time
 
-	Tell fio to terminate processing after the specified period of time.  It
-	can be quite hard to determine for how long a specified job will run, so
-	this parameter is handy to cap the total runtime to a given time.  When
-	the unit is omitted, the value is interpreted in seconds.
+	Limit runtime. The test will run until it completes the configured I/O
+	workload or until it has run for this specified amount of time, whichever
+	occurs first. It can be quite hard to determine for how long a specified
+	job will run, so this parameter is handy to cap the total runtime to a
+	given time.  When the unit is omitted, the value is interpreted in
+	seconds.
 
 .. option:: time_based
 
@@ -1052,16 +1054,29 @@ Target file/device
 
 .. option:: max_open_zones=int
 
-	When running a random write test across an entire drive many more
-	zones will be open than in a typical application workload. Hence this
-	command line option that allows to limit the number of open zones. The
-	number of open zones is defined as the number of zones to which write
-	commands are issued.
+	A zone of a zoned block device is in the open state when it is partially
+	written (i.e. not all sectors of the zone have been written). Zoned
+	block devices may have a limit on the total number of zones that can
+	be simultaneously in the open state, that is, the number of zones that
+	can be written to simultaneously. The :option:`max_open_zones` parameter
+	limits the number of zones to which write commands are issued by all fio
+	jobs, that is, limits the number of zones that will be in the open
+	state. This parameter is relevant only if the :option:`zonemode` =zbd is
+	used. The default value is always equal to maximum number of open zones
+	of the target zoned block device and a value higher than this limit
+	cannot be specified by users unless the option
+	:option:`ignore_zone_limits` is specified. When
+	:option:`ignore_zone_limits` is specified or the target device has no
+	limit on the number of zones that can be in an open state,
+	:option:`max_open_zones` can specify 0 to disable any limit on the
+	number of zones that can be simultaneously written to by all jobs.
 
 .. option:: job_max_open_zones=int
 
-	Limit on the number of simultaneously opened zones per single
-	thread/process.
+	In the same manner as :option:`max_open_zones`, limit the number of open
+	zones per fio job, that is, the number of zones that a single job can
+	simultaneously write to. A value of zero indicates no limit.
+	Default: zero.
 
 .. option:: ignore_zone_limits=bool
 
@@ -1072,9 +1087,12 @@ Target file/device
 
 .. option:: zone_reset_threshold=float
 
-	A number between zero and one that indicates the ratio of logical
-	blocks with data to the total number of logical blocks in the test
-	above which zones should be reset periodically.
+	A number between zero and one that indicates the ratio of written bytes
+	in the zones with write pointers in the IO range to the size of the IO
+	range. When current ratio is above this ratio, zones are reset
+	periodically as :option:`zone_reset_frequency` specifies. If there are
+	multiple jobs when using this option, the IO range for all write jobs
+	has to be the same.
 
 .. option:: zone_reset_frequency=float
 
@@ -1093,12 +1111,6 @@ I/O type
 	If value is true, use non-buffered I/O. This is usually O_DIRECT. Note that
 	OpenBSD and ZFS on Solaris don't support direct I/O.  On Windows the synchronous
 	ioengines don't support direct I/O.  Default: false.
-
-.. option:: atomic=bool
-
-	If value is true, attempt to use atomic direct I/O. Atomic writes are
-	guaranteed to be stable once acknowledged by the operating system. Only
-	Linux supports O_ATOMIC right now.
 
 .. option:: buffered=bool
 
@@ -1163,13 +1175,34 @@ I/O type
 			Generate the same offset.
 
 	``sequential`` is only useful for random I/O, where fio would normally
-	generate a new random offset for every I/O. If you append e.g. 8 to randread,
-	you would get a new random offset for every 8 I/Os. The result would be a
-	seek for only every 8 I/Os, instead of for every I/O. Use ``rw=randread:8``
-	to specify that. As sequential I/O is already sequential, setting
-	``sequential`` for that would not result in any differences.  ``identical``
-	behaves in a similar fashion, except it sends the same offset 8 number of
-	times before generating a new offset.
+	generate a new random offset for every I/O. If you append e.g. 8 to
+	randread, i.e. ``rw=randread:8`` you would get a new random offset for
+	every 8 I/Os. The result would be a sequence of 8 sequential offsets
+	with a random starting point. However this behavior may change if a
+	sequential I/O reaches end of the file. As sequential I/O is already
+	sequential, setting ``sequential`` for that would not result in any
+	difference. ``identical`` behaves in a similar fashion, except it sends
+	the same offset 8 number of times before generating a new offset.
+
+	Example #1::
+
+		rw=randread:8
+		rw_sequencer=sequential
+		bs=4k
+
+	The generated sequence of offsets will look like this:
+	4k, 8k, 12k, 16k, 20k, 24k, 28k, 32k, 92k, 96k, 100k, 104k, 108k,
+	112k, 116k, 120k, 48k, 52k ...
+
+	Example #2::
+
+		rw=randread:8
+		rw_sequencer=identical
+		bs=4k
+
+	The generated sequence of offsets will look like this:
+	4k, 4k, 4k, 4k, 4k, 4k, 4k, 4k, 92k, 92k, 92k, 92k, 92k, 92k, 92k, 92k,
+	48k, 48k, 48k ...
 
 .. option:: unified_rw_reporting=str
 
@@ -1199,13 +1232,12 @@ I/O type
 
 .. option:: randrepeat=bool
 
-	Seed the random number generator used for random I/O patterns in a
-	predictable way so the pattern is repeatable across runs. Default: true.
+        Seed all random number generators in a predictable way so the pattern
+        is repeatable across runs. Default: true.
 
 .. option:: allrandrepeat=bool
 
-	Seed all random number generators in a predictable way so results are
-	repeatable across runs.  Default: false.
+	Alias for :option:`randrepeat`. Default: true.
 
 .. option:: randseed=int
 
@@ -1274,6 +1306,11 @@ I/O type
 
 		**random**
 			Advise using **FADV_RANDOM**.
+
+		**noreuse**
+			Advise using **FADV_NOREUSE**. This may be a no-op on older Linux
+			kernels. Since Linux 6.3, it provides a hint to the LRU algorithm.
+			See the :manpage:`posix_fadvise(2)` man page.
 
 .. option:: write_hint=str
 
@@ -1446,7 +1483,7 @@ I/O type
 	supplied as a value between 0 and 100.
 
 	The second, optional float is allowed for **pareto**, **zipf** and **normal** distributions.
-	It allows to set base of distribution in non-default place, giving more control
+	It allows one to set base of distribution in non-default place, giving more control
 	over most probable outcome. This value is in range [0-1] which maps linearly to
 	range of possible random values.
 	Defaults are: random for **pareto** and **zipf**, and 0.5 for **normal**.
@@ -1875,8 +1912,11 @@ I/O size
 .. option:: size=int
 
 	The total size of file I/O for each thread of this job. Fio will run until
-	this many bytes has been transferred, unless runtime is limited by other options
-	(such as :option:`runtime`, for instance, or increased/decreased by :option:`io_size`).
+	this many bytes has been transferred, unless runtime is altered by other means
+	such as (1) :option:`runtime`, (2) :option:`io_size` (3) :option:`number_ios`,
+	(4) gaps/holes while doing I/O's such as ``rw=read:16K``, or (5) sequential
+	I/O reaching end of the file which is possible when :option:`percentage_random`
+	is less than 100.
 	Fio will divide this size between the available files determined by options
 	such as :option:`nrfiles`, :option:`filename`, unless :option:`filesize` is
 	specified by the job. If the result of division happens to be 0, the size is
@@ -2107,11 +2147,6 @@ I/O engine
 			before overwriting. The `trimwrite` mode works well for this
 			constraint.
 
-		**pmemblk**
-			Read and write using filesystem DAX to a file on a filesystem
-			mounted with DAX on a persistent memory device through the PMDK
-			libpmemblk library.
-
 		**dev-dax**
 			Read and write using device DAX to a persistent memory device (e.g.,
 			/dev/dax0.0) through the PMDK libpmem library.
@@ -2191,6 +2226,21 @@ I/O engine
 			flexibility to access GNU/Linux Kernel NVMe driver via libaio, IOCTLs, io_uring,
 			the SPDK NVMe driver, or your own custom NVMe driver. The xnvme engine includes
 			engine specific options. (See https://xnvme.io).
+
+		**libblkio**
+			Use the libblkio library
+			(https://gitlab.com/libblkio/libblkio). The specific
+			*driver* to use must be set using
+			:option:`libblkio_driver`. If
+			:option:`mem`/:option:`iomem` is not specified, memory
+			allocation is delegated to libblkio (and so is
+			guaranteed to work with the selected *driver*). One
+			libblkio instance is used per process, so all jobs
+			setting option :option:`thread` will share a single
+			instance (with one queue per thread) and must specify
+			compatible options. Note that some drivers don't allow
+			several instances to access the same device or file
+			simultaneously, but allow it for threads.
 
 I/O engine specific parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2299,7 +2349,9 @@ with the caveat that when used on the command line, they must come after the
 	kernel of available items in the SQ ring. If this option is set, the
 	act of submitting IO will be done by a polling thread in the kernel.
 	This frees up cycles for fio, at the cost of using more CPU in the
-	system.
+	system. As submission is just the time it takes to fill in the sqe
+	entries and any syscall required to wake up the idle kernel thread,
+	fio will not report submission latencies.
 
 .. option:: sqthread_poll_cpu=int : [io_uring] [io_uring_cmd]
 
@@ -2320,6 +2372,12 @@ with the caveat that when used on the command line, they must come after the
         IO, polled completions do not. Hence they are require active reaping
         by the application. The benefits are more efficient IO for high IOPS
         scenarios, and lower latencies for low queue depth IO.
+
+   [libblkio]
+
+	Use poll queues. This is incompatible with
+	:option:`libblkio_wait_mode=eventfd <libblkio_wait_mode>` and
+	:option:`libblkio_force_enable_completion_eventfd`.
 
    [pvsync2]
 
@@ -2370,6 +2428,18 @@ with the caveat that when used on the command line, they must come after the
 
 	For direct I/O, requests will only succeed if cache invalidation isn't required,
 	file blocks are fully allocated and the disk request could be issued immediately.
+
+.. option:: fdp=bool : [io_uring_cmd]
+
+	Enable Flexible Data Placement mode for write commands.
+
+.. option:: fdp_pli=str : [io_uring_cmd]
+
+	Select which Placement ID Index/Indicies this job is allowed to use for
+	writes. By default, the job will cycle through all available Placement
+        IDs, so use this to isolate these identifiers to specific jobs. If you
+        want fio to use placement identifier only at indices 0, 2 and 5 specify
+        ``fdp_pli=0,2,5``.
 
 .. option:: cpuload=int : [cpuio]
 
@@ -2806,6 +2876,9 @@ with the caveat that when used on the command line, they must come after the
 	**posix**
 		Use the posix asynchronous I/O interface to perform one or
 		more I/O operations asynchronously.
+	**vfio**
+		Use the user-space VFIO-based backend, implemented using
+		libvfn instead of SPDK.
 	**nil**
 		Do not transfer any data; just pretend to. This is mainly used
 		for introspective performance evaluation.
@@ -2836,11 +2909,111 @@ with the caveat that when used on the command line, they must come after the
 
 .. option:: xnvme_dev_nsid=int : [xnvme]
 
-	xnvme namespace identifier for userspace NVMe driver, such as SPDK.
+	xnvme namespace identifier for userspace NVMe driver, SPDK or vfio.
+
+.. option:: xnvme_dev_subnqn=str : [xnvme]
+
+	Sets the subsystem NQN for fabrics. This is for xNVMe to utilize a
+	fabrics target with multiple systems.
+
+.. option:: xnvme_mem=str : [xnvme]
+
+	Select the xnvme memory backend. This can take these values.
+
+	**posix**
+		This is the default posix memory backend for linux NVMe driver.
+	**hugepage**
+		Use hugepages, instead of existing posix memory backend. The
+		memory backend uses hugetlbfs. This require users to allocate
+		hugepages, mount hugetlbfs and set an enviornment variable for
+		XNVME_HUGETLB_PATH.
+	**spdk**
+		Uses SPDK's memory allocator.
+	**vfio**
+		Uses libvfn's memory allocator. This also specifies the use
+		of libvfn backend instead of SPDK.
 
 .. option:: xnvme_iovec=int : [xnvme]
 
 	If this option is set. xnvme will use vectored read/write commands.
+
+.. option:: libblkio_driver=str : [libblkio]
+
+	The libblkio *driver* to use. Different drivers access devices through
+	different underlying interfaces. Available drivers depend on the
+	libblkio version in use and are listed at
+	https://libblkio.gitlab.io/libblkio/blkio.html#drivers
+
+.. option:: libblkio_path=str : [libblkio]
+
+	Sets the value of the driver-specific "path" property before connecting
+	the libblkio instance, which identifies the target device or file on
+	which to perform I/O. Its exact semantics are driver-dependent and not
+	all drivers may support it; see
+	https://libblkio.gitlab.io/libblkio/blkio.html#drivers
+
+.. option:: libblkio_pre_connect_props=str : [libblkio]
+
+	A colon-separated list of additional libblkio properties to be set after
+	creating but before connecting the libblkio instance. Each property must
+	have the format ``<name>=<value>``. Colons can be escaped as ``\:``.
+	These are set after the engine sets any other properties, so those can
+	be overriden. Available properties depend on the libblkio version in use
+	and are listed at
+	https://libblkio.gitlab.io/libblkio/blkio.html#properties
+
+.. option:: libblkio_num_entries=int : [libblkio]
+
+	Sets the value of the driver-specific "num-entries" property before
+	starting the libblkio instance. Its exact semantics are driver-dependent
+	and not all drivers may support it; see
+	https://libblkio.gitlab.io/libblkio/blkio.html#drivers
+
+.. option:: libblkio_queue_size=int : [libblkio]
+
+	Sets the value of the driver-specific "queue-size" property before
+	starting the libblkio instance. Its exact semantics are driver-dependent
+	and not all drivers may support it; see
+	https://libblkio.gitlab.io/libblkio/blkio.html#drivers
+
+.. option:: libblkio_pre_start_props=str : [libblkio]
+
+	A colon-separated list of additional libblkio properties to be set after
+	connecting but before starting the libblkio instance. Each property must
+	have the format ``<name>=<value>``. Colons can be escaped as ``\:``.
+	These are set after the engine sets any other properties, so those can
+	be overriden. Available properties depend on the libblkio version in use
+	and are listed at
+	https://libblkio.gitlab.io/libblkio/blkio.html#properties
+
+.. option:: libblkio_vectored : [libblkio]
+
+	Submit vectored read and write requests.
+
+.. option:: libblkio_write_zeroes_on_trim : [libblkio]
+
+	Submit trims as "write zeroes" requests instead of discard requests.
+
+.. option:: libblkio_wait_mode=str : [libblkio]
+
+	How to wait for completions:
+
+	**block** (default)
+		Use a blocking call to ``blkioq_do_io()``.
+	**eventfd**
+		Use a blocking call to ``read()`` on the completion eventfd.
+	**loop**
+		Use a busy loop with a non-blocking call to ``blkioq_do_io()``.
+
+.. option:: libblkio_force_enable_completion_eventfd : [libblkio]
+
+	Enable the queue's completion eventfd even when unused. This may impact
+	performance. The default is to enable it only if
+	:option:`libblkio_wait_mode=eventfd <libblkio_wait_mode>`.
+
+.. option:: no_completion_thread : [windowsaio]
+
+	Avoid using a separate thread for completion polling.
 
 I/O depth
 ~~~~~~~~~
@@ -3034,6 +3207,11 @@ I/O rate
 	fio will ignore the thinktime and continue doing IO at the specified
 	rate, instead of entering a catch-up mode after thinktime is done.
 
+.. option:: rate_cycle=int
+
+	Average bandwidth for :option:`rate` and :option:`rate_min` over this number
+	of milliseconds. Defaults to 1000.
+
 
 I/O latency
 ~~~~~~~~~~~
@@ -3071,11 +3249,6 @@ I/O latency
 	maximum latency. When the unit is omitted, the value is interpreted in
 	microseconds. Comma-separated values may be specified for reads, writes,
 	and trims as described in :option:`blocksize`.
-
-.. option:: rate_cycle=int
-
-	Average bandwidth for :option:`rate` and :option:`rate_min` over this number
-	of milliseconds. Defaults to 1000.
 
 
 I/O replay
@@ -3592,6 +3765,13 @@ Verification
 	verification pass, according to the settings in the job file used.  Default
 	false.
 
+.. option:: experimental_verify=bool
+
+        Enable experimental verification. Standard verify records I/O metadata
+        for later use during the verification phase. Experimental verify
+        instead resets the file after the write phase and then replays I/Os for
+        the verification phase.
+
 .. option:: trim_percentage=int
 
 	Number of verify blocks to discard/trim.
@@ -3607,10 +3787,6 @@ Verification
 .. option:: trim_backlog_batch=int
 
 	Trim this number of I/O blocks.
-
-.. option:: experimental_verify=bool
-
-	Enable experimental verification.
 
 Steady state
 ~~~~~~~~~~~~
@@ -3653,16 +3829,25 @@ Steady state
 
 .. option:: steadystate_duration=time, ss_dur=time
 
-	A rolling window of this duration will be used to judge whether steady state
-	has been reached. Data will be collected once per second. The default is 0
-	which disables steady state detection.  When the unit is omitted, the
-	value is interpreted in seconds.
+        A rolling window of this duration will be used to judge whether steady
+        state has been reached. Data will be collected every
+        :option:`ss_interval`.  The default is 0 which disables steady state
+        detection.  When the unit is omitted, the value is interpreted in
+        seconds.
 
 .. option:: steadystate_ramp_time=time, ss_ramp=time
 
 	Allow the job to run for the specified duration before beginning data
 	collection for checking the steady state job termination criterion. The
 	default is 0.  When the unit is omitted, the value is interpreted in seconds.
+
+.. option:: steadystate_check_interval=time, ss_interval=time
+
+        The values during the rolling window will be collected with a period of
+        this value. If :option:`ss_interval` is 30s and :option:`ss_dur` is
+        300s, 10 measurements will be taken. Default is 1s but that might not
+        converge, especially for slower devices, so set this accordingly. When
+        the unit is omitted, the value is interpreted in seconds.
 
 
 Measurements and reporting
@@ -4236,15 +4421,23 @@ writes in the example above).  In the order listed, they denote:
                 It is the sum of submission and completion latency.
 
 **bw**
-		Bandwidth statistics based on samples. Same names as the xlat stats,
-		but also includes the number of samples taken (**samples**) and an
-		approximate percentage of total aggregate bandwidth this thread
-		received in its group (**per**). This last value is only really
-		useful if the threads in this group are on the same disk, since they
-		are then competing for disk access.
+		Bandwidth statistics based on measurements from discrete
+		intervals. Fio continuously monitors bytes transferred and I/O
+		operations completed. By default fio calculates bandwidth in
+		each half-second interval (see :option:`bwavgtime`) and reports
+		descriptive statistics for the measurements here. Same names as
+		the xlat stats, but also includes the number of samples taken
+		(**samples**) and an approximate percentage of total aggregate
+		bandwidth this thread received in its group (**per**). This
+		last value is only really useful if the threads in this group
+		are on the same disk, since they are then competing for disk
+		access.
 
 **iops**
-		IOPS statistics based on samples. Same names as bw.
+		IOPS statistics based on measurements from discrete intervals.
+		For details see the description for bw above. See
+		:option:`iopsavgtime` to control the duration of the intervals.
+		Same values reported here as for bw except for percentage.
 
 **lat (nsec/usec/msec)**
 		The distribution of I/O completion latencies. This is the time from when
@@ -4501,7 +4694,7 @@ Trace file format v2
 ~~~~~~~~~~~~~~~~~~~~
 
 The second version of the trace file format was added in fio version 1.17.  It
-allows to access more then one file per trace and has a bigger set of possible
+allows one to access more than one file per trace and has a bigger set of possible
 file actions.
 
 The first line of the trace file has to be::

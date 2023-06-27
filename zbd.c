@@ -71,6 +71,19 @@ static inline uint64_t zbd_zone_capacity_end(const struct fio_zone_info *z)
 }
 
 /**
+ * zbd_zone_remainder - Return the number of bytes that are still available for
+ *                      writing before the zone gets full
+ * @z: zone info pointer.
+ */
+static inline uint64_t zbd_zone_remainder(struct fio_zone_info *z)
+{
+	if (z->wp >= zbd_zone_capacity_end(z))
+		return 0;
+
+	return zbd_zone_capacity_end(z) - z->wp;
+}
+
+/**
  * zbd_zone_full - verify whether a minimum number of bytes remain in a zone
  * @f: file pointer.
  * @z: zone info pointer.
@@ -83,8 +96,7 @@ static bool zbd_zone_full(const struct fio_file *f, struct fio_zone_info *z,
 {
 	assert((required & 511) == 0);
 
-	return z->has_wp &&
-		z->wp + required > zbd_zone_capacity_end(z);
+	return z->has_wp && required > zbd_zone_remainder(z);
 }
 
 static void zone_lock(struct thread_data *td, const struct fio_file *f,
@@ -133,6 +145,11 @@ static inline struct fio_zone_info *
 zbd_offset_to_zone(const struct fio_file *f,  uint64_t offset)
 {
 	return zbd_get_zone(f, zbd_offset_to_zone_idx(f, offset));
+}
+
+static bool accounting_vdb(struct thread_data *td, const struct fio_file *f)
+{
+	return td->o.zrt.u.f && td_write(td);
 }
 
 /**
@@ -196,8 +213,8 @@ static int zbd_report_zones(struct thread_data *td, struct fio_file *f,
 		ret = blkzoned_report_zones(td, f, offset, zones, nr_zones);
 	if (ret < 0) {
 		td_verror(td, errno, "report zones failed");
-		log_err("%s: report zones from sector %"PRIu64" failed (%d).\n",
-			f->file_name, offset >> 9, errno);
+		log_err("%s: report zones from sector %"PRIu64" failed (nr_zones=%d; errno=%d).\n",
+			f->file_name, offset >> 9, nr_zones, errno);
 	} else if (ret == 0) {
 		td_verror(td, errno, "Empty zone report");
 		log_err("%s: report zones from sector %"PRIu64" is empty.\n",
@@ -273,13 +290,13 @@ static int zbd_reset_zone(struct thread_data *td, struct fio_file *f,
 		break;
 	}
 
-	pthread_mutex_lock(&f->zbd_info->mutex);
-	f->zbd_info->sectors_with_data -= data_in_zone;
-	f->zbd_info->wp_sectors_with_data -= data_in_zone;
-	pthread_mutex_unlock(&f->zbd_info->mutex);
+	if (accounting_vdb(td, f)) {
+		pthread_mutex_lock(&f->zbd_info->mutex);
+		f->zbd_info->wp_valid_data_bytes -= data_in_zone;
+		pthread_mutex_unlock(&f->zbd_info->mutex);
+	}
 
 	z->wp = z->start;
-	z->verify_block = 0;
 
 	td->ts.nr_zone_resets++;
 
@@ -320,6 +337,44 @@ static void zbd_close_zone(struct thread_data *td, const struct fio_file *f,
 	f->zbd_info->num_open_zones--;
 	td->num_open_zones--;
 	z->open = 0;
+}
+
+/**
+ * zbd_finish_zone - finish the specified zone
+ * @td: FIO thread data.
+ * @f: FIO file for which to finish a zone
+ * @z: Zone to finish.
+ *
+ * Finish the zone at @offset with open or close status.
+ */
+static int zbd_finish_zone(struct thread_data *td, struct fio_file *f,
+			   struct fio_zone_info *z)
+{
+	uint64_t offset = z->start;
+	uint64_t length = f->zbd_info->zone_size;
+	int ret = 0;
+
+	switch (f->zbd_info->model) {
+	case ZBD_HOST_AWARE:
+	case ZBD_HOST_MANAGED:
+		if (td->io_ops && td->io_ops->finish_zone)
+			ret = td->io_ops->finish_zone(td, f, offset, length);
+		else
+			ret = blkzoned_finish_zone(td, f, offset, length);
+		break;
+	default:
+		break;
+	}
+
+	if (ret < 0) {
+		td_verror(td, errno, "finish zone failed");
+		log_err("%s: finish zone at sector %"PRIu64" failed (%d).\n",
+			f->file_name, offset >> 9, errno);
+	} else {
+		z->wp = (z+1)->start;
+	}
+
+	return ret;
 }
 
 /**
@@ -440,7 +495,7 @@ static bool zbd_open_zone(struct thread_data *td, const struct fio_file *f,
 		 * already in-flight, handle it as a full zone instead of an
 		 * open zone.
 		 */
-		if (z->wp >= zbd_zone_capacity_end(z))
+		if (!zbd_zone_remainder(z))
 			res = false;
 		goto out;
 	}
@@ -469,11 +524,10 @@ out:
 /* Verify whether direct I/O is used for all host-managed zoned block drives. */
 static bool zbd_using_direct_io(void)
 {
-	struct thread_data *td;
 	struct fio_file *f;
-	int i, j;
+	int j;
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td->o.odirect || !(td->o.td_ddir & TD_DDIR_WRITE))
 			continue;
 		for_each_file(td, f, j) {
@@ -481,13 +535,13 @@ static bool zbd_using_direct_io(void)
 			    f->zbd_info->model == ZBD_HOST_MANAGED)
 				return false;
 		}
-	}
+	} end_for_each();
 
 	return true;
 }
 
 /* Whether or not the I/O range for f includes one or more sequential zones */
-static bool zbd_is_seq_job(struct fio_file *f)
+static bool zbd_is_seq_job(const struct fio_file *f)
 {
 	uint32_t zone_idx, zone_idx_b, zone_idx_e;
 
@@ -584,27 +638,25 @@ static bool zbd_zone_align_file_sizes(struct thread_data *td,
  */
 static bool zbd_verify_sizes(void)
 {
-	struct thread_data *td;
 	struct fio_file *f;
-	int i, j;
+	int j;
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		for_each_file(td, f, j) {
 			if (!zbd_zone_align_file_sizes(td, f))
 				return false;
 		}
-	}
+	} end_for_each();
 
 	return true;
 }
 
 static bool zbd_verify_bs(void)
 {
-	struct thread_data *td;
 	struct fio_file *f;
-	int i, j, k;
+	int j;
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td_trim(td) &&
 		    (td->o.min_bs[DDIR_TRIM] != td->o.max_bs[DDIR_TRIM] ||
 		     td->o.bssplit_nr[DDIR_TRIM])) {
@@ -624,17 +676,8 @@ static bool zbd_verify_bs(void)
 					 zone_size);
 				return false;
 			}
-			for (k = 0; k < FIO_ARRAY_SIZE(td->o.bs); k++) {
-				if (td->o.verify != VERIFY_NONE &&
-				    zone_size % td->o.bs[k] != 0) {
-					log_info("%s: block size %llu is not a divisor of the zone size %"PRIu64"\n",
-						 f->file_name, td->o.bs[k],
-						 zone_size);
-					return false;
-				}
-			}
 		}
-	}
+	} end_for_each();
 	return true;
 }
 
@@ -733,7 +776,8 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 	int nr_zones, nrz;
 	struct zbd_zone *zones, *z;
 	struct fio_zone_info *p;
-	uint64_t zone_size, offset;
+	uint64_t zone_size, offset, capacity;
+	bool same_zone_cap = true;
 	struct zoned_block_device_info *zbd_info = NULL;
 	int i, j, ret = -ENOMEM;
 
@@ -750,6 +794,7 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 	}
 
 	zone_size = zones[0].len;
+	capacity = zones[0].capacity;
 	nr_zones = (f->real_file_size + zone_size - 1) / zone_size;
 
 	if (td->o.zone_size == 0) {
@@ -778,6 +823,8 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 						     PTHREAD_MUTEX_RECURSIVE);
 			p->start = z->start;
 			p->capacity = z->capacity;
+			if (capacity != z->capacity)
+				same_zone_cap = false;
 
 			switch (z->cond) {
 			case ZBD_ZONE_COND_NOT_WP:
@@ -802,8 +849,9 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 			p->cond = z->cond;
 
 			if (j > 0 && p->start != p[-1].start + zone_size) {
-				log_info("%s: invalid zone data\n",
-					 f->file_name);
+				log_info("%s: invalid zone data [%d:%d]: %"PRIu64" + %"PRIu64" != %"PRIu64"\n",
+					 f->file_name, j, i,
+					 p[-1].start, zone_size, p->start);
 				ret = -EINVAL;
 				goto out;
 			}
@@ -832,6 +880,11 @@ static int parse_zone_info(struct thread_data *td, struct fio_file *f)
 	f->zbd_info->zone_size_log2 = is_power_of_2(zone_size) ?
 		ilog2(zone_size) : 0;
 	f->zbd_info->nr_zones = nr_zones;
+
+	if (same_zone_cap)
+		dprint(FD_ZBD, "Zone capacity = %"PRIu64" KB\n",
+		       capacity / 1024);
+
 	zbd_info = NULL;
 	ret = 0;
 
@@ -963,11 +1016,10 @@ void zbd_free_zone_info(struct fio_file *f)
  */
 static int zbd_init_zone_info(struct thread_data *td, struct fio_file *file)
 {
-	struct thread_data *td2;
 	struct fio_file *f2;
-	int i, j, ret;
+	int j, ret;
 
-	for_each_td(td2, i) {
+	for_each_td(td2) {
 		for_each_file(td2, f2, j) {
 			if (td2 == td && f2 == file)
 				continue;
@@ -978,7 +1030,7 @@ static int zbd_init_zone_info(struct thread_data *td, struct fio_file *file)
 			file->zbd_info->refcount++;
 			return 0;
 		}
-	}
+	} end_for_each();
 
 	ret = zbd_create_zone_info(td, file);
 	if (ret < 0)
@@ -1028,6 +1080,52 @@ void zbd_recalc_options_with_zone_granularity(struct thread_data *td)
 	}
 }
 
+static uint64_t zbd_verify_and_set_vdb(struct thread_data *td,
+				       const struct fio_file *f)
+{
+	struct fio_zone_info *zb, *ze, *z;
+	uint64_t wp_vdb = 0;
+	struct zoned_block_device_info *zbdi = f->zbd_info;
+
+	assert(td->runstate < TD_RUNNING);
+	assert(zbdi);
+
+	if (!accounting_vdb(td, f))
+		return 0;
+
+	/*
+	 * Ensure that the I/O range includes one or more sequential zones so
+	 * that f->min_zone and f->max_zone have different values.
+	 */
+	if (!zbd_is_seq_job(f))
+		return 0;
+
+	if (zbdi->write_min_zone != zbdi->write_max_zone) {
+		if (zbdi->write_min_zone != f->min_zone ||
+		    zbdi->write_max_zone != f->max_zone) {
+			td_verror(td, EINVAL,
+				  "multi-jobs with different write ranges are "
+				  "not supported with zone_reset_threshold");
+			log_err("multi-jobs with different write ranges are "
+				"not supported with zone_reset_threshold\n");
+		}
+		return 0;
+	}
+
+	zbdi->write_min_zone = f->min_zone;
+	zbdi->write_max_zone = f->max_zone;
+
+	zb = zbd_get_zone(f, f->min_zone);
+	ze = zbd_get_zone(f, f->max_zone);
+	for (z = zb; z < ze; z++)
+		if (z->has_wp)
+			wp_vdb += z->wp - z->start;
+
+	zbdi->wp_valid_data_bytes = wp_vdb;
+
+	return wp_vdb;
+}
+
 int zbd_setup_files(struct thread_data *td)
 {
 	struct fio_file *f;
@@ -1044,16 +1142,27 @@ int zbd_setup_files(struct thread_data *td)
 	if (!zbd_verify_bs())
 		return 1;
 
+	if (td->o.experimental_verify) {
+		log_err("zonemode=zbd does not support experimental verify\n");
+		return 1;
+	}
+
 	for_each_file(td, f, i) {
 		struct zoned_block_device_info *zbd = f->zbd_info;
 		struct fio_zone_info *z;
 		int zi;
+		uint64_t vdb;
 
 		assert(zbd);
 
 		f->min_zone = zbd_offset_to_zone_idx(f, f->file_offset);
 		f->max_zone =
 			zbd_offset_to_zone_idx(f, f->file_offset + f->io_size);
+
+		vdb = zbd_verify_and_set_vdb(td, f);
+
+		dprint(FD_ZBD, "%s(%s): valid data bytes = %" PRIu64 "\n",
+		       __func__, f->file_name, vdb);
 
 		/*
 		 * When all zones in the I/O range are conventional, io_size
@@ -1146,86 +1255,32 @@ static bool zbd_dec_and_reset_write_cnt(const struct thread_data *td,
 	return write_cnt == 0;
 }
 
-enum swd_action {
-	CHECK_SWD,
-	SET_SWD,
-};
-
-/* Calculate the number of sectors with data (swd) and perform action 'a' */
-static uint64_t zbd_process_swd(struct thread_data *td,
-				const struct fio_file *f, enum swd_action a)
-{
-	struct fio_zone_info *zb, *ze, *z;
-	uint64_t swd = 0;
-	uint64_t wp_swd = 0;
-
-	zb = zbd_get_zone(f, f->min_zone);
-	ze = zbd_get_zone(f, f->max_zone);
-	for (z = zb; z < ze; z++) {
-		if (z->has_wp) {
-			zone_lock(td, f, z);
-			wp_swd += z->wp - z->start;
-		}
-		swd += z->wp - z->start;
-	}
-
-	pthread_mutex_lock(&f->zbd_info->mutex);
-	switch (a) {
-	case CHECK_SWD:
-		assert(f->zbd_info->sectors_with_data == swd);
-		assert(f->zbd_info->wp_sectors_with_data == wp_swd);
-		break;
-	case SET_SWD:
-		f->zbd_info->sectors_with_data = swd;
-		f->zbd_info->wp_sectors_with_data = wp_swd;
-		break;
-	}
-	pthread_mutex_unlock(&f->zbd_info->mutex);
-
-	for (z = zb; z < ze; z++)
-		if (z->has_wp)
-			zone_unlock(z);
-
-	return swd;
-}
-
-/*
- * The swd check is useful for debugging but takes too much time to leave
- * it enabled all the time. Hence it is disabled by default.
- */
-static const bool enable_check_swd = false;
-
-/* Check whether the values of zbd_info.*sectors_with_data are correct. */
-static void zbd_check_swd(struct thread_data *td, const struct fio_file *f)
-{
-	if (!enable_check_swd)
-		return;
-
-	zbd_process_swd(td, f, CHECK_SWD);
-}
-
 void zbd_file_reset(struct thread_data *td, struct fio_file *f)
 {
 	struct fio_zone_info *zb, *ze;
-	uint64_t swd;
+	bool verify_data_left = false;
 
 	if (!f->zbd_info || !td_write(td))
 		return;
 
 	zb = zbd_get_zone(f, f->min_zone);
 	ze = zbd_get_zone(f, f->max_zone);
-	swd = zbd_process_swd(td, f, SET_SWD);
-
-	dprint(FD_ZBD, "%s(%s): swd = %" PRIu64 "\n",
-	       __func__, f->file_name, swd);
 
 	/*
 	 * If data verification is enabled reset the affected zones before
 	 * writing any data to avoid that a zone reset has to be issued while
 	 * writing data, which causes data loss.
 	 */
-	if (td->o.verify != VERIFY_NONE && td->runstate != TD_VERIFYING)
-		zbd_reset_zones(td, f, zb, ze);
+	if (td->o.verify != VERIFY_NONE) {
+		verify_data_left = td->runstate == TD_VERIFYING ||
+			td->io_hist_len || td->verify_batch;
+		if (td->io_hist_len && td->o.verify_backlog)
+			verify_data_left =
+				td->io_hist_len % td->o.verify_backlog;
+		if (!verify_data_left)
+			zbd_reset_zones(td, f, zb, ze);
+	}
+
 	zbd_reset_write_cnt(td, f);
 }
 
@@ -1239,13 +1294,10 @@ static uint32_t pick_random_zone_idx(const struct fio_file *f,
 
 static bool any_io_in_flight(void)
 {
-	struct thread_data *td;
-	int i;
-
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td->io_u_in_flight)
 			return true;
-	}
+	} end_for_each();
 
 	return false;
 }
@@ -1368,7 +1420,7 @@ found_candidate_zone:
 	/* Both z->mutex and zbdi->mutex are held. */
 
 examine_zone:
-	if (z->wp + min_bs <= zbd_zone_capacity_end(z)) {
+	if (zbd_zone_remainder(z) >= min_bs) {
 		pthread_mutex_unlock(&zbdi->mutex);
 		goto out;
 	}
@@ -1433,7 +1485,7 @@ retry:
 		z = zbd_get_zone(f, zone_idx);
 
 		zone_lock(td, f, z);
-		if (z->wp + min_bs <= zbd_zone_capacity_end(z))
+		if (zbd_zone_remainder(z) >= min_bs)
 			goto out;
 		pthread_mutex_lock(&zbdi->mutex);
 	}
@@ -1472,42 +1524,6 @@ out:
 	io_u->offset = z->start;
 	assert(z->has_wp);
 	assert(z->cond != ZBD_ZONE_COND_OFFLINE);
-
-	return z;
-}
-
-/* The caller must hold z->mutex. */
-static struct fio_zone_info *zbd_replay_write_order(struct thread_data *td,
-						    struct io_u *io_u,
-						    struct fio_zone_info *z)
-{
-	const struct fio_file *f = io_u->file;
-	const uint64_t min_bs = td->o.min_bs[DDIR_WRITE];
-
-	if (!zbd_open_zone(td, f, z)) {
-		zone_unlock(z);
-		z = zbd_convert_to_open_zone(td, io_u);
-		assert(z);
-	}
-
-	if (z->verify_block * min_bs >= z->capacity) {
-		log_err("%s: %d * %"PRIu64" >= %"PRIu64"\n",
-			f->file_name, z->verify_block, min_bs, z->capacity);
-		/*
-		 * If the assertion below fails during a test run, adding
-		 * "--experimental_verify=1" to the command line may help.
-		 */
-		assert(false);
-	}
-
-	io_u->offset = z->start + z->verify_block * min_bs;
-	if (io_u->offset + io_u->buflen >= zbd_zone_capacity_end(z)) {
-		log_err("%s: %llu + %llu >= %"PRIu64"\n",
-			f->file_name, io_u->offset, io_u->buflen,
-			zbd_zone_capacity_end(z));
-		assert(false);
-	}
-	z->verify_block += io_u->buflen / min_bs;
 
 	return z;
 }
@@ -1621,12 +1637,11 @@ static void zbd_queue_io(struct thread_data *td, struct io_u *io_u, int q,
 		 * z->wp > zone_end means that one or more I/O errors
 		 * have occurred.
 		 */
-		pthread_mutex_lock(&zbd_info->mutex);
-		if (z->wp <= zone_end) {
-			zbd_info->sectors_with_data += zone_end - z->wp;
-			zbd_info->wp_sectors_with_data += zone_end - z->wp;
+		if (accounting_vdb(td, f) && z->wp <= zone_end) {
+			pthread_mutex_lock(&zbd_info->mutex);
+			zbd_info->wp_valid_data_bytes += zone_end - z->wp;
+			pthread_mutex_unlock(&zbd_info->mutex);
 		}
-		pthread_mutex_unlock(&zbd_info->mutex);
 		z->wp = zone_end;
 		break;
 	default:
@@ -1666,7 +1681,6 @@ static void zbd_put_io(struct thread_data *td, const struct io_u *io_u)
 	zbd_end_zone_io(td, io_u, z);
 
 	zone_unlock(z);
-	zbd_check_swd(td, f);
 }
 
 /*
@@ -1783,8 +1797,7 @@ enum fio_ddir zbd_adjust_ddir(struct thread_data *td, struct io_u *io_u,
 	if (ddir != DDIR_READ || !td_rw(td))
 		return ddir;
 
-	if (io_u->file->zbd_info->sectors_with_data ||
-	    td->o.read_beyond_wp)
+	if (io_u->file->last_start[DDIR_WRITE] != -1ULL || td->o.read_beyond_wp)
 		return DDIR_READ;
 
 	return DDIR_WRITE;
@@ -1856,16 +1869,12 @@ enum io_u_action zbd_adjust_block(struct thread_data *td, struct io_u *io_u)
 	    io_u->ddir == DDIR_READ && td->o.read_beyond_wp)
 		return io_u_accept;
 
-	zbd_check_swd(td, f);
-
 	zone_lock(td, f, zb);
 
 	switch (io_u->ddir) {
 	case DDIR_READ:
-		if (td->runstate == TD_VERIFYING && td_write(td)) {
-			zb = zbd_replay_write_order(td, io_u, zb);
+		if (td->runstate == TD_VERIFYING && td_write(td))
 			goto accept;
-		}
 
 		/*
 		 * Check that there is enough written data in the zone to do an
@@ -1941,6 +1950,33 @@ enum io_u_action zbd_adjust_block(struct thread_data *td, struct io_u *io_u)
 			goto eof;
 		}
 
+retry:
+		if (zbd_zone_remainder(zb) > 0 &&
+		    zbd_zone_remainder(zb) < min_bs) {
+			pthread_mutex_lock(&f->zbd_info->mutex);
+			zbd_close_zone(td, f, zb);
+			pthread_mutex_unlock(&f->zbd_info->mutex);
+			dprint(FD_ZBD,
+			       "%s: finish zone %d\n",
+			       f->file_name, zbd_zone_idx(f, zb));
+			io_u_quiesce(td);
+			zbd_finish_zone(td, f, zb);
+			if (zbd_zone_idx(f, zb) + 1 >= f->max_zone) {
+				if (!td_random(td))
+					goto eof;
+			}
+			zone_unlock(zb);
+
+			/* Find the next write pointer zone */
+			do {
+				zb++;
+				if (zbd_zone_idx(f, zb) >= f->max_zone)
+					zb = zbd_get_zone(f, f->min_zone);
+			} while (!zb->has_wp);
+
+			zone_lock(td, f, zb);
+		}
+
 		if (!zbd_open_zone(td, f, zb)) {
 			zone_unlock(zb);
 			zb = zbd_convert_to_open_zone(td, io_u);
@@ -1951,16 +1987,33 @@ enum io_u_action zbd_adjust_block(struct thread_data *td, struct io_u *io_u)
 			}
 		}
 
+		if (zbd_zone_remainder(zb) > 0 &&
+		    zbd_zone_remainder(zb) < min_bs)
+			goto retry;
+
 		/* Check whether the zone reset threshold has been exceeded */
 		if (td->o.zrf.u.f) {
-			if (zbdi->wp_sectors_with_data >= f->io_size * td->o.zrt.u.f &&
+			if (zbdi->wp_valid_data_bytes >=
+			    f->io_size * td->o.zrt.u.f &&
 			    zbd_dec_and_reset_write_cnt(td, f))
 				zb->reset_zone = 1;
 		}
 
 		/* Reset the zone pointer if necessary */
 		if (zb->reset_zone || zbd_zone_full(f, zb, min_bs)) {
-			assert(td->o.verify == VERIFY_NONE);
+			if (td->o.verify != VERIFY_NONE) {
+				/*
+				 * Unset io-u->file to tell get_next_verify()
+				 * that this IO is not requeue.
+				 */
+				io_u->file = NULL;
+				if (!get_next_verify(td, io_u)) {
+					zone_unlock(zb);
+					return io_u_accept;
+				}
+				io_u->file = f;
+			}
+
 			/*
 			 * Since previous write requests may have been submitted
 			 * asynchronously and since we will submit the zone

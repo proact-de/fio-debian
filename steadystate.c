@@ -4,6 +4,7 @@
 #include "steadystate.h"
 
 bool steadystate_enabled = false;
+unsigned int ss_check_interval = 1000;
 
 void steadystate_free(struct thread_data *td)
 {
@@ -15,16 +16,18 @@ void steadystate_free(struct thread_data *td)
 
 static void steadystate_alloc(struct thread_data *td)
 {
-	td->ss.bw_data = calloc(td->ss.dur, sizeof(uint64_t));
-	td->ss.iops_data = calloc(td->ss.dur, sizeof(uint64_t));
+	int intervals = td->ss.dur / (ss_check_interval / 1000L);
+
+	td->ss.bw_data = calloc(intervals, sizeof(uint64_t));
+	td->ss.iops_data = calloc(intervals, sizeof(uint64_t));
 
 	td->ss.state |= FIO_SS_DATA;
 }
 
 void steadystate_setup(void)
 {
-	struct thread_data *td, *prev_td;
-	int i, prev_groupid;
+	struct thread_data *prev_td;
+	int prev_groupid;
 
 	if (!steadystate_enabled)
 		return;
@@ -36,7 +39,7 @@ void steadystate_setup(void)
 	 */
 	prev_groupid = -1;
 	prev_td = NULL;
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (!td->ss.dur)
 			continue;
 
@@ -51,7 +54,7 @@ void steadystate_setup(void)
 			prev_groupid = td->groupid;
 		}
 		prev_td = td;
-	}
+	} end_for_each();
 
 	if (prev_td && prev_td->o.group_reporting)
 		steadystate_alloc(prev_td);
@@ -64,6 +67,7 @@ static bool steadystate_slope(uint64_t iops, uint64_t bw,
 	double result;
 	struct steadystate_data *ss = &td->ss;
 	uint64_t new_val;
+	int intervals = ss->dur / (ss_check_interval / 1000L);
 
 	ss->bw_data[ss->tail] = bw;
 	ss->iops_data[ss->tail] = iops;
@@ -73,15 +77,15 @@ static bool steadystate_slope(uint64_t iops, uint64_t bw,
 	else
 		new_val = bw;
 
-	if (ss->state & FIO_SS_BUFFER_FULL || ss->tail - ss->head == ss->dur - 1) {
+	if (ss->state & FIO_SS_BUFFER_FULL || ss->tail - ss->head == intervals - 1) {
 		if (!(ss->state & FIO_SS_BUFFER_FULL)) {
 			/* first time through */
-			for(i = 0, ss->sum_y = 0; i < ss->dur; i++) {
+			for (i = 0, ss->sum_y = 0; i < intervals; i++) {
 				if (ss->state & FIO_SS_IOPS)
 					ss->sum_y += ss->iops_data[i];
 				else
 					ss->sum_y += ss->bw_data[i];
-				j = (ss->head + i) % ss->dur;
+				j = (ss->head + i) % intervals;
 				if (ss->state & FIO_SS_IOPS)
 					ss->sum_xy += i * ss->iops_data[j];
 				else
@@ -91,7 +95,7 @@ static bool steadystate_slope(uint64_t iops, uint64_t bw,
 		} else {		/* easy to update the sums */
 			ss->sum_y -= ss->oldest_y;
 			ss->sum_y += new_val;
-			ss->sum_xy = ss->sum_xy - ss->sum_y + ss->dur * new_val;
+			ss->sum_xy = ss->sum_xy - ss->sum_y + intervals * new_val;
 		}
 
 		if (ss->state & FIO_SS_IOPS)
@@ -105,10 +109,10 @@ static bool steadystate_slope(uint64_t iops, uint64_t bw,
 		 * equally spaced when they are often off by a few milliseconds.
 		 * This assumption greatly simplifies the calculations.
 		 */
-		ss->slope = (ss->sum_xy - (double) ss->sum_x * ss->sum_y / ss->dur) /
-				(ss->sum_x_sq - (double) ss->sum_x * ss->sum_x / ss->dur);
+		ss->slope = (ss->sum_xy - (double) ss->sum_x * ss->sum_y / intervals) /
+				(ss->sum_x_sq - (double) ss->sum_x * ss->sum_x / intervals);
 		if (ss->state & FIO_SS_PCT)
-			ss->criterion = 100.0 * ss->slope / (ss->sum_y / ss->dur);
+			ss->criterion = 100.0 * ss->slope / (ss->sum_y / intervals);
 		else
 			ss->criterion = ss->slope;
 
@@ -123,9 +127,9 @@ static bool steadystate_slope(uint64_t iops, uint64_t bw,
 			return true;
 	}
 
-	ss->tail = (ss->tail + 1) % ss->dur;
+	ss->tail = (ss->tail + 1) % intervals;
 	if (ss->tail <= ss->head)
-		ss->head = (ss->head + 1) % ss->dur;
+		ss->head = (ss->head + 1) % intervals;
 
 	return false;
 }
@@ -138,18 +142,20 @@ static bool steadystate_deviation(uint64_t iops, uint64_t bw,
 	double mean;
 
 	struct steadystate_data *ss = &td->ss;
+	int intervals = ss->dur / (ss_check_interval / 1000L);
 
 	ss->bw_data[ss->tail] = bw;
 	ss->iops_data[ss->tail] = iops;
 
-	if (ss->state & FIO_SS_BUFFER_FULL || ss->tail - ss->head == ss->dur - 1) {
+	if (ss->state & FIO_SS_BUFFER_FULL || ss->tail - ss->head == intervals  - 1) {
 		if (!(ss->state & FIO_SS_BUFFER_FULL)) {
 			/* first time through */
-			for(i = 0, ss->sum_y = 0; i < ss->dur; i++)
+			for (i = 0, ss->sum_y = 0; i < intervals; i++) {
 				if (ss->state & FIO_SS_IOPS)
 					ss->sum_y += ss->iops_data[i];
 				else
 					ss->sum_y += ss->bw_data[i];
+			}
 			ss->state |= FIO_SS_BUFFER_FULL;
 		} else {		/* easy to update the sum */
 			ss->sum_y -= ss->oldest_y;
@@ -164,10 +170,10 @@ static bool steadystate_deviation(uint64_t iops, uint64_t bw,
 		else
 			ss->oldest_y = ss->bw_data[ss->head];
 
-		mean = (double) ss->sum_y / ss->dur;
+		mean = (double) ss->sum_y / intervals;
 		ss->deviation = 0.0;
 
-		for (i = 0; i < ss->dur; i++) {
+		for (i = 0; i < intervals; i++) {
 			if (ss->state & FIO_SS_IOPS)
 				diff = ss->iops_data[i] - mean;
 			else
@@ -180,8 +186,9 @@ static bool steadystate_deviation(uint64_t iops, uint64_t bw,
 		else
 			ss->criterion = ss->deviation;
 
-		dprint(FD_STEADYSTATE, "sum_y: %llu, mean: %f, max diff: %f, "
+		dprint(FD_STEADYSTATE, "intervals: %d, sum_y: %llu, mean: %f, max diff: %f, "
 					"objective: %f, limit: %f\n",
+					intervals,
 					(unsigned long long) ss->sum_y, mean,
 					ss->deviation, ss->criterion, ss->limit);
 
@@ -189,25 +196,24 @@ static bool steadystate_deviation(uint64_t iops, uint64_t bw,
 			return true;
 	}
 
-	ss->tail = (ss->tail + 1) % ss->dur;
-	if (ss->tail <= ss->head)
-		ss->head = (ss->head + 1) % ss->dur;
+	ss->tail = (ss->tail + 1) % intervals;
+	if (ss->tail == ss->head)
+		ss->head = (ss->head + 1) % intervals;
 
 	return false;
 }
 
 int steadystate_check(void)
 {
-	int i, j, ddir, prev_groupid, group_ramp_time_over = 0;
+	int  ddir, prev_groupid, group_ramp_time_over = 0;
 	unsigned long rate_time;
-	struct thread_data *td, *td2;
 	struct timespec now;
 	uint64_t group_bw = 0, group_iops = 0;
 	uint64_t td_iops, td_bytes;
 	bool ret;
 
 	prev_groupid = -1;
-	for_each_td(td, i) {
+	for_each_td(td) {
 		const bool needs_lock = td_async_processing(td);
 		struct steadystate_data *ss = &td->ss;
 
@@ -229,10 +235,10 @@ int steadystate_check(void)
 		fio_gettime(&now, NULL);
 		if (ss->ramp_time && !(ss->state & FIO_SS_RAMP_OVER)) {
 			/*
-			 * Begin recording data one second after ss->ramp_time
+			 * Begin recording data one check interval after ss->ramp_time
 			 * has elapsed
 			 */
-			if (utime_since(&td->epoch, &now) >= (ss->ramp_time + 1000000L))
+			if (utime_since(&td->epoch, &now) >= (ss->ramp_time + ss_check_interval * 1000L))
 				ss->state |= FIO_SS_RAMP_OVER;
 		}
 
@@ -251,8 +257,10 @@ int steadystate_check(void)
 		memcpy(&ss->prev_time, &now, sizeof(now));
 
 		if (ss->state & FIO_SS_RAMP_OVER) {
-			group_bw += 1000 * (td_bytes - ss->prev_bytes) / rate_time;
-			group_iops += 1000 * (td_iops - ss->prev_iops) / rate_time;
+			group_bw += rate_time * (td_bytes - ss->prev_bytes) /
+				(ss_check_interval * ss_check_interval / 1000L);
+			group_iops += rate_time * (td_iops - ss->prev_iops) /
+				(ss_check_interval * ss_check_interval / 1000L);
 			++group_ramp_time_over;
 		}
 		ss->prev_iops = td_iops;
@@ -271,7 +279,7 @@ int steadystate_check(void)
 		dprint(FD_STEADYSTATE, "steadystate_check() thread: %d, "
 					"groupid: %u, rate_msec: %ld, "
 					"iops: %llu, bw: %llu, head: %d, tail: %d\n",
-					i, td->groupid, rate_time,
+					__td_index, td->groupid, rate_time,
 					(unsigned long long) group_iops,
 					(unsigned long long) group_bw,
 					ss->head, ss->tail);
@@ -283,18 +291,18 @@ int steadystate_check(void)
 
 		if (ret) {
 			if (td->o.group_reporting) {
-				for_each_td(td2, j) {
+				for_each_td(td2) {
 					if (td2->groupid == td->groupid) {
 						td2->ss.state |= FIO_SS_ATTAINED;
 						fio_mark_td_terminate(td2);
 					}
-				}
+				} end_for_each();
 			} else {
 				ss->state |= FIO_SS_ATTAINED;
 				fio_mark_td_terminate(td);
 			}
 		}
-	}
+	} end_for_each();
 	return 0;
 }
 
@@ -302,8 +310,7 @@ int td_steadystate_init(struct thread_data *td)
 {
 	struct steadystate_data *ss = &td->ss;
 	struct thread_options *o = &td->o;
-	struct thread_data *td2;
-	int j;
+	int intervals;
 
 	memset(ss, 0, sizeof(*ss));
 
@@ -315,17 +322,19 @@ int td_steadystate_init(struct thread_data *td)
 		ss->dur = o->ss_dur;
 		ss->limit = o->ss_limit.u.f;
 		ss->ramp_time = o->ss_ramp_time;
+		ss_check_interval = o->ss_check_interval / 1000L;
 
 		ss->state = o->ss_state;
 		if (!td->ss.ramp_time)
 			ss->state |= FIO_SS_RAMP_OVER;
 
-		ss->sum_x = o->ss_dur * (o->ss_dur - 1) / 2;
-		ss->sum_x_sq = (o->ss_dur - 1) * (o->ss_dur) * (2*o->ss_dur - 1) / 6;
+		intervals = ss->dur / (ss_check_interval / 1000L);
+		ss->sum_x = intervals * (intervals - 1) / 2;
+		ss->sum_x_sq = (intervals - 1) * (intervals) * (2*intervals - 1) / 6;
 	}
 
 	/* make sure that ss options are consistent within reporting group */
-	for_each_td(td2, j) {
+	for_each_td(td2) {
 		if (td2->groupid == td->groupid) {
 			struct steadystate_data *ss2 = &td2->ss;
 
@@ -339,7 +348,7 @@ int td_steadystate_init(struct thread_data *td)
 				return 1;
 			}
 		}
-	}
+	} end_for_each();
 
 	return 0;
 }
@@ -348,26 +357,28 @@ uint64_t steadystate_bw_mean(struct thread_stat *ts)
 {
 	int i;
 	uint64_t sum;
-
+	int intervals = ts->ss_dur / (ss_check_interval / 1000L);
+	
 	if (!ts->ss_dur)
 		return 0;
 
-	for (i = 0, sum = 0; i < ts->ss_dur; i++)
+	for (i = 0, sum = 0; i < intervals; i++)
 		sum += ts->ss_bw_data[i];
 
-	return sum / ts->ss_dur;
+	return sum / intervals;
 }
 
 uint64_t steadystate_iops_mean(struct thread_stat *ts)
 {
 	int i;
 	uint64_t sum;
+	int intervals = ts->ss_dur / (ss_check_interval / 1000L);
 
 	if (!ts->ss_dur)
 		return 0;
 
-	for (i = 0, sum = 0; i < ts->ss_dur; i++)
+	for (i = 0, sum = 0; i < intervals; i++)
 		sum += ts->ss_iops_data[i];
 
-	return sum / ts->ss_dur;
+	return sum / intervals;
 }

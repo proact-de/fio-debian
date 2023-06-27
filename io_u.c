@@ -785,7 +785,15 @@ static enum fio_ddir get_rw_ddir(struct thread_data *td)
 	else
 		ddir = DDIR_INVAL;
 
-	td->rwmix_ddir = rate_ddir(td, ddir);
+	if (!should_check_rate(td)) {
+		/*
+		 * avoid time-consuming call to utime_since_now() if rate checking
+		 * isn't being used. this imrpoves IOPs 50%. See:
+		 * https://github.com/axboe/fio/issues/1501#issuecomment-1418327049
+		 */
+		td->rwmix_ddir = ddir;
+	} else
+		td->rwmix_ddir = rate_ddir(td, ddir);
 	return td->rwmix_ddir;
 }
 
@@ -976,9 +984,14 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 	offset = io_u->offset;
 	if (td->o.zone_mode == ZONE_MODE_ZBD) {
 		ret = zbd_adjust_block(td, io_u);
-		if (ret == io_u_eof)
+		if (ret == io_u_eof) {
+			dprint(FD_IO, "zbd_adjust_block() returned io_u_eof\n");
 			return 1;
+		}
 	}
+
+	if (td->o.fdp)
+		fdp_fill_dspec_data(td, io_u);
 
 	if (io_u->offset + io_u->buflen > io_u->file->real_file_size) {
 		dprint(FD_IO, "io_u %p, off=0x%llx + len=0x%llx exceeds file size=0x%llx\n",
@@ -1357,8 +1370,8 @@ static struct fio_file *__get_next_file(struct thread_data *td)
 		if (td->o.file_service_type == FIO_FSERVICE_SEQ)
 			goto out;
 		if (td->file_service_left) {
-		  td->file_service_left--;
-		  goto out;
+			td->file_service_left--;
+			goto out;
 		}
 	}
 
@@ -1996,7 +2009,7 @@ static void io_completed(struct thread_data *td, struct io_u **io_u_ptr,
 	dprint_io_u(io_u, "complete");
 
 	assert(io_u->flags & IO_U_F_FLIGHT);
-	io_u_clear(td, io_u, IO_U_F_FLIGHT | IO_U_F_BUSY_OK);
+	io_u_clear(td, io_u, IO_U_F_FLIGHT | IO_U_F_BUSY_OK | IO_U_F_PATTERN_DONE);
 
 	/*
 	 * Mark IO ok to verify
@@ -2014,6 +2027,8 @@ static void io_completed(struct thread_data *td, struct io_u **io_u_ptr,
 	}
 
 	if (ddir_sync(ddir)) {
+		if (io_u->error)
+			goto error;
 		td->last_was_sync = true;
 		if (f) {
 			f->first_write = -1ULL;
@@ -2069,6 +2084,7 @@ static void io_completed(struct thread_data *td, struct io_u **io_u_ptr,
 				icd->error = ret;
 		}
 	} else if (io_u->error) {
+error:
 		icd->error = io_u->error;
 		io_u_log_error(td, io_u);
 	}

@@ -116,12 +116,14 @@ extern int fio_cpus_split(os_cpu_mask_t *mask, unsigned int cpu);
 #endif
 
 #ifndef FIO_HAVE_IOPRIO_CLASS
+#define ioprio_class(prio)		0
 #define ioprio_value_is_class_rt(prio)	(false)
 #define IOPRIO_MIN_PRIO_CLASS		0
 #define IOPRIO_MAX_PRIO_CLASS		0
 #endif
 #ifndef FIO_HAVE_IOPRIO
 #define ioprio_value(prioclass, prio)	(0)
+#define ioprio(ioprio)			0
 #define ioprio_set(which, who, prioclass, prio)	(0)
 #define IOPRIO_MIN_PRIO			0
 #define IOPRIO_MAX_PRIO			0
@@ -131,12 +133,6 @@ extern int fio_cpus_split(os_cpu_mask_t *mask, unsigned int cpu);
 #define OS_O_DIRECT			0
 #else
 #define OS_O_DIRECT			O_DIRECT
-#endif
-
-#ifdef OS_O_ATOMIC
-#define FIO_O_ATOMIC			OS_O_ATOMIC
-#else
-#define FIO_O_ATOMIC			0
 #endif
 
 #ifndef FIO_HAVE_HUGETLB
@@ -355,7 +351,9 @@ static inline unsigned long long get_fs_free_size(const char *path)
 #ifndef FIO_HAVE_CPU_CONF_SYSCONF
 static inline unsigned int cpus_configured(void)
 {
-	return sysconf(_SC_NPROCESSORS_CONF);
+	int nr_cpus = sysconf(_SC_NPROCESSORS_CONF);
+
+	return nr_cpus >= 1 ? nr_cpus : 1;
 }
 #endif
 

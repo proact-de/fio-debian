@@ -7,8 +7,9 @@
 #include "flist.h"
 #include "io_u.h"
 #include "zbd_types.h"
+#include "fdp.h"
 
-#define FIO_IOOPS_VERSION	31
+#define FIO_IOOPS_VERSION	32
 
 #ifndef CONFIG_DYNAMIC_ENGINES
 #define FIO_STATIC	static
@@ -61,6 +62,10 @@ struct ioengine_ops {
 			uint64_t, uint64_t);
 	int (*get_max_open_zones)(struct thread_data *, struct fio_file *,
 				  unsigned int *);
+	int (*finish_zone)(struct thread_data *, struct fio_file *,
+			   uint64_t, uint64_t);
+	int (*fdp_fetch_ruhs)(struct thread_data *, struct fio_file *,
+			      struct fio_ruhs_info *);
 	int option_struct_size;
 	struct fio_option *options;
 };
@@ -85,6 +90,11 @@ enum fio_ioengine_flags {
 	FIO_NO_OFFLOAD	= 1 << 15,	/* no async offload */
 	FIO_ASYNCIO_SETS_ISSUE_TIME
 			= 1 << 16,	/* async ioengine with commit function that sets issue_time */
+	FIO_SKIPPABLE_IOMEM_ALLOC
+			= 1 << 17,	/* skip iomem_alloc & iomem_free if job sets mem/iomem */
+	FIO_RO_NEEDS_RW_OPEN
+			= 1 << 18,	/* open files in rw mode even if we have a read job; only
+					   affects ioengines using generic_open_file */
 };
 
 /*

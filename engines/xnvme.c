@@ -75,9 +75,11 @@ struct xnvme_fioe_options {
 	unsigned int xnvme_dev_nsid;
 	unsigned int xnvme_iovec;
 	char *xnvme_be;
+	char *xnvme_mem;
 	char *xnvme_async;
 	char *xnvme_sync;
 	char *xnvme_admin;
+	char *xnvme_dev_subnqn;
 };
 
 static struct fio_option options[] = {
@@ -109,11 +111,21 @@ static struct fio_option options[] = {
 		.group = FIO_OPT_G_XNVME,
 	},
 	{
+		.name = "xnvme_mem",
+		.lname = "xNVMe Memory Backend",
+		.type = FIO_OPT_STR_STORE,
+		.off1 = offsetof(struct xnvme_fioe_options, xnvme_mem),
+		.help = "Select xNVMe memory backend",
+		.category = FIO_OPT_C_ENGINE,
+		.group = FIO_OPT_G_XNVME,
+	},
+	{
 		.name = "xnvme_async",
 		.lname = "xNVMe Asynchronous command-interface",
 		.type = FIO_OPT_STR_STORE,
 		.off1 = offsetof(struct xnvme_fioe_options, xnvme_async),
-		.help = "Select xNVMe async. interface: [emu,thrpool,io_uring,libaio,posix,nil]",
+		.help = "Select xNVMe async. interface: "
+			"[emu,thrpool,io_uring,io_uring_cmd,libaio,posix,vfio,nil]",
 		.category = FIO_OPT_C_ENGINE,
 		.group = FIO_OPT_G_XNVME,
 	},
@@ -122,7 +134,7 @@ static struct fio_option options[] = {
 		.lname = "xNVMe Synchronous. command-interface",
 		.type = FIO_OPT_STR_STORE,
 		.off1 = offsetof(struct xnvme_fioe_options, xnvme_sync),
-		.help = "Select xNVMe sync. interface: [nvme,psync]",
+		.help = "Select xNVMe sync. interface: [nvme,psync,block]",
 		.category = FIO_OPT_C_ENGINE,
 		.group = FIO_OPT_G_XNVME,
 	},
@@ -131,7 +143,7 @@ static struct fio_option options[] = {
 		.lname = "xNVMe Admin command-interface",
 		.type = FIO_OPT_STR_STORE,
 		.off1 = offsetof(struct xnvme_fioe_options, xnvme_admin),
-		.help = "Select xNVMe admin. cmd-interface: [nvme,block,file_as_ns]",
+		.help = "Select xNVMe admin. cmd-interface: [nvme,block]",
 		.category = FIO_OPT_C_ENGINE,
 		.group = FIO_OPT_G_XNVME,
 	},
@@ -141,6 +153,15 @@ static struct fio_option options[] = {
 		.type = FIO_OPT_INT,
 		.off1 = offsetof(struct xnvme_fioe_options, xnvme_dev_nsid),
 		.help = "xNVMe Namespace-Identifier, for user-space NVMe driver",
+		.category = FIO_OPT_C_ENGINE,
+		.group = FIO_OPT_G_XNVME,
+	},
+	{
+		.name = "xnvme_dev_subnqn",
+		.lname = "Subsystem nqn for Fabrics",
+		.type = FIO_OPT_STR_STORE,
+		.off1 = offsetof(struct xnvme_fioe_options, xnvme_dev_subnqn),
+		.help = "Subsystem NQN for Fabrics",
 		.category = FIO_OPT_C_ENGINE,
 		.group = FIO_OPT_G_XNVME,
 	},
@@ -180,7 +201,9 @@ static struct xnvme_opts xnvme_opts_from_fioe(struct thread_data *td)
 	struct xnvme_opts opts = xnvme_opts_default();
 
 	opts.nsid = o->xnvme_dev_nsid;
+	opts.subnqn = o->xnvme_dev_subnqn;
 	opts.be = o->xnvme_be;
+	opts.mem = o->xnvme_mem;
 	opts.async = o->xnvme_async;
 	opts.sync = o->xnvme_sync;
 	opts.admin = o->xnvme_admin;
@@ -322,12 +345,15 @@ static int xnvme_fioe_init(struct thread_data *td)
 
 	xd->iocq = calloc(td->o.iodepth, sizeof(struct io_u *));
 	if (!xd->iocq) {
-		log_err("ioeng->init(): !calloc(), err(%d)\n", errno);
+		free(xd);
+		log_err("ioeng->init(): !calloc(xd->iocq), err(%d)\n", errno);
 		return 1;
 	}
 
 	xd->iovec = calloc(td->o.iodepth, sizeof(*xd->iovec));
 	if (!xd->iovec) {
+		free(xd->iocq);
+		free(xd);
 		log_err("ioeng->init(): !calloc(xd->iovec), err(%d)\n", errno);
 		return 1;
 	}
@@ -338,6 +364,10 @@ static int xnvme_fioe_init(struct thread_data *td)
 	for_each_file(td, f, i)
 	{
 		if (_dev_open(td, f)) {
+			/*
+			 * Note: We are not freeing xd, iocq and iovec. This
+			 * will be done as part of cleanup routine.
+			 */
 			log_err("ioeng->init(): failed; _dev_open(%s)\n", f->file_name);
 			return 1;
 		}
@@ -506,9 +536,11 @@ static enum fio_q_status xnvme_fioe_queue(struct thread_data *td, struct io_u *i
 
 	default:
 		log_err("ioeng->queue(): ENOSYS: %u\n", io_u->ddir);
-		err = -1;
+		xnvme_queue_put_cmd_ctx(ctx->async.queue, ctx);
+
+		io_u->error = ENOSYS;
 		assert(false);
-		break;
+		return FIO_Q_COMPLETED;
 	}
 
 	if (vectored_io) {

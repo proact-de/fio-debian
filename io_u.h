@@ -21,6 +21,7 @@ enum {
 	IO_U_F_TRIMMED		= 1 << 5,
 	IO_U_F_BARRIER		= 1 << 6,
 	IO_U_F_VER_LIST		= 1 << 7,
+	IO_U_F_PATTERN_DONE	= 1 << 8,
 };
 
 /*
@@ -116,6 +117,9 @@ struct io_u {
 	 * Callback for io completion
 	 */
 	int (*end_io)(struct thread_data *, struct io_u **);
+
+	uint32_t dtype;
+	uint32_t dspec;
 
 	union {
 #ifdef CONFIG_LIBAIO

@@ -32,7 +32,7 @@ static const char *parse_file(const char *beg, char *out,
 	const char *end;
 	char *file;
 	int fd;
-	ssize_t count;
+	ssize_t rc, count = 0;
 
 	if (!out_len)
 		goto err_out;
@@ -47,13 +47,32 @@ static const char *parse_file(const char *beg, char *out,
 	if (file == NULL)
 		goto err_out;
 
+#ifdef _WIN32
+	fd = open(file, O_RDONLY | O_BINARY);
+#else
 	fd = open(file, O_RDONLY);
+#endif
 	if (fd < 0)
 		goto err_free_out;
 
-	count = read(fd, out, out_len);
-	if (count == -1)
-		goto err_free_close_out;
+	if (out) {
+		while (1) {
+			rc = read(fd, out, out_len - count);
+			if (rc == 0)
+				break;
+			if (rc == -1)
+				goto err_free_close_out;
+
+			count += rc;
+			out += rc;
+		}
+	} else {
+		count = lseek(fd, 0, SEEK_END);
+		if (count == -1)
+			goto err_free_close_out;
+		if (count >= out_len)
+			count = out_len;
+	}
 
 	*filled = count;
 	close(fd);
@@ -100,7 +119,8 @@ static const char *parse_string(const char *beg, char *out,
 	if (end - beg > out_len)
 		return NULL;
 
-	memcpy(out, beg, end - beg);
+	if (out)
+		memcpy(out, beg, end - beg);
 	*filled = end - beg;
 
 	/* Catch up quote */
@@ -156,12 +176,14 @@ static const char *parse_number(const char *beg, char *out,
 		i = 0;
 		if (!lval) {
 			num    = 0;
-			out[i] = 0x00;
+			if (out)
+				out[i] = 0x00;
 			i      = 1;
 		} else {
 			val = (unsigned int)lval;
 			for (; val && out_len; out_len--, i++, val >>= 8)
-				out[i] = val & 0xff;
+				if (out)
+					out[i] = val & 0xff;
 			if (val)
 				return NULL;
 		}
@@ -183,7 +205,8 @@ static const char *parse_number(const char *beg, char *out,
 			const char *fmt;
 
 			fmt = (num & 1 ? "%1hhx" : "%2hhx");
-			sscanf(beg, fmt, &out[i]);
+			if (out)
+				sscanf(beg, fmt, &out[i]);
 			if (num & 1) {
 				num++;
 				beg--;
@@ -251,7 +274,8 @@ static const char *parse_format(const char *in, char *out, unsigned int parsed,
 	if (f->desc->len > out_len)
 		return NULL;
 
-	memset(out, '\0', f->desc->len);
+	if (out)
+		memset(out, '\0', f->desc->len);
 	*filled = f->desc->len;
 
 	return in + len;
@@ -262,7 +286,9 @@ static const char *parse_format(const char *in, char *out, unsigned int parsed,
  *                            numbers and pattern formats.
  * @in - string input
  * @in_len - size of the input string
- * @out - output buffer where parsed result will be put
+ * @out - output buffer where parsed result will be put, may be NULL
+ *	  in which case this function just calculates the required
+ *	  length of the buffer
  * @out_len - lengths of the output buffer
  * @fmt_desc - array of pattern format descriptors [input]
  * @fmt - array of pattern formats [output]
@@ -305,16 +331,16 @@ static const char *parse_format(const char *in, char *out, unsigned int parsed,
  *
  * Returns number of bytes filled or err < 0 in case of failure.
  */
-int parse_and_fill_pattern(const char *in, unsigned int in_len,
-			   char *out, unsigned int out_len,
-			   const struct pattern_fmt_desc *fmt_desc,
-			   struct pattern_fmt *fmt,
-			   unsigned int *fmt_sz_out)
+static int parse_and_fill_pattern(const char *in, unsigned int in_len,
+				  char *out, unsigned int out_len,
+				  const struct pattern_fmt_desc *fmt_desc,
+				  struct pattern_fmt *fmt,
+				  unsigned int *fmt_sz_out)
 {
 	const char *beg, *end, *out_beg = out;
 	unsigned int total = 0, fmt_rem = 0;
 
-	if (!in || !in_len || !out || !out_len)
+	if (!in || !in_len || !out_len)
 		return -EINVAL;
 	if (fmt_sz_out)
 		fmt_rem = *fmt_sz_out;
@@ -360,14 +386,57 @@ int parse_and_fill_pattern(const char *in, unsigned int in_len,
 		assert(filled);
 		assert(filled <= out_len);
 		out_len -= filled;
-		out     += filled;
 		total   += filled;
+		if (out)
+			out += filled;
 
 	} while (in_len);
 
 	if (fmt_sz_out)
 		*fmt_sz_out -= fmt_rem;
 	return total;
+}
+
+/**
+ * parse_and_fill_pattern_alloc() - Parses combined input, which consists of
+ *				    strings, numbers and pattern formats and
+ *				    allocates a buffer for the result.
+ *
+ * @in - string input
+ * @in_len - size of the input string
+ * @out - pointer to the output buffer pointer, this will be set to the newly
+ *        allocated pattern buffer which must be freed by the caller
+ * @fmt_desc - array of pattern format descriptors [input]
+ * @fmt - array of pattern formats [output]
+ * @fmt_sz - pointer where the size of pattern formats array stored [input],
+ *           after successful parsing this pointer will contain the number
+ *           of parsed formats if any [output].
+ *
+ * See documentation on parse_and_fill_pattern() above for a description
+ * of the functionality.
+ *
+ * Returns number of bytes filled or err < 0 in case of failure.
+ */
+int parse_and_fill_pattern_alloc(const char *in, unsigned int in_len,
+		char **out, const struct pattern_fmt_desc *fmt_desc,
+		struct pattern_fmt *fmt, unsigned int *fmt_sz_out)
+{
+	int count;
+
+	count = parse_and_fill_pattern(in, in_len, NULL, MAX_PATTERN_SIZE,
+				       fmt_desc, fmt, fmt_sz_out);
+	if (count < 0)
+		return count;
+
+	*out = malloc(count);
+	count = parse_and_fill_pattern(in, in_len, *out, count, fmt_desc,
+				       fmt, fmt_sz_out);
+	if (count < 0) {
+		free(*out);
+		*out = NULL;
+	}
+
+	return count;
 }
 
 /**
