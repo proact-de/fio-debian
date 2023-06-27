@@ -1,6 +1,7 @@
 fio (3.35-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.35.
+  * control: Bumped standards version to 4.6.2. No changes needed. 
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 27 Jun 2023 10:19:08 +0200
 
