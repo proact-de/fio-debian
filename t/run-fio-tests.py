@@ -53,6 +53,7 @@ import traceback
 import subprocess
 import multiprocessing
 from pathlib import Path
+from statsmodels.sandbox.stats.runs import runstest_1samp
 
 
 class FioTest():
@@ -387,10 +388,13 @@ class FioJobTest_t0007(FioJobTest):
 class FioJobTest_t0008(FioJobTest):
     """Test consists of fio test job t0008
     Confirm that read['io_kbytes'] = 32768 and that
-                write['io_kbytes'] ~ 16568
+                write['io_kbytes'] ~ 16384
 
-    I did runs with fio-ae2fafc8 and saw write['io_kbytes'] values of
-    16585, 16588. With two runs of fio-3.16 I obtained 16568"""
+    This is a 50/50 seq read/write workload. Since fio flips a coin to
+    determine whether to issue a read or a write, total bytes written will not
+    be exactly 16384K. But total bytes read will be exactly 32768K because
+    reads will include the initial phase as well as the verify phase where all
+    the blocks originally written will be read."""
 
     def check_result(self):
         super(FioJobTest_t0008, self).check_result()
@@ -398,10 +402,10 @@ class FioJobTest_t0008(FioJobTest):
         if not self.passed:
             return
 
-        ratio = self.json_data['jobs'][0]['write']['io_kbytes'] / 16568
+        ratio = self.json_data['jobs'][0]['write']['io_kbytes'] / 16384
         logging.debug("Test %d: ratio: %f", self.testnum, ratio)
 
-        if ratio < 0.99 or ratio > 1.01:
+        if ratio < 0.97 or ratio > 1.03:
             self.failure_reason = "{0} bytes written mismatch,".format(self.failure_reason)
             self.passed = False
         if self.json_data['jobs'][0]['read']['io_kbytes'] != 32768:
@@ -595,23 +599,15 @@ class FioJobTest_t0020(FioJobTest):
 
         log_lines = file_data.split('\n')
 
-        seq_count = 0
-        offsets = set()
+        offsets = []
 
         prev = int(log_lines[0].split(',')[4])
         for line in log_lines[1:]:
-            offsets.add(prev/4096)
+            offsets.append(prev/4096)
             if len(line.strip()) == 0:
                 continue
             cur = int(line.split(',')[4])
-            if cur - prev == 4096:
-                seq_count += 1
             prev = cur
-
-        # 10 is an arbitrary threshold
-        if seq_count > 10:
-            self.passed = False
-            self.failure_reason = "too many ({0}) consecutive offsets".format(seq_count)
 
         if len(offsets) != 256:
             self.passed = False
@@ -621,6 +617,11 @@ class FioJobTest_t0020(FioJobTest):
             if not i in offsets:
                 self.passed = False
                 self.failure_reason += " missing offset {0}".format(i*4096)
+
+        (z, p) = runstest_1samp(list(offsets))
+        if p < 0.05:
+            self.passed = False
+            self.failure_reason += f" runs test failed with p = {p}"
 
 
 class FioJobTest_t0022(FioJobTest):
@@ -799,9 +800,29 @@ class FioJobTest_t0025(FioJobTest):
         if self.json_data['jobs'][0]['read']['io_kbytes'] != 128:
             self.passed = False
 
+class FioJobTest_t0027(FioJobTest):
+    def setup(self, *args, **kws):
+        super(FioJobTest_t0027, self).setup(*args, **kws)
+        self.pattern_file = os.path.join(self.test_dir, "t0027.pattern")
+        self.output_file = os.path.join(self.test_dir, "t0027file")
+        self.pattern = os.urandom(16 << 10)
+        with open(self.pattern_file, "wb") as f:
+            f.write(self.pattern)
+
+    def check_result(self):
+        super(FioJobTest_t0027, self).check_result()
+
+        if not self.passed:
+            return
+
+        with open(self.output_file, "rb") as f:
+            data = f.read()
+
+        if data != self.pattern:
+            self.passed = False
 
 class FioJobTest_iops_rate(FioJobTest):
-    """Test consists of fio test job t0009
+    """Test consists of fio test job t0011
     Confirm that job0 iops == 1000
     and that job1_iops / job0_iops ~ 8
     With two runs of fio-3.16 I observed a ratio of 8.3"""
@@ -1215,6 +1236,24 @@ TEST_LIST = [
         'requirements':     [Requirements.not_windows],
     },
     {
+        'test_id':          27,
+        'test_class':       FioJobTest_t0027,
+        'job':              't0027.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'requirements':     [],
+    },
+    {
+        'test_id':          28,
+        'test_class':       FioJobTest,
+        'job':              't0028-c6cade16.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'requirements':     [],
+    },
+    {
         'test_id':          1000,
         'test_class':       FioExeTest,
         'exe':              't/axmap',
@@ -1316,6 +1355,14 @@ TEST_LIST = [
         'test_id':          1012,
         'test_class':       FioExeTest,
         'exe':              't/log_compression.py',
+        'parameters':       ['-f', '{fio_path}'],
+        'success':          SUCCESS_DEFAULT,
+        'requirements':     [],
+    },
+    {
+        'test_id':          1013,
+        'test_class':       FioExeTest,
+        'exe':              't/random_seed.py',
         'parameters':       ['-f', '{fio_path}'],
         'success':          SUCCESS_DEFAULT,
         'requirements':     [],

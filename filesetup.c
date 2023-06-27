@@ -303,13 +303,12 @@ static bool pre_read_file(struct thread_data *td, struct fio_file *f)
 	if (bs > left)
 		bs = left;
 
-	b = malloc(bs);
+	b = calloc(1, bs);
 	if (!b) {
 		td_verror(td, errno, "malloc");
 		ret = false;
 		goto error;
 	}
-	memset(b, 0, bs);
 
 	if (lseek(f->fd, f->file_offset, SEEK_SET) < 0) {
 		td_verror(td, errno, "lseek");
@@ -737,21 +736,11 @@ int generic_open_file(struct thread_data *td, struct fio_file *f)
 			f_out = stderr;
 	}
 
-	if (td_trim(td))
-		goto skip_flags;
 	if (td->o.odirect)
 		flags |= OS_O_DIRECT;
-	if (td->o.oatomic) {
-		if (!FIO_O_ATOMIC) {
-			td_verror(td, EINVAL, "OS does not support atomic IO");
-			return 1;
-		}
-		flags |= OS_O_DIRECT | FIO_O_ATOMIC;
-	}
 	flags |= td->o.sync_io;
 	if (td->o.create_on_open && td->o.allow_create)
 		flags |= O_CREAT;
-skip_flags:
 	if (f->filetype != FIO_TYPE_FILE)
 		flags |= FIO_O_NOATIME;
 
@@ -768,7 +757,7 @@ open_again:
 		else
 			from_hash = file_lookup_open(f, flags);
 	} else if (td_read(td)) {
-		if (f->filetype == FIO_TYPE_CHAR && !read_only)
+		if (td_ioengine_flagged(td, FIO_RO_NEEDS_RW_OPEN) && !read_only)
 			flags |= O_RDWR;
 		else
 			flags |= O_RDONLY;
@@ -1417,6 +1406,12 @@ done:
 
 	td_restore_runstate(td, old_state);
 
+	if (td->o.fdp) {
+		err = fdp_init(td);
+		if (err)
+			goto err_out;
+	}
+
 	return 0;
 
 err_offset:
@@ -1452,9 +1447,8 @@ static void __init_rand_distribution(struct thread_data *td, struct fio_file *f)
 
 	nranges = (fsize + range_size - 1ULL) / range_size;
 
-	seed = jhash(f->file_name, strlen(f->file_name), 0) * td->thread_number;
-	if (!td->o.rand_repeatable)
-		seed = td->rand_seeds[FIO_RAND_BLOCK_OFF];
+	seed = jhash(f->file_name, strlen(f->file_name), 0) * td->thread_number *
+		td->rand_seeds[FIO_RAND_BLOCK_OFF];
 
 	if (td->o.random_distribution == FIO_RAND_DIST_ZIPF)
 		zipf_init(&f->zipf, nranges, td->o.zipf_theta.u.f, td->o.random_center.u.f, seed);
@@ -1594,6 +1588,8 @@ void fio_file_free(struct fio_file *f)
 {
 	if (fio_file_axmap(f))
 		axmap_free(f->io_axmap);
+	if (f->ruhs_info)
+		sfree(f->ruhs_info);
 	if (!fio_file_smalloc(f)) {
 		free(f->file_name);
 		free(f);
@@ -1627,6 +1623,7 @@ void close_and_free_files(struct thread_data *td)
 		}
 
 		zbd_close_file(f);
+		fdp_free_ruhs_info(f);
 		fio_file_free(f);
 	}
 

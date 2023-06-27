@@ -439,7 +439,7 @@ static bool read_iolog(struct thread_data *td)
 	unsigned long long offset;
 	unsigned int bytes;
 	unsigned long long delay = 0;
-	int reads, writes, waits, fileno = 0, file_action = 0; /* stupid gcc */
+	int reads, writes, trims, waits, fileno = 0, file_action = 0; /* stupid gcc */
 	char *rfname, *fname, *act;
 	char *str, *p;
 	enum fio_ddir rw;
@@ -461,7 +461,7 @@ static bool read_iolog(struct thread_data *td)
 	rfname = fname = malloc(256+16);
 	act = malloc(256+16);
 
-	syncs = reads = writes = waits = 0;
+	syncs = reads = writes = trims = waits = 0;
 	while ((p = fgets(str, 4096, td->io_log_rfile)) != NULL) {
 		struct io_piece *ipo;
 		int r;
@@ -492,17 +492,25 @@ static bool read_iolog(struct thread_data *td)
 			 */
 			if (!strcmp(act, "wait"))
 				rw = DDIR_WAIT;
-			else if (!strcmp(act, "read"))
+			else if (!strcmp(act, "read")) {
+				if (td->o.replay_skip & (1u << DDIR_READ))
+					continue;
 				rw = DDIR_READ;
-			else if (!strcmp(act, "write"))
+			} else if (!strcmp(act, "write")) {
+				if (td->o.replay_skip & (1u << DDIR_WRITE))
+					continue;
 				rw = DDIR_WRITE;
-			else if (!strcmp(act, "sync"))
+			} else if (!strcmp(act, "sync")) {
+				if (td->o.replay_skip & (1u << DDIR_SYNC))
+					continue;
 				rw = DDIR_SYNC;
-			else if (!strcmp(act, "datasync"))
+			} else if (!strcmp(act, "datasync"))
 				rw = DDIR_DATASYNC;
-			else if (!strcmp(act, "trim"))
+			else if (!strcmp(act, "trim")) {
+				if (td->o.replay_skip & (1u << DDIR_TRIM))
+					continue;
 				rw = DDIR_TRIM;
-			else {
+			} else {
 				log_err("fio: bad iolog file action: %s\n",
 									act);
 				continue;
@@ -544,6 +552,13 @@ static bool read_iolog(struct thread_data *td)
 			if (read_only)
 				continue;
 			writes++;
+		} else if (rw == DDIR_TRIM) {
+			/*
+			 * Don't add a trim for ro mode
+			 */
+			if (read_only)
+				continue;
+			trims++;
 		} else if (rw == DDIR_WAIT) {
 			if (td->o.no_stall)
 				continue;
@@ -620,19 +635,22 @@ static bool read_iolog(struct thread_data *td)
 		{
 			io_u_quiesce(td);
 			free_io_mem(td);
-			init_io_u_buffers(td);
+			if (init_io_u_buffers(td))
+				return false;
 		}
 		return true;
 	}
 
-	if (!reads && !writes && !waits)
+	if (!reads && !writes && !waits && !trims)
 		return false;
-	else if (reads && !writes)
-		td->o.td_ddir = TD_DDIR_READ;
-	else if (!reads && writes)
-		td->o.td_ddir = TD_DDIR_WRITE;
-	else
-		td->o.td_ddir = TD_DDIR_RW;
+
+	td->o.td_ddir = 0;
+	if (reads)
+		td->o.td_ddir |= TD_DDIR_READ;
+	if (writes)
+		td->o.td_ddir |= TD_DDIR_WRITE;
+	if (trims)
+		td->o.td_ddir |= TD_DDIR_TRIM;
 
 	return true;
 }
@@ -1857,9 +1875,7 @@ void td_writeout_logs(struct thread_data *td, bool unit_logs)
 
 void fio_writeout_logs(bool unit_logs)
 {
-	struct thread_data *td;
-	int i;
-
-	for_each_td(td, i)
+	for_each_td(td) {
 		td_writeout_logs(td, unit_logs);
+	} end_for_each();
 }

@@ -153,6 +153,9 @@ static inline int ioprio_set(int which, int who, int ioprio_class, int ioprio)
 		       ioprio_value(ioprio_class, ioprio));
 }
 
+#define ioprio_class(ioprio)	((ioprio) >> IOPRIO_CLASS_SHIFT)
+#define ioprio(ioprio)		((ioprio) & 7)
+
 #ifndef CONFIG_HAVE_GETTID
 static inline int gettid(void)
 {
@@ -203,12 +206,6 @@ static inline unsigned long long os_phys_mem(void)
 #define FIO_O_NOATIME	O_NOATIME
 #else
 #define FIO_O_NOATIME	0
-#endif
-
-#ifdef O_ATOMIC
-#define OS_O_ATOMIC	O_ATOMIC
-#else
-#define OS_O_ATOMIC	040000000
 #endif
 
 #ifdef MADV_REMOVE

@@ -93,19 +93,16 @@ static void sig_int(int sig)
 #ifdef WIN32
 static void sig_break(int sig)
 {
-	struct thread_data *td;
-	int i;
-
 	sig_int(sig);
 
 	/**
 	 * Windows terminates all job processes on SIGBREAK after the handler
 	 * returns, so give them time to wrap-up and give stats
 	 */
-	for_each_td(td, i) {
+	for_each_td(td) {
 		while (td->runstate < TD_EXITED)
 			sleep(1);
-	}
+	} end_for_each();
 }
 #endif
 
@@ -637,15 +634,6 @@ static void do_verify(struct thread_data *td, uint64_t verify_bytes)
 	if (td->error)
 		return;
 
-	/*
-	 * verify_state needs to be reset before verification
-	 * proceeds so that expected random seeds match actual
-	 * random seeds in headers. The main loop will reset
-	 * all random number generators if randrepeat is set.
-	 */
-	if (!td->o.rand_repeatable)
-		td_fill_verify_state_seed(td);
-
 	td_set_runstate(td, TD_VERIFYING);
 
 	io_u = NULL;
@@ -866,6 +854,7 @@ static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir,
 			     struct timespec *time)
 {
 	unsigned long long b;
+	unsigned long long runtime_left;
 	uint64_t total;
 	int left;
 	struct timespec now;
@@ -874,7 +863,7 @@ static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir,
 	if (td->o.thinktime_iotime) {
 		fio_gettime(&now, NULL);
 		if (utime_since(&td->last_thinktime, &now)
-		    >= td->o.thinktime_iotime + td->o.thinktime) {
+		    >= td->o.thinktime_iotime) {
 			stall = true;
 		} else if (!fio_option_is_set(&td->o, thinktime_blocks)) {
 			/*
@@ -897,11 +886,24 @@ static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir,
 
 	io_u_quiesce(td);
 
+	left = td->o.thinktime_spin;
+	if (td->o.timeout) {
+		runtime_left = td->o.timeout - utime_since_now(&td->epoch);
+		if (runtime_left < (unsigned long long)left)
+			left = runtime_left;
+	}
+
 	total = 0;
-	if (td->o.thinktime_spin)
-		total = usec_spin(td->o.thinktime_spin);
+	if (left)
+		total = usec_spin(left);
 
 	left = td->o.thinktime - total;
+	if (td->o.timeout) {
+		runtime_left = td->o.timeout - utime_since_now(&td->epoch);
+		if (runtime_left < (unsigned long long)left)
+			left = runtime_left;
+	}
+
 	if (left)
 		total += usec_sleep(td, left);
 
@@ -930,8 +932,10 @@ static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir,
 		fio_gettime(time, NULL);
 
 	td->last_thinktime_blocks = b;
-	if (td->o.thinktime_iotime)
+	if (td->o.thinktime_iotime) {
+		fio_gettime(&now, NULL);
 		td->last_thinktime = now;
+	}
 }
 
 /*
@@ -1033,8 +1037,11 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 		}
 
 		if (io_u->ddir == DDIR_WRITE && td->flags & TD_F_DO_VERIFY) {
-			io_u->numberio = td->io_issues[io_u->ddir];
-			populate_verify_io_u(td, io_u);
+			if (!(io_u->flags & IO_U_F_PATTERN_DONE)) {
+				io_u_set(td, io_u, IO_U_F_PATTERN_DONE);
+				io_u->numberio = td->io_issues[io_u->ddir];
+				populate_verify_io_u(td, io_u);
+			}
 		}
 
 		ddir = io_u->ddir;
@@ -1301,7 +1308,8 @@ static int init_io_u(struct thread_data *td)
 		}
 	}
 
-	init_io_u_buffers(td);
+	if (init_io_u_buffers(td))
+		return 1;
 
 	if (init_file_completion_logging(td, max_units))
 		return 1;
@@ -1332,7 +1340,7 @@ int init_io_u_buffers(struct thread_data *td)
 	 * overflow later. this adjustment may be too much if we get
 	 * lucky and the allocator gives us an aligned address.
 	 */
-	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
+	if (td->o.odirect || td->o.mem_align ||
 	    td_ioengine_flagged(td, FIO_RAWIO))
 		td->orig_buffer_size += page_mask + td->o.mem_align;
 
@@ -1351,7 +1359,7 @@ int init_io_u_buffers(struct thread_data *td)
 	if (data_xfer && allocate_io_mem(td))
 		return 1;
 
-	if (td->o.odirect || td->o.mem_align || td->o.oatomic ||
+	if (td->o.odirect || td->o.mem_align ||
 	    td_ioengine_flagged(td, FIO_RAWIO))
 		p = PTR_ALIGN(td->orig_buffer, page_mask) + td->o.mem_align;
 	else
@@ -1795,7 +1803,7 @@ static void *thread_main(void *data)
 	if (td_io_init(td))
 		goto err;
 
-	if (td_ioengine_flagged(td, FIO_SYNCIO) && td->o.iodepth > 1) {
+	if (td_ioengine_flagged(td, FIO_SYNCIO) && td->o.iodepth > 1 && td->o.io_submit_mode != IO_MODE_OFFLOAD) {
 		log_info("note: both iodepth >= 1 and synchronous I/O engine "
 			 "are selected, queue depth will be capped at 1\n");
 	}
@@ -1877,8 +1885,12 @@ static void *thread_main(void *data)
 		if (td->o.verify_only && td_write(td))
 			verify_bytes = do_dry_run(td);
 		else {
+			if (!td->o.rand_repeatable)
+				/* save verify rand state to replay hdr seeds later at verify */
+				frand_copy(&td->verify_state_last_do_io, &td->verify_state);
 			do_io(td, bytes_done);
-
+			if (!td->o.rand_repeatable)
+				frand_copy(&td->verify_state, &td->verify_state_last_do_io);
 			if (!ddir_rw_sum(bytes_done)) {
 				fio_mark_td_terminate(td);
 				verify_bytes = 0;
@@ -1918,7 +1930,8 @@ static void *thread_main(void *data)
 			}
 		} while (1);
 
-		if (td_read(td) && td->io_bytes[DDIR_READ])
+		if (td->io_bytes[DDIR_READ] && (td_read(td) ||
+			((td->flags & TD_F_VER_BACKLOG) && td_write(td))))
 			update_runtime(td, elapsed_us, DDIR_READ);
 		if (td_write(td) && td->io_bytes[DDIR_WRITE])
 			update_runtime(td, elapsed_us, DDIR_WRITE);
@@ -2040,15 +2053,14 @@ err:
 static void reap_threads(unsigned int *nr_running, uint64_t *t_rate,
 			 uint64_t *m_rate)
 {
-	struct thread_data *td;
 	unsigned int cputhreads, realthreads, pending;
-	int i, status, ret;
+	int status, ret;
 
 	/*
 	 * reap exited threads (TD_EXITED -> TD_REAPED)
 	 */
 	realthreads = pending = cputhreads = 0;
-	for_each_td(td, i) {
+	for_each_td(td) {
 		int flags = 0;
 
 		if (!strcmp(td->o.ioengine, "cpuio"))
@@ -2141,7 +2153,7 @@ reaped:
 		done_secs += mtime_since_now(&td->epoch) / 1000;
 		profile_td_exit(td);
 		flow_exit_job(td);
-	}
+	} end_for_each();
 
 	if (*nr_running == cputhreads && !pending && realthreads)
 		fio_terminate_threads(TERMINATE_ALL, TERMINATE_ALL);
@@ -2268,13 +2280,11 @@ static bool waitee_running(struct thread_data *me)
 {
 	const char *waitee = me->o.wait_for;
 	const char *self = me->o.name;
-	struct thread_data *td;
-	int i;
 
 	if (!waitee)
 		return false;
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (!strcmp(td->o.name, self) || strcmp(td->o.name, waitee))
 			continue;
 
@@ -2284,7 +2294,7 @@ static bool waitee_running(struct thread_data *me)
 					runstate_to_name(td->runstate));
 			return true;
 		}
-	}
+	} end_for_each();
 
 	dprint(FD_PROCESS, "%s: %s completed, can run\n", self, waitee);
 	return false;
@@ -2308,14 +2318,14 @@ static void run_threads(struct sk_out *sk_out)
 	set_sig_handlers();
 
 	nr_thread = nr_process = 0;
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (check_mount_writes(td))
 			return;
 		if (td->o.use_thread)
 			nr_thread++;
 		else
 			nr_process++;
-	}
+	} end_for_each();
 
 	if (output_format & FIO_OUTPUT_NORMAL) {
 		struct buf_output out;
@@ -2341,7 +2351,7 @@ static void run_threads(struct sk_out *sk_out)
 	nr_started = 0;
 	m_rate = t_rate = 0;
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		print_status_init(td->thread_number - 1);
 
 		if (!td->o.create_serialize)
@@ -2377,7 +2387,7 @@ reap:
 					td_io_close_file(td, f);
 			}
 		}
-	}
+	} end_for_each();
 
 	/* start idle threads before io threads start to run */
 	fio_idle_prof_start();
@@ -2393,7 +2403,7 @@ reap:
 		/*
 		 * create threads (TD_NOT_CREATED -> TD_CREATED)
 		 */
-		for_each_td(td, i) {
+		for_each_td(td) {
 			if (td->runstate != TD_NOT_CREATED)
 				continue;
 
@@ -2472,7 +2482,7 @@ reap:
 
 					ret = (int)(uintptr_t)thread_main(fd);
 					_exit(ret);
-				} else if (i == fio_debug_jobno)
+				} else if (__td_index == fio_debug_jobno)
 					*fio_debug_jobp = pid;
 				free(eo);
 				free(fd);
@@ -2488,7 +2498,7 @@ reap:
 				break;
 			}
 			dprint(FD_MUTEX, "done waiting on startup_sem\n");
-		}
+		} end_for_each();
 
 		/*
 		 * Wait for the started threads to transition to
@@ -2533,7 +2543,7 @@ reap:
 		/*
 		 * start created threads (TD_INITIALIZED -> TD_RUNNING).
 		 */
-		for_each_td(td, i) {
+		for_each_td(td) {
 			if (td->runstate != TD_INITIALIZED)
 				continue;
 
@@ -2547,7 +2557,7 @@ reap:
 			t_rate += ddir_rw_sum(td->o.rate);
 			todo--;
 			fio_sem_up(td->sem);
-		}
+		} end_for_each();
 
 		reap_threads(&nr_running, &t_rate, &m_rate);
 
@@ -2573,9 +2583,7 @@ static void free_disk_util(void)
 
 int fio_backend(struct sk_out *sk_out)
 {
-	struct thread_data *td;
 	int i;
-
 	if (exec_profile) {
 		if (load_profile(exec_profile))
 			return 1;
@@ -2631,7 +2639,7 @@ int fio_backend(struct sk_out *sk_out)
 		}
 	}
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		struct thread_stat *ts = &td->ts;
 
 		free_clat_prio_stats(ts);
@@ -2644,7 +2652,7 @@ int fio_backend(struct sk_out *sk_out)
 		}
 		fio_sem_remove(td->sem);
 		td->sem = NULL;
-	}
+	} end_for_each();
 
 	free_disk_util();
 	if (cgroup_list) {

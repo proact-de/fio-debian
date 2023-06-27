@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import uuid
+import time
+import errno
 from graphviz import Digraph
 import argparse
 import configparser
@@ -274,7 +277,7 @@ def setup_commandline():
     parser.add_argument('--format', action='store',
                         type=str,
                         default='png',
-                        help='the output format')
+                        help='the output format (see https://graphviz.org/docs/outputs/)')
     parser.add_argument('--view', action='store_true',
                         default=False,
                         help='view the graph')
@@ -283,7 +286,6 @@ def setup_commandline():
                         help='keep the graphviz script file')
     parser.add_argument('--config', action='store',
                         type=str,
-                        default='fiograph.conf',
                         help='the configuration filename')
     args = parser.parse_args()
     return args
@@ -292,16 +294,38 @@ def setup_commandline():
 def main():
     global config_file
     args = setup_commandline()
-    if args.output is None:
-        output_file = args.file
-        output_file = output_file.replace('.fio', '')
+
+    if args.config is None:
+        if os.path.exists('fiograph.conf'):
+            config_filename = 'fiograph.conf'
+        else:
+            config_filename = os.path.join(os.path.dirname(__file__), 'fiograph.conf')
+            if not os.path.exists(config_filename):
+                raise FileNotFoundError("Cannot locate configuration file")
     else:
-        output_file = args.output
+        config_filename = args.config
     config_file = configparser.RawConfigParser(allow_no_value=True)
-    config_file.read(args.config)
-    fio_to_graphviz(args.file, args.format).render(output_file, view=args.view)
+    config_file.read(config_filename)
+
+    temp_filename = uuid.uuid4().hex
+    image_filename = fio_to_graphviz(args.file, args.format).render(temp_filename, view=args.view)
+
+    output_filename_stub = args.file
+    if args.output:
+        output_filename = args.output
+    else:
+        if output_filename_stub.endswith('.fio'):
+            output_filename_stub = output_filename_stub[:-4]
+        output_filename = image_filename.replace(temp_filename, output_filename_stub)
+    if args.view:
+        time.sleep(1)
+        # allow time for the file to be opened before renaming it
+    os.rename(image_filename, output_filename)
+
     if not args.keep:
-        os.remove(output_file)
+        os.remove(temp_filename)
+    else:
+        os.rename(temp_filename, output_filename_stub + '.gv')
 
 
 main()

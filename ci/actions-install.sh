@@ -35,6 +35,8 @@ DPKGCFG
                 gcc-multilib
                 pkg-config:i386
                 zlib1g-dev:i386
+                libc6:i386
+                libgcc-s1:i386
             )
             ;;
         "x86_64")
@@ -45,7 +47,6 @@ DPKGCFG
                 libnbd-dev
                 libpmem-dev
                 libpmem2-dev
-                libpmemblk-dev
                 libprotobuf-c-dev
                 librbd-dev
                 libtcmalloc-minimal4
@@ -63,6 +64,7 @@ DPKGCFG
     pkgs+=(
         python3-scipy
 	python3-sphinx
+	python3-statsmodels
     )
 
     echo "Updating APT..."
@@ -86,16 +88,22 @@ install_macos() {
     echo "Installing packages..."
     HOMEBREW_NO_AUTO_UPDATE=1 brew install cunit libnfs sphinx-doc
     brew link sphinx-doc --force
-    pip3 install scipy six 
+    pip3 install scipy six statsmodels
+}
+
+install_windows() {
+	pip3 install scipy six statsmodels sphinx
 }
 
 main() {
-    if [ "${CI_TARGET_BUILD}" = "android" ]; then
-	echo "Installing Android NDK..."
-	wget --quiet https://dl.google.com/android/repository/android-ndk-r24-linux.zip
-	unzip -q android-ndk-r24-linux.zip
-	return 0
-    fi
+    case "${CI_TARGET_BUILD}" in
+	android*)
+	    echo "Installing Android NDK..."
+	    wget --quiet https://dl.google.com/android/repository/android-ndk-r24-linux.zip
+	    unzip -q android-ndk-r24-linux.zip
+	    return 0
+	    ;;
+    esac
 
     set_ci_target_os
 

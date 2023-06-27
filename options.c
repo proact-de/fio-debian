@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <assert.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <netinet/in.h>
 
@@ -249,6 +250,34 @@ int str_split_parse(struct thread_data *td, char *str,
 	}
 
 	return ret;
+}
+
+static int fio_fdp_cmp(const void *p1, const void *p2)
+{
+	const uint16_t *t1 = p1;
+	const uint16_t *t2 = p2;
+
+	return *t1 - *t2;
+}
+
+static int str_fdp_pli_cb(void *data, const char *input)
+{
+	struct thread_data *td = cb_data_to_td(data);
+	char *str, *p, *v;
+	int i = 0;
+
+	p = str = strdup(input);
+	strip_blank_front(&str);
+	strip_blank_end(str);
+
+	while ((v = strsep(&str, ",")) != NULL && i < FIO_MAX_PLIS)
+		td->o.fdp_plis[i++] = strtoll(v, NULL, 0);
+	free(p);
+
+	qsort(td->o.fdp_plis, i, sizeof(*td->o.fdp_plis), fio_fdp_cmp);
+	td->o.fdp_nrpli = i;
+
+	return 0;
 }
 
 static int str_bssplit_cb(void *data, const char *input)
@@ -1488,8 +1517,8 @@ static int str_buffer_pattern_cb(void *data, const char *input)
 	int ret;
 
 	/* FIXME: for now buffer pattern does not support formats */
-	ret = parse_and_fill_pattern(input, strlen(input), td->o.buffer_pattern,
-				     MAX_PATTERN_SIZE, NULL, NULL, NULL);
+	ret = parse_and_fill_pattern_alloc(input, strlen(input),
+				&td->o.buffer_pattern, NULL, NULL, NULL);
 	if (ret < 0)
 		return 1;
 
@@ -1537,9 +1566,9 @@ static int str_verify_pattern_cb(void *data, const char *input)
 	int ret;
 
 	td->o.verify_fmt_sz = FIO_ARRAY_SIZE(td->o.verify_fmt);
-	ret = parse_and_fill_pattern(input, strlen(input), td->o.verify_pattern,
-				     MAX_PATTERN_SIZE, fmt_desc,
-				     td->o.verify_fmt, &td->o.verify_fmt_sz);
+	ret = parse_and_fill_pattern_alloc(input, strlen(input),
+			&td->o.verify_pattern, fmt_desc, td->o.verify_fmt,
+			&td->o.verify_fmt_sz);
 	if (ret < 0)
 		return 1;
 
@@ -2096,12 +2125,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .help = "Hadoop Distributed Filesystem (HDFS) engine"
 			  },
 #endif
-#ifdef CONFIG_PMEMBLK
-			  { .ival = "pmemblk",
-			    .help = "PMDK libpmemblk based IO engine",
-			  },
-
-#endif
 #ifdef CONFIG_IME
 			  { .ival = "ime_psync",
 			    .help = "DDN's IME synchronous IO engine",
@@ -2442,6 +2465,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	},
 	{
 		.name	= "randrepeat",
+		.alias	= "allrandrepeat",
 		.lname	= "Random repeatable",
 		.type	= FIO_OPT_BOOL,
 		.off1	= offsetof(struct thread_options, rand_repeatable),
@@ -2568,16 +2592,6 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.name	= "percentage_sequential",
 		.lname	= "Percentage Sequential",
 		.type	= FIO_OPT_DEPRECATED,
-		.category = FIO_OPT_C_IO,
-		.group	= FIO_OPT_G_RANDOM,
-	},
-	{
-		.name	= "allrandrepeat",
-		.lname	= "All Random Repeat",
-		.type	= FIO_OPT_BOOL,
-		.off1	= offsetof(struct thread_options, allrand_repeatable),
-		.help	= "Use repeatable random numbers for everything",
-		.def	= "0",
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_RANDOM,
 	},
@@ -2718,6 +2732,12 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 			    .oval = F_ADV_SEQUENTIAL,
 			    .help = "Advise using FADV_SEQUENTIAL",
 			  },
+#ifdef POSIX_FADV_NOREUSE
+			  { .ival = "noreuse",
+			    .oval = F_ADV_NOREUSE,
+			    .help = "Advise using FADV_NOREUSE",
+			  },
+#endif
 		},
 		.help	= "Use fadvise() to advise the kernel on IO pattern",
 		.def	= "1",
@@ -3648,6 +3668,27 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.maxfp	= 1,
 		.category = FIO_OPT_C_IO,
 		.group	= FIO_OPT_G_ZONE,
+	},
+	{
+		.name   = "fdp",
+		.lname  = "Flexible data placement",
+		.type   = FIO_OPT_BOOL,
+		.off1   = offsetof(struct thread_options, fdp),
+		.help   = "Use Data placement directive (FDP)",
+		.def	= "0",
+		.category = FIO_OPT_C_IO,
+		.group  = FIO_OPT_G_INVALID,
+	},
+	{
+		.name	= "fdp_pli",
+		.lname	= "FDP Placement ID indicies",
+		.type	= FIO_OPT_STR,
+		.cb	= str_fdp_pli_cb,
+		.off1	= offsetof(struct thread_options, fdp_plis),
+		.help	= "Sets which placement ids to use (defaults to all)",
+		.hide	= 1,
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_INVALID,
 	},
 	{
 		.name	= "lockmem",
@@ -5180,6 +5221,20 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.off1   = offsetof(struct thread_options, ss_ramp_time),
 		.help   = "Delay before initiation of data collection for steady state job termination testing",
 		.def    = "0",
+		.is_seconds = 1,
+		.is_time = 1,
+		.category = FIO_OPT_C_GENERAL,
+		.group  = FIO_OPT_G_RUNTIME,
+	},
+        {
+		.name   = "steadystate_check_interval",
+		.lname  = "Steady state check interval",
+		.alias  = "ss_interval",
+		.parent	= "steadystate",
+		.type   = FIO_OPT_STR_VAL_TIME,
+		.off1   = offsetof(struct thread_options, ss_check_interval),
+		.help   = "Polling interval for the steady state check (too low means steadystate will not converge)",
+		.def    = "1",
 		.is_seconds = 1,
 		.is_time = 1,
 		.category = FIO_OPT_C_GENERAL,

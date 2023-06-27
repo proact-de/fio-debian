@@ -555,7 +555,7 @@ static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 
 	iops = (1000 * (uint64_t)ts->total_io_u[ddir]) / runt;
 	iops_p = num2str(iops, ts->sig_figs, 1, 0, N2S_NONE);
-	if (ddir == DDIR_WRITE)
+	if (ddir == DDIR_WRITE || ddir == DDIR_TRIM)
 		post_st = zbd_write_status(ts);
 	else if (ddir == DDIR_READ && ts->cachehit && ts->cachemiss) {
 		uint64_t total;
@@ -590,17 +590,18 @@ static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 	/* Only print per prio stats if there are >= 2 prios with samples */
 	if (get_nr_prios_with_samples(ts, ddir) >= 2) {
 		for (i = 0; i < ts->nr_clat_prio[ddir]; i++) {
-			if (calc_lat(&ts->clat_prio[ddir][i].clat_stat, &min,
-				     &max, &mean, &dev)) {
-				char buf[64];
+			char buf[64];
 
-				snprintf(buf, sizeof(buf),
-					 "%s prio %u/%u",
-					 clat_type,
-					 ts->clat_prio[ddir][i].ioprio >> 13,
-					 ts->clat_prio[ddir][i].ioprio & 7);
-				display_lat(buf, min, max, mean, dev, out);
-			}
+			if (!calc_lat(&ts->clat_prio[ddir][i].clat_stat, &min,
+				      &max, &mean, &dev))
+				continue;
+
+			snprintf(buf, sizeof(buf),
+				 "%s prio %u/%u",
+				 clat_type,
+				 ioprio_class(ts->clat_prio[ddir][i].ioprio),
+				 ioprio(ts->clat_prio[ddir][i].ioprio));
+			display_lat(buf, min, max, mean, dev, out);
 		}
 	}
 
@@ -632,20 +633,22 @@ static void show_ddir_status(struct group_run_stats *rs, struct thread_stat *ts,
 		/* Only print per prio stats if there are >= 2 prios with samples */
 		if (get_nr_prios_with_samples(ts, ddir) >= 2) {
 			for (i = 0; i < ts->nr_clat_prio[ddir]; i++) {
-				uint64_t prio_samples = ts->clat_prio[ddir][i].clat_stat.samples;
+				uint64_t prio_samples =
+					ts->clat_prio[ddir][i].clat_stat.samples;
 
-				if (prio_samples > 0) {
-					snprintf(prio_name, sizeof(prio_name),
-						 "%s prio %u/%u (%.2f%% of IOs)",
-						 clat_type,
-						 ts->clat_prio[ddir][i].ioprio >> 13,
-						 ts->clat_prio[ddir][i].ioprio & 7,
-						 100. * (double) prio_samples / (double) samples);
-					show_clat_percentiles(ts->clat_prio[ddir][i].io_u_plat,
-							      prio_samples, ts->percentile_list,
-							      ts->percentile_precision,
-							      prio_name, out);
-				}
+				if (!prio_samples)
+					continue;
+
+				snprintf(prio_name, sizeof(prio_name),
+					 "%s prio %u/%u (%.2f%% of IOs)",
+					 clat_type,
+					 ioprio_class(ts->clat_prio[ddir][i].ioprio),
+					 ioprio(ts->clat_prio[ddir][i].ioprio),
+					 100. * (double) prio_samples / (double) samples);
+				show_clat_percentiles(ts->clat_prio[ddir][i].io_u_plat,
+						prio_samples, ts->percentile_list,
+						ts->percentile_precision,
+						prio_name, out);
 			}
 		}
 	}
@@ -1508,22 +1511,24 @@ static void add_ddir_status_json(struct thread_stat *ts,
 		json_object_add_value_array(dir_object, "prios", array);
 
 		for (i = 0; i < ts->nr_clat_prio[ddir]; i++) {
-			if (ts->clat_prio[ddir][i].clat_stat.samples > 0) {
-				struct json_object *obj = json_create_object();
-				unsigned long long class, level;
+			struct json_object *obj;
 
-				class = ts->clat_prio[ddir][i].ioprio >> 13;
-				json_object_add_value_int(obj, "prioclass", class);
-				level = ts->clat_prio[ddir][i].ioprio & 7;
-				json_object_add_value_int(obj, "prio", level);
+			if (!ts->clat_prio[ddir][i].clat_stat.samples)
+				continue;
 
-				tmp_object = add_ddir_lat_json(ts,
-							       ts->clat_percentiles | ts->lat_percentiles,
-							       &ts->clat_prio[ddir][i].clat_stat,
-							       ts->clat_prio[ddir][i].io_u_plat);
-				json_object_add_value_object(obj, obj_name, tmp_object);
-				json_array_add_value_object(array, obj);
-			}
+			obj = json_create_object();
+
+			json_object_add_value_int(obj, "prioclass",
+				ioprio_class(ts->clat_prio[ddir][i].ioprio));
+			json_object_add_value_int(obj, "prio",
+				ioprio(ts->clat_prio[ddir][i].ioprio));
+
+			tmp_object = add_ddir_lat_json(ts,
+					ts->clat_percentiles | ts->lat_percentiles,
+					&ts->clat_prio[ddir][i].clat_stat,
+					ts->clat_prio[ddir][i].io_u_plat);
+			json_object_add_value_object(obj, obj_name, tmp_object);
+			json_array_add_value_object(array, obj);
 		}
 	}
 
@@ -1869,6 +1874,7 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 		struct json_array *iops, *bw;
 		int j, k, l;
 		char ss_buf[64];
+		int intervals = ts->ss_dur / (ss_check_interval / 1000L);
 
 		snprintf(ss_buf, sizeof(ss_buf), "%s%s:%f%s",
 			ts->ss_state & FIO_SS_IOPS ? "iops" : "bw",
@@ -1902,9 +1908,9 @@ static struct json_object *show_thread_status_json(struct thread_stat *ts,
 		if ((ts->ss_state & FIO_SS_ATTAINED) || !(ts->ss_state & FIO_SS_BUFFER_FULL))
 			j = ts->ss_head;
 		else
-			j = ts->ss_head == 0 ? ts->ss_dur - 1 : ts->ss_head - 1;
-		for (l = 0; l < ts->ss_dur; l++) {
-			k = (j + l) % ts->ss_dur;
+			j = ts->ss_head == 0 ? intervals - 1 : ts->ss_head - 1;
+		for (l = 0; l < intervals; l++) {
+			k = (j + l) % intervals;
 			json_array_add_value_int(bw, ts->ss_bw_data[k]);
 			json_array_add_value_int(iops, ts->ss_iops_data[k]);
 		}
@@ -2366,7 +2372,6 @@ void init_thread_stat(struct thread_stat *ts)
 
 static void init_per_prio_stats(struct thread_stat *threadstats, int nr_ts)
 {
-	struct thread_data *td;
 	struct thread_stat *ts;
 	int i, j, last_ts, idx;
 	enum fio_ddir ddir;
@@ -2380,7 +2385,7 @@ static void init_per_prio_stats(struct thread_stat *threadstats, int nr_ts)
 	 * store a 1 in ts->disable_prio_stat, and then do an additional
 	 * loop at the end where we invert the ts->disable_prio_stat values.
 	 */
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (!td->o.stats)
 			continue;
 		if (idx &&
@@ -2407,7 +2412,7 @@ static void init_per_prio_stats(struct thread_stat *threadstats, int nr_ts)
 		}
 
 		idx++;
-	}
+	} end_for_each();
 
 	/* Loop through all dst threadstats and fixup the values. */
 	for (i = 0; i < nr_ts; i++) {
@@ -2419,7 +2424,6 @@ static void init_per_prio_stats(struct thread_stat *threadstats, int nr_ts)
 void __show_run_stats(void)
 {
 	struct group_run_stats *runstats, *rs;
-	struct thread_data *td;
 	struct thread_stat *threadstats, *ts;
 	int i, j, k, nr_ts, last_ts, idx;
 	bool kb_base_warned = false;
@@ -2440,7 +2444,7 @@ void __show_run_stats(void)
 	 */
 	nr_ts = 0;
 	last_ts = -1;
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (!td->o.group_reporting) {
 			nr_ts++;
 			continue;
@@ -2452,7 +2456,7 @@ void __show_run_stats(void)
 
 		last_ts = td->groupid;
 		nr_ts++;
-	}
+	} end_for_each();
 
 	threadstats = malloc(nr_ts * sizeof(struct thread_stat));
 	opt_lists = malloc(nr_ts * sizeof(struct flist_head *));
@@ -2467,7 +2471,7 @@ void __show_run_stats(void)
 	j = 0;
 	last_ts = -1;
 	idx = 0;
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (!td->o.stats)
 			continue;
 		if (idx && (!td->o.group_reporting ||
@@ -2569,7 +2573,7 @@ void __show_run_stats(void)
 		}
 		else
 			ts->ss_dur = ts->ss_state = 0;
-	}
+	} end_for_each();
 
 	for (i = 0; i < nr_ts; i++) {
 		unsigned long long bw;
@@ -2722,17 +2726,15 @@ void __show_run_stats(void)
 
 int __show_running_run_stats(void)
 {
-	struct thread_data *td;
 	unsigned long long *rt;
 	struct timespec ts;
-	int i;
 
 	fio_sem_down(stat_sem);
 
 	rt = malloc(thread_number * sizeof(unsigned long long));
 	fio_gettime(&ts, NULL);
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td->runstate >= TD_EXITED)
 			continue;
 
@@ -2742,16 +2744,16 @@ int __show_running_run_stats(void)
 		}
 		td->ts.total_run_time = mtime_since(&td->epoch, &ts);
 
-		rt[i] = mtime_since(&td->start, &ts);
+		rt[__td_index] = mtime_since(&td->start, &ts);
 		if (td_read(td) && td->ts.io_bytes[DDIR_READ])
-			td->ts.runtime[DDIR_READ] += rt[i];
+			td->ts.runtime[DDIR_READ] += rt[__td_index];
 		if (td_write(td) && td->ts.io_bytes[DDIR_WRITE])
-			td->ts.runtime[DDIR_WRITE] += rt[i];
+			td->ts.runtime[DDIR_WRITE] += rt[__td_index];
 		if (td_trim(td) && td->ts.io_bytes[DDIR_TRIM])
-			td->ts.runtime[DDIR_TRIM] += rt[i];
-	}
+			td->ts.runtime[DDIR_TRIM] += rt[__td_index];
+	} end_for_each();
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td->runstate >= TD_EXITED)
 			continue;
 		if (td->rusage_sem) {
@@ -2759,21 +2761,21 @@ int __show_running_run_stats(void)
 			fio_sem_down(td->rusage_sem);
 		}
 		td->update_rusage = 0;
-	}
+	} end_for_each();
 
 	__show_run_stats();
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		if (td->runstate >= TD_EXITED)
 			continue;
 
 		if (td_read(td) && td->ts.io_bytes[DDIR_READ])
-			td->ts.runtime[DDIR_READ] -= rt[i];
+			td->ts.runtime[DDIR_READ] -= rt[__td_index];
 		if (td_write(td) && td->ts.io_bytes[DDIR_WRITE])
-			td->ts.runtime[DDIR_WRITE] -= rt[i];
+			td->ts.runtime[DDIR_WRITE] -= rt[__td_index];
 		if (td_trim(td) && td->ts.io_bytes[DDIR_TRIM])
-			td->ts.runtime[DDIR_TRIM] -= rt[i];
-	}
+			td->ts.runtime[DDIR_TRIM] -= rt[__td_index];
+	} end_for_each();
 
 	free(rt);
 	fio_sem_up(stat_sem);
@@ -3554,15 +3556,13 @@ static int add_iops_samples(struct thread_data *td, struct timespec *t)
  */
 int calc_log_samples(void)
 {
-	struct thread_data *td;
 	unsigned int next = ~0U, tmp = 0, next_mod = 0, log_avg_msec_min = -1U;
 	struct timespec now;
-	int i;
 	long elapsed_time = 0;
 
 	fio_gettime(&now, NULL);
 
-	for_each_td(td, i) {
+	for_each_td(td) {
 		elapsed_time = mtime_since_now(&td->epoch);
 
 		if (!td->o.stats)
@@ -3589,7 +3589,7 @@ int calc_log_samples(void)
 
 		if (tmp < next)
 			next = tmp;
-	}
+	} end_for_each();
 
 	/* if log_avg_msec_min has not been changed, set it to 0 */
 	if (log_avg_msec_min == -1U)

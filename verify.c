@@ -917,9 +917,11 @@ int verify_io_u(struct thread_data *td, struct io_u **io_u_ptr)
 		hdr = p;
 
 		/*
-		 * Make rand_seed check pass when have verify_backlog.
+		 * Make rand_seed check pass when have verify_backlog or
+		 * zone reset frequency for zonemode=zbd.
 		 */
-		if (!td_rw(td) || (td->flags & TD_F_VER_BACKLOG))
+		if (!td_rw(td) || (td->flags & TD_F_VER_BACKLOG) ||
+		    td->o.zrf.u.f)
 			io_u->rand_seed = hdr->rand_seed;
 
 		if (td->o.verify != VERIFY_PATTERN_NO_HDR) {
@@ -1566,10 +1568,9 @@ static int fill_file_completions(struct thread_data *td,
 struct all_io_list *get_all_io_list(int save_mask, size_t *sz)
 {
 	struct all_io_list *rep;
-	struct thread_data *td;
 	size_t depth;
 	void *next;
-	int i, nr;
+	int nr;
 
 	compiletime_assert(sizeof(struct all_io_list) == 8, "all_io_list");
 
@@ -1579,14 +1580,14 @@ struct all_io_list *get_all_io_list(int save_mask, size_t *sz)
 	 */
 	depth = 0;
 	nr = 0;
-	for_each_td(td, i) {
-		if (save_mask != IO_LIST_ALL && (i + 1) != save_mask)
+	for_each_td(td) {
+		if (save_mask != IO_LIST_ALL && (__td_index + 1) != save_mask)
 			continue;
 		td->stop_io = 1;
 		td->flags |= TD_F_VSTATE_SAVED;
 		depth += (td->o.iodepth * td->o.nr_files);
 		nr++;
-	}
+	} end_for_each();
 
 	if (!nr)
 		return NULL;
@@ -1594,17 +1595,16 @@ struct all_io_list *get_all_io_list(int save_mask, size_t *sz)
 	*sz = sizeof(*rep);
 	*sz += nr * sizeof(struct thread_io_list);
 	*sz += depth * sizeof(struct file_comp);
-	rep = malloc(*sz);
-	memset(rep, 0, *sz);
+	rep = calloc(1, *sz);
 
 	rep->threads = cpu_to_le64((uint64_t) nr);
 
 	next = &rep->state[0];
-	for_each_td(td, i) {
+	for_each_td(td) {
 		struct thread_io_list *s = next;
 		unsigned int comps, index = 0;
 
-		if (save_mask != IO_LIST_ALL && (i + 1) != save_mask)
+		if (save_mask != IO_LIST_ALL && (__td_index + 1) != save_mask)
 			continue;
 
 		comps = fill_file_completions(td, s, &index);
@@ -1613,7 +1613,7 @@ struct all_io_list *get_all_io_list(int save_mask, size_t *sz)
 		s->depth = cpu_to_le64((uint64_t) td->o.iodepth);
 		s->nofiles = cpu_to_le64((uint64_t) td->o.nr_files);
 		s->numberio = cpu_to_le64((uint64_t) td->io_issues[DDIR_WRITE]);
-		s->index = cpu_to_le64((uint64_t) i);
+		s->index = cpu_to_le64((uint64_t) __td_index);
 		if (td->random_state.use64) {
 			s->rand.state64.s[0] = cpu_to_le64(td->random_state.state64.s1);
 			s->rand.state64.s[1] = cpu_to_le64(td->random_state.state64.s2);
@@ -1631,7 +1631,7 @@ struct all_io_list *get_all_io_list(int save_mask, size_t *sz)
 		}
 		snprintf((char *) s->name, sizeof(s->name), "%s", td->o.name);
 		next = io_list_next(s);
-	}
+	} end_for_each();
 
 	return rep;
 }

@@ -163,7 +163,6 @@ show_help="no"
 exit_val=0
 gfio_check="no"
 libhdfs="no"
-pmemblk="no"
 devdax="no"
 pmem="no"
 cuda="no"
@@ -176,6 +175,7 @@ libiscsi="no"
 libnbd="no"
 libnfs=""
 xnvme=""
+libblkio=""
 libzbc=""
 dfs=""
 seed_buckets=""
@@ -248,6 +248,8 @@ for opt do
   ;;
   --disable-xnvme) xnvme="no"
   ;;
+  --disable-libblkio) libblkio="no"
+  ;;
   --disable-tcmalloc) disable_tcmalloc="yes"
   ;;
   --disable-libnfs) libnfs="no"
@@ -261,6 +263,8 @@ for opt do
   --enable-asan) asan="yes"
   ;;
   --seed-buckets=*) seed_buckets="$optarg"
+  ;;
+  --disable-tls) tls_check="no"
   ;;
   --help)
     show_help="yes"
@@ -304,12 +308,14 @@ if test "$show_help" = "yes" ; then
   echo "--enable-libiscsi       Enable iscsi support"
   echo "--enable-libnbd         Enable libnbd (NBD engine) support"
   echo "--disable-xnvme         Disable xnvme support even if found"
+  echo "--disable-libblkio      Disable libblkio support even if found"
   echo "--disable-libzbc        Disable libzbc even if found"
   echo "--disable-tcmalloc      Disable tcmalloc support"
   echo "--dynamic-libengines    Lib-based ioengines as dynamic libraries"
   echo "--disable-dfs           Disable DAOS File System support even if found"
   echo "--enable-asan           Enable address sanitizer"
   echo "--seed-buckets=         Number of seed buckets for the refill-buffer"
+  echo "--disable-tls		Disable __thread local storage"
   exit $exit_val
 fi
 
@@ -493,13 +499,15 @@ elif check_define __aarch64__ ; then
   cpu="aarch64"
 elif check_define __hppa__ ; then
   cpu="hppa"
+elif check_define __loongarch64 ; then
+  cpu="loongarch64"
 else
   cpu=`uname -m`
 fi
 
 # Normalise host CPU name and set ARCH.
 case "$cpu" in
-  ia64|ppc|ppc64|s390|s390x|sparc64)
+  ia64|ppc|ppc64|s390|s390x|sparc64|loongarch64)
     cpu="$cpu"
   ;;
   i386|i486|i586|i686|i86pc|BePC)
@@ -1172,7 +1180,9 @@ cat > $TMPC << EOF
 #include <time.h>
 int main(int argc, char **argv)
 {
-  return clock_gettime(0, NULL);
+  struct timespec ts;
+
+  return clock_gettime(0, &ts);
 }
 EOF
 if compile_prog "" "" "clock_gettime"; then
@@ -1194,7 +1204,9 @@ if test "$clock_gettime" = "yes" ; then
 #include <time.h>
 int main(int argc, char **argv)
 {
-  return clock_gettime(CLOCK_MONOTONIC, NULL);
+  struct timespec ts;
+
+  return clock_gettime(CLOCK_MONOTONIC, &ts);
 }
 EOF
   if compile_prog "" "$LIBS" "clock monotonic"; then
@@ -1334,6 +1346,23 @@ if compile_prog "" "" "sync_file_range"; then
   sync_file_range="yes"
 fi
 print_config "sync_file_range" "$sync_file_range"
+
+##########################################
+# ASharedMemory_create() probe
+if test "$ASharedMemory_create" != "yes" ; then
+  ASharedMemory_create="no"
+fi
+cat > $TMPC << EOF
+#include <android/sharedmem.h>
+int main(int argc, char **argv)
+{
+  return ASharedMemory_create("", 0);
+}
+EOF
+if compile_prog "" "" "ASharedMemory_create"; then
+  ASharedMemory_create="yes"
+fi
+print_config "ASharedMemory_create" "$ASharedMemory_create"
 
 ##########################################
 # ext4 move extent probe
@@ -1542,7 +1571,8 @@ print_config "socklen_t" "$socklen_t"
 if test "$tls_thread" != "yes" ; then
   tls_thread="no"
 fi
-cat > $TMPC << EOF
+if test "$tls_check" != "no"; then
+  cat > $TMPC << EOF
 #include <stdio.h>
 static __thread int ret;
 int main(int argc, char **argv)
@@ -1552,6 +1582,7 @@ int main(int argc, char **argv)
 EOF
 if compile_prog "" "" "__thread"; then
   tls_thread="yes"
+fi
 fi
 print_config "__thread" "$tls_thread"
 
@@ -2221,42 +2252,13 @@ if compile_prog "" "-lpmem2" "libpmem2"; then
 fi
 print_config "libpmem2" "$libpmem2"
 
-##########################################
-# Check whether we have libpmemblk
-# libpmem is a prerequisite
-if test "$libpmemblk" != "yes" ; then
-  libpmemblk="no"
-fi
-if test "$libpmem" = "yes"; then
-  cat > $TMPC << EOF
-#include <libpmemblk.h>
-int main(int argc, char **argv)
-{
-  PMEMblkpool *pbp;
-  pbp = pmemblk_open("", 0);
-  return 0;
-}
-EOF
-  if compile_prog "" "-lpmemblk" "libpmemblk"; then
-    libpmemblk="yes"
-  fi
-fi
-print_config "libpmemblk" "$libpmemblk"
-
 # Choose libpmem-based ioengines
 if test "$libpmem" = "yes" && test "$disable_pmem" = "no"; then
   devdax="yes"
   if test "$libpmem1_5" = "yes"; then
     pmem="yes"
   fi
-  if test "$libpmemblk" = "yes"; then
-    pmemblk="yes"
-  fi
 fi
-
-##########################################
-# Report whether pmemblk engine is enabled
-print_config "PMDK pmemblk engine" "$pmemblk"
 
 ##########################################
 # Report whether dev-dax engine is enabled
@@ -2561,7 +2563,7 @@ if compile_prog "" "" "valgrind_dev"; then
 fi
 print_config "Valgrind headers" "$valgrind_dev"
 
-if test "$targetos" = "Linux" ; then
+if test "$targetos" = "Linux" || test "$targetos" = "Android"; then
 ##########################################
 # <linux/blkzoned.h> probe
 if test "$linux_blkzoned" != "yes" ; then
@@ -2634,8 +2636,6 @@ cat > $TMPC << EOF
 #include <linux/nvme_ioctl.h>
 int main(void)
 {
-  struct nvme_uring_cmd *cmd;
-
   return sizeof(struct nvme_uring_cmd);
 }
 EOF
@@ -2662,21 +2662,39 @@ fi
 print_config "xnvme engine" "$xnvme"
 
 ##########################################
-# check march=armv8-a+crc+crypto
-if test "$march_armv8_a_crc_crypto" != "yes" ; then
-  march_armv8_a_crc_crypto="no"
+# Check if we have libblkio
+if test "$libblkio" != "no" ; then
+  if check_min_lib_version blkio 1.0.0; then
+    libblkio="yes"
+    libblkio_cflags=$(pkg-config --cflags blkio)
+    libblkio_libs=$(pkg-config --libs blkio)
+  else
+    if test "$libblkio" = "yes" ; then
+      feature_not_found "libblkio" "libblkio-dev or libblkio-devel"
+    fi
+    libblkio="no"
+  fi
 fi
+print_config "libblkio engine" "$libblkio"
+
+##########################################
+# check march=armv8-a+crc+crypto
+march_armv8_a_crc_crypto="no"
 if test "$cpu" = "arm64" ; then
   cat > $TMPC <<EOF
+#if __linux__
 #include <arm_acle.h>
 #include <arm_neon.h>
 #include <sys/auxv.h>
+#endif
 
 int main(void)
 {
   /* Can we also do a runtime probe? */
 #if __linux__
   return getauxval(AT_HWCAP);
+#elif defined(__APPLE__)
+  return 0;
 #else
 # error "Don't know how to do runtime probe for ARM CRC32c"
 #endif
@@ -2803,6 +2821,22 @@ if compile_prog "-Wimplicit-fallthrough=2" "" "-Wimplicit-fallthrough=2"; then
   fallthrough="yes"
 fi
 print_config "-Wimplicit-fallthrough=2" "$fallthrough"
+
+##########################################
+# check if the compiler has -Wno-stringop-concatenation
+no_stringop="no"
+cat > $TMPC << EOF
+#include <stdio.h>
+
+int main(int argc, char **argv)
+{
+	return printf("%s\n", argv[0]);
+}
+EOF
+if compile_prog "-Wno-stringop-truncation -Werror" "" "no_stringop"; then
+  no_stringop="yes"
+fi
+print_config "-Wno-stringop-truncation" "$no_stringop"
 
 ##########################################
 # check for MADV_HUGEPAGE support
@@ -2996,6 +3030,9 @@ fi
 if test "$sync_file_range" = "yes" ; then
   output_sym "CONFIG_SYNC_FILE_RANGE"
 fi
+if test "$ASharedMemory_create" = "yes" ; then
+  output_sym "CONFIG_ASHAREDMEMORY_CREATE"
+fi
 if test "$sfaa" = "yes" ; then
   output_sym "CONFIG_SFAA"
 fi
@@ -3151,9 +3188,6 @@ fi
 if test "$mtd" = "yes" ; then
   output_sym "CONFIG_MTD"
 fi
-if test "$pmemblk" = "yes" ; then
-  output_sym "CONFIG_PMEMBLK"
-fi
 if test "$devdax" = "yes" ; then
   output_sym "CONFIG_LINUX_DEVDAX"
 fi
@@ -3249,6 +3283,9 @@ fi
 if test "$fallthrough" = "yes"; then
   CFLAGS="$CFLAGS -Wimplicit-fallthrough"
 fi
+if test "$no_stringop" = "yes"; then
+  output_sym "CONFIG_HAVE_NO_STRINGOP"
+fi
 if test "$thp" = "yes" ; then
   output_sym "CONFIG_HAVE_THP"
 fi
@@ -3273,6 +3310,11 @@ if test "$xnvme" = "yes" ; then
   output_sym "CONFIG_LIBXNVME"
   echo "LIBXNVME_CFLAGS=$xnvme_cflags" >> $config_host_mak
   echo "LIBXNVME_LIBS=$xnvme_libs" >> $config_host_mak
+fi
+if test "$libblkio" = "yes" ; then
+  output_sym "CONFIG_LIBBLKIO"
+  echo "LIBBLKIO_CFLAGS=$libblkio_cflags" >> $config_host_mak
+  echo "LIBBLKIO_LIBS=$libblkio_libs" >> $config_host_mak
 fi
 if test "$dynamic_engines" = "yes" ; then
   output_sym "CONFIG_DYNAMIC_ENGINES"
