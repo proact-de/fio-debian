@@ -9,10 +9,9 @@ Copyright: 2005 Jens Axboe <axboe@suse.de>
 License: GPL-2
 
 Files: debian/*
-Copyright: 2009-2017 Martin Steigerwald <ms@teamix.de
-           2017-2022 Martin Steigerwald <martin.steigerwald@proact.de>
+Copyright: Martin Steigerwald <martin.steigerwald@proact.de>
 Comment:
- This package was debianized by Martin Steigerwald <ms@teamix.de> on
+ This package was debianized by Martin Steigerwald <martin.steigerwald@proact.de> on
  Tue, 19 May 2009 15:04:02 +0200.
 License: GPL-2+
 
