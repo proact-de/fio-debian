@@ -8,11 +8,11 @@ fio (3.35-1) unstable; urgency=medium
     * "engines/pmemblk.c" is gone.
     * Added "zbd.c", "zbd.h", "zbd_types.h", "oslib/blkzoned.h" and
       "oslib/linux-blkzoned.h".
-    * Added "oslib/strlcat.c".
     * Added "crc/sha3.c".
     * Added files in directory "engines" that I missed before.
+    * Added "oslib/strlcat.c".
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 12:11:34 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 12:19:28 +0200
 
 fio (3.33-3) unstable; urgency=medium
 
