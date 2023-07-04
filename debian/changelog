@@ -12,8 +12,10 @@ fio (3.35-1) unstable; urgency=medium
     * Added files in directory "engines" that I missed before.
     * Added files in directories "t" and "t/zbd".
     * Added "oslib/strlcat.c".
+    * Added "unittests/unittest.c", "unittests/oslib/strcasestr.c", and
+      "unittests/oslib/strsep.c".
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 12:21:30 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 12:37:43 +0200
 
 fio (3.33-3) unstable; urgency=medium
 
