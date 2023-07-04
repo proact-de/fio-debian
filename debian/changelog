@@ -7,7 +7,7 @@ fio (3.35-1) unstable; urgency=medium
     * Updated my mail address in all places.
     * "engines/pmemblk.c" is gone.
     * Added "zbd.c", "zbd.h", "zbd_types.h", "oslib/blkzoned.h" and
-      "oslib/linux-blkzoned.h".
+      "oslib/linux-blkzoned.c".
     * Added "crc/sha3.c".
     * Added files in directory "engines" that I missed before.
     * Added files in directories "t" and "t/zbd".
@@ -15,7 +15,7 @@ fio (3.35-1) unstable; urgency=medium
     * Added "unittests/unittest.c", "unittests/oslib/strcasestr.c", and
       "unittests/oslib/strsep.c".
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 12:37:43 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 12:42:05 +0200
 
 fio (3.33-3) unstable; urgency=medium
 

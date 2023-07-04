@@ -189,7 +189,7 @@ Files: lib/rbtree.h
 Copyright: 1999 Andrea Arcangeli <andrea@suse.de>
 License: GPL-2+
 
-Files: oslib/blkzoned.h oslib/linux-blkzoned.h
+Files: oslib/blkzoned.h oslib/linux-blkzoned.c
 Copyright: 2020 Western Digital Corporation or its affiliates
 License: GPL-2
 
