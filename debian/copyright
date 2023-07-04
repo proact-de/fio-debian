@@ -231,6 +231,14 @@ Files: t/read-to-pipe-async.c
 Copyright: 2016 Jens Axboe
 License: GPL-2+
 
+Files: t/jsonplus2csv_test.py t/latency_percentiles.py t/readonly.py t/run-fio-tests.py
+Copyright: 2019, 2020 Western Digital Corporation or its affiliates
+License: GPL-2
+
+Files: t/zbd/test-zbd-support t/zbd/run-tests-against-nullb
+Copyright: 2018, 2020 Western Digital Corporation or its affiliates
+License: GPL-2
+
 Files: tools/fio_generate_plots.1
 Copyright: Written by Martin Steigerwald <ms@teamix.de>
 License: GPL-2
