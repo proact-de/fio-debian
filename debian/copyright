@@ -75,6 +75,10 @@ Files: crc/sha1.c crc/sha1.h
 Copyright: Based on the Mozilla SHA1 (see mozilla-sha1/sha1.c)
 License: GPL-2
 
+Files: crc/sha3.c
+Copyright: SHA-3 code by Jeff Garzik <jeff@garzik.org>
+License: GPL-2+
+
 Files: crc/sha256.c
 Copyright: Jean-Luc Cooke <jlcooke@certainkey.com>
            Andrew McDonald <andrew@mcdonald.org.uk>
