@@ -95,6 +95,56 @@ Files: engines/dev-dax.c
 Copyright: 2016 Intel Corp
 License: GPL-2
 
+Files: engines/dfs.c
+Copyright: 2020-2021 Intel Corporation
+License: GPL-2
+
+Files: engines/http.c
+Copyright: 2018 SUSE LLC
+License: GPL-2
+
+Files: engines/ime.c
+Copyright: 2018 DataDirect Networks
+License: GPL-2
+
+Files: engines/libcufile.c
+Copyright: 2020 System Fabric Works <info@systemfabricworks.com>
+License: GPL-2
+
+Files: engines/libpmem.c
+Copyright: 2017 Nippon Telegraph and Telephone Corporation
+           2018-2021, Intel Corporation
+License: GPL-2
+
+Files: engines/librpma_apm.c
+Copyright: Copyright 2020-2021, Intel Corporation
+License: GPL-2
+
+Files: engines/librpma_fio_pmem.h engines/librpma_fio_pmem2.h
+Copyright: Copyright 2022, Intel Corporation
+License: GPL-2
+
+Files: engines/librpma_fio.c engines/librpma_fio.h
+Copyright: Copyright 2021-2022, Intel Corporation
+License: GPL-2
+
+Files: engines/librpma_gpspm_flush.pb-c.c engines/librpma_gpspm_flush.pb-c.h
+Copyright: Copyright 2020, Intel Corporation
+License: GPL-2
+
+Files: engines/librpma_gpspm.c
+Copyright: Copyright 2020-2022, Intel Corporation
+License: GPL-2
+
+Files: engines/libzbc.c
+Copyright: 2019 Western Digital Corporation or its affiliates
+License: GPL-2
+
+Files: engines/nbd.c
+Copyright: 2019 Red Hat Inc.
+           Written by Richard W.M. Jones <rjones@redhat.com>
+License: GPL-2
+
 Files: examples/gfapi.fio
 Copyright: Originally authored by Castor Fu
 License: GPL-2
