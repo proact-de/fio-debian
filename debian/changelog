@@ -2,8 +2,9 @@ fio (3.35-1) unstable; urgency=medium
 
   * Imported new upstream version 3.35.
   * control: Bumped standards version to 4.6.2. No changes needed.
+  * copyright: engines/pmemblk.c is gone.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 27 Jun 2023 12:56:53 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 11:21:04 +0200
 
 fio (3.33-3) unstable; urgency=medium
 

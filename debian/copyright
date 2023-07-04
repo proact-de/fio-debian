@@ -96,10 +96,6 @@ Files: engines/dev-dax.c
 Copyright: 2016 Intel Corp
 License: GPL-2
 
-Files: engines/pmemblk.c
-Copyright: 2016 Hewlett Packard Enterprise Development LP
-License: GPL-2
-
 Files: examples/gfapi.fio
 Copyright: Originally authored by Castor Fu
 License: GPL-2
