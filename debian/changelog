@@ -6,9 +6,10 @@ fio (3.35-1) unstable; urgency=medium
     * Removed years from Debian packaging copyright.
     * Updated my mail address in all places.
     * "engines/pmemblk.c" is gone.
+    * Added files "zbd.c", "zbd.h" and "zbd_types.h".
     * Added files in directory "engines" that I missed before.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 11:43:28 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 04 Jul 2023 11:50:55 +0200
 
 fio (3.33-3) unstable; urgency=medium
 
