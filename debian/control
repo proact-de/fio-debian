@@ -2,7 +2,7 @@ Source: fio
 Section: utils
 Priority: optional
 Maintainer: Martin Steigerwald <martin.steigerwald@proact.de>
-Build-Depends: debhelper-compat (= 13), libaio-dev [linux-any], zlib1g-dev, librdmacm-dev [linux-any], libibverbs-dev [linux-any], librbd-dev [linux-any], libgtk2.0-dev, libcairo2-dev, libnuma-dev [linux-any], flex, bison, sphinx, python3-sphinx, libglusterfs-dev [amd64 arm64 ppc64el ppc64 riscv64 mips64el s390x ia64 sparc64], libpmem-dev [amd64 arm64 ppc64el], libpmemblk-dev [amd64 arm64 ppc64el], libnbd-dev
+Build-Depends: debhelper-compat (= 13), libaio-dev [linux-any], zlib1g-dev, librdmacm-dev [linux-any], libibverbs-dev [linux-any], librbd-dev [linux-any], libcairo2-dev, libnuma-dev [linux-any], flex, bison, sphinx, python3-sphinx, libglusterfs-dev [amd64 arm64 ppc64el ppc64 riscv64 mips64el s390x ia64 sparc64], libpmem-dev [amd64 arm64 ppc64el], libpmemblk-dev [amd64 arm64 ppc64el], libnbd-dev
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
 Homepage: https://github.com/axboe/fio
@@ -12,7 +12,7 @@ Vcs-Browser: https://salsa.debian.org/debian/fio
 Package: fio
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, python3
-Suggests: fio-examples, gnuplot, gfio
+Suggests: fio-examples, gnuplot
 Description: flexible I/O tester
  fio is a tool that will spawn a number of threads or processes doing a
  particular type of I/O action as specified by the user. fio takes a
@@ -22,25 +22,7 @@ Description: flexible I/O tester
  one wants to simulate.
  .
  This package contains the command line version of fio and all additional
- command line tools. The package gfio contains the GTK+ based gui frontend
- for fio. The package fio-examples contains the example job files.
-
-Package: gfio
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Suggests: fio, fio-examples
-Description: flexible I/O tester - gui frontend
- fio is a tool that will spawn a number of threads or processes doing a
- particular type of I/O action as specified by the user. fio takes a
- number of global parameters, each inherited by the thread unless
- otherwise parameters given to them overriding that setting is given.
- The typical use of fio is to write a job file matching the I/O load
- one wants to simulate.
- .
- This package contains the GTK+ based gui frontend for fio. The package
- fio contains the command line version of fio which acts as a backend
- to the GUI frontend. The frontend can talk to a locally or remotely
- running fio server.
+ command line tools. The package fio-examples contains the example job files.
 
 Package: fio-examples
 Architecture: all
