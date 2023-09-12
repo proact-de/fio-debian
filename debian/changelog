@@ -2,7 +2,7 @@ fio (3.35-3) UNRELEASED; urgency=medium
 
   [ Bastian Germann ]
   * gfio will not be ported to gtk3 or later. So drop this gtk2 dependent
-    package.
+    package. (Closes: #967339)
 
   [ Martin Steigerwald ]
   * control: Drop libpmemblk from Build-Depends. Thanks to Adam Borowski for
