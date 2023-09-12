@@ -1,4 +1,4 @@
-fio (3.35-3) UNRELEASED; urgency=medium
+fio (3.35-3) unstable; urgency=medium
 
   [ Bastian Germann ]
   * gfio will not be ported to gtk3 or later. So drop this gtk2 dependent
@@ -8,7 +8,7 @@ fio (3.35-3) UNRELEASED; urgency=medium
   * control: Drop libpmemblk from Build-Depends. Thanks to Adam Borowski for
     his merge request.
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 12 Sep 2023 09:32:11 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Tue, 12 Sep 2023 09:46:14 +0200
 
 fio (3.35-2) unstable; urgency=medium
 
