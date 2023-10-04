@@ -2,7 +2,7 @@ Source: fio
 Section: utils
 Priority: optional
 Maintainer: Martin Steigerwald <martin.steigerwald@proact.de>
-Build-Depends: debhelper-compat (= 13), libaio-dev [linux-any], zlib1g-dev, librdmacm-dev [linux-any], libibverbs-dev [linux-any], librbd-dev [linux-any], libcairo2-dev, libnuma-dev [linux-any], flex, bison, sphinx, python3-sphinx, libglusterfs-dev [amd64 arm64 ppc64el ppc64 riscv64 mips64el s390x ia64 sparc64], libpmem-dev [amd64 arm64 ppc64el], libnbd-dev
+Build-Depends: debhelper-compat (= 13), libaio-dev [linux-any], zlib1g-dev, librdmacm-dev [linux-any], libibverbs-dev [linux-any], librbd-dev [linux-amd64 linux-arm64 linux-ppc64el linux-ppc64 linux-riscv64 linux-mips64el linux-s390x linux-ia64 linux-sparc64], libcairo2-dev, libnuma-dev [linux-any], flex, bison, sphinx, python3-sphinx, libglusterfs-dev [amd64 arm64 ppc64el ppc64 riscv64 mips64el s390x ia64 sparc64], libpmem-dev [amd64 arm64 ppc64el], libnbd-dev
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
 Homepage: https://github.com/axboe/fio
