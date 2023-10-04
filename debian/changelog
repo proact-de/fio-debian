@@ -1,9 +1,9 @@
-fio (3.35-4) UNRELEASED; urgency=medium
+fio (3.35-4) unstable; urgency=medium
 
   * Only build with librbd-dev on 64 bit architectures and as before on
     Linux (Closes: #1053167).
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 04 Oct 2023 15:12:03 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 04 Oct 2023 15:29:11 +0200
 
 fio (3.35-3) unstable; urgency=medium
 
