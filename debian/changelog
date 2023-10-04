@@ -21,7 +21,7 @@ fio (3.35-2) unstable; urgency=medium
 
   * Restrict building with GlusterFS support to 64 bit architectures
     (amd64, arm64, ppc64el, ppc64, riscv64, mips64el, s390x, ia64, sparc64).
-    (Closes: #1041995, also see bug #1039604) 
+    (Closes: #1041995, also see bug #1039604)
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Wed, 26 Jul 2023 10:27:36 +0200
 
