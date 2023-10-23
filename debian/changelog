@@ -1,9 +1,9 @@
 fio (3.36-1) unstable; urgency=medium
 
   * Imported new upstream version 3.36.
-  * patches: Removed patch makefile-hardening. Applied upstream. 
+  * patches: Removed patch makefile-hardening. Applied upstream.
   * NEWS: Explained the removal of gfio since fio 3.35-3 and mentioned
-    an alternative. 
+    an alternative.
 
  -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 23 Oct 2023 11:47:12 +0200
 
