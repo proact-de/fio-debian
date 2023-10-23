@@ -398,7 +398,8 @@ static int verify_io_u_pattern(struct verify_header *hdr, struct vcont *vc)
 				(unsigned char)buf[i],
 				(unsigned char)pattern[mod],
 				bits);
-			log_err("fio: bad pattern block offset %u\n", i);
+			log_err("fio: bad pattern block offset %u\n",
+				i + header_size);
 			vc->name = "pattern";
 			log_verify_failure(hdr, vc);
 			return EILSEQ;
@@ -1647,6 +1648,10 @@ static int open_state_file(const char *name, const char *prefix, int num,
 		flags = O_CREAT | O_TRUNC | O_WRONLY | O_SYNC;
 	else
 		flags = O_RDONLY;
+
+#ifdef _WIN32
+	flags |= O_BINARY;
+#endif
 
 	verify_state_gen_name(out, sizeof(out), name, prefix, num);
 

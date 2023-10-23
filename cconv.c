@@ -216,9 +216,9 @@ int convert_thread_options_to_cpu(struct thread_options *o,
 	o->log_prio = le32_to_cpu(top->log_prio);
 	o->log_gz = le32_to_cpu(top->log_gz);
 	o->log_gz_store = le32_to_cpu(top->log_gz_store);
-	o->log_unix_epoch = le32_to_cpu(top->log_unix_epoch);
 	o->log_alternate_epoch = le32_to_cpu(top->log_alternate_epoch);
 	o->log_alternate_epoch_clock_id = le32_to_cpu(top->log_alternate_epoch_clock_id);
+	o->job_start_clock_id = le32_to_cpu(top->job_start_clock_id);
 	o->norandommap = le32_to_cpu(top->norandommap);
 	o->softrandommap = le32_to_cpu(top->softrandommap);
 	o->bs_unaligned = le32_to_cpu(top->bs_unaligned);
@@ -281,6 +281,7 @@ int convert_thread_options_to_cpu(struct thread_options *o,
 	o->nice = le32_to_cpu(top->nice);
 	o->ioprio = le32_to_cpu(top->ioprio);
 	o->ioprio_class = le32_to_cpu(top->ioprio_class);
+	o->ioprio_hint = le32_to_cpu(top->ioprio_hint);
 	o->file_service_type = le32_to_cpu(top->file_service_type);
 	o->group_reporting = le32_to_cpu(top->group_reporting);
 	o->stats = le32_to_cpu(top->stats);
@@ -351,6 +352,7 @@ int convert_thread_options_to_cpu(struct thread_options *o,
 		o->merge_blktrace_iters[i].u.f = fio_uint64_to_double(le64_to_cpu(top->merge_blktrace_iters[i].u.i));
 
 	o->fdp = le32_to_cpu(top->fdp);
+	o->fdp_pli_select = le32_to_cpu(top->fdp_pli_select);
 	o->fdp_nrpli = le32_to_cpu(top->fdp_nrpli);
 	for (i = 0; i < o->fdp_nrpli; i++)
 		o->fdp_plis[i] = le32_to_cpu(top->fdp_plis[i]);
@@ -453,9 +455,9 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->log_prio = cpu_to_le32(o->log_prio);
 	top->log_gz = cpu_to_le32(o->log_gz);
 	top->log_gz_store = cpu_to_le32(o->log_gz_store);
-	top->log_unix_epoch = cpu_to_le32(o->log_unix_epoch);
 	top->log_alternate_epoch = cpu_to_le32(o->log_alternate_epoch);
 	top->log_alternate_epoch_clock_id = cpu_to_le32(o->log_alternate_epoch_clock_id);
+	top->job_start_clock_id = cpu_to_le32(o->job_start_clock_id);
 	top->norandommap = cpu_to_le32(o->norandommap);
 	top->softrandommap = cpu_to_le32(o->softrandommap);
 	top->bs_unaligned = cpu_to_le32(o->bs_unaligned);
@@ -495,6 +497,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 	top->nice = cpu_to_le32(o->nice);
 	top->ioprio = cpu_to_le32(o->ioprio);
 	top->ioprio_class = cpu_to_le32(o->ioprio_class);
+	top->ioprio_hint = cpu_to_le32(o->ioprio_hint);
 	top->file_service_type = cpu_to_le32(o->file_service_type);
 	top->group_reporting = cpu_to_le32(o->group_reporting);
 	top->stats = cpu_to_le32(o->stats);
@@ -645,6 +648,7 @@ void convert_thread_options_to_net(struct thread_options_pack *top,
 		top->merge_blktrace_iters[i].u.i = __cpu_to_le64(fio_double_to_uint64(o->merge_blktrace_iters[i].u.f));
 
 	top->fdp = cpu_to_le32(o->fdp);
+	top->fdp_pli_select = cpu_to_le32(o->fdp_pli_select);
 	top->fdp_nrpli = cpu_to_le32(o->fdp_nrpli);
 	for (i = 0; i < o->fdp_nrpli; i++)
 		top->fdp_plis[i] = cpu_to_le32(o->fdp_plis[i]);

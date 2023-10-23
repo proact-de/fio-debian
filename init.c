@@ -951,13 +951,16 @@ static int fixup_options(struct thread_data *td)
 	if (o->disable_slat)
 		o->slat_percentiles = 0;
 
-	/*
-	 * Fix these up to be nsec internally
-	 */
-	for_each_rw_ddir(ddir)
-		o->max_latency[ddir] *= 1000ULL;
+	/* Do this only for the parent job */
+	if (!td->subjob_number) {
+		/*
+		 * Fix these up to be nsec internally
+		 */
+		for_each_rw_ddir(ddir)
+			o->max_latency[ddir] *= 1000ULL;
 
-	o->latency_target *= 1000ULL;
+		o->latency_target *= 1000ULL;
+	}
 
 	/*
 	 * Dedupe working set verifications
@@ -1079,6 +1082,8 @@ void td_fill_rand_seeds(struct thread_data *td)
 
 	init_rand_seed(&td->buf_state, td->rand_seeds[FIO_RAND_BUF_OFF], use64);
 	frand_copy(&td->buf_state_prev, &td->buf_state);
+
+	init_rand_seed(&td->fdp_state, td->rand_seeds[FIO_RAND_FDP_OFF], use64);
 }
 
 static int setup_random_seeds(struct thread_data *td)

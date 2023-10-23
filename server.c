@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <errno.h>
 #include <poll.h>
@@ -1705,6 +1706,7 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 	p.ts.error		= cpu_to_le32(ts->error);
 	p.ts.thread_number	= cpu_to_le32(ts->thread_number);
 	p.ts.groupid		= cpu_to_le32(ts->groupid);
+	p.ts.job_start		= cpu_to_le64(ts->job_start);
 	p.ts.pid		= cpu_to_le32(ts->pid);
 	p.ts.members		= cpu_to_le32(ts->members);
 	p.ts.unified_rw_rep	= cpu_to_le32(ts->unified_rw_rep);
@@ -2343,7 +2345,11 @@ void fio_server_send_start(struct thread_data *td)
 {
 	struct sk_out *sk_out = pthread_getspecific(sk_out_key);
 
-	assert(sk_out->sk != -1);
+	if (sk_out->sk == -1) {
+		log_err("pthread getting specific for key failed, sk_out %p, sk %i, err: %i:%s",
+			sk_out, sk_out->sk, errno, strerror(errno));
+		abort();
+	}
 
 	fio_net_queue_cmd(FIO_NET_CMD_SERVER_START, NULL, 0, NULL, SK_F_SIMPLE);
 }

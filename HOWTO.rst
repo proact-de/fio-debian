@@ -755,6 +755,10 @@ Time related parameters
 	calls will be excluded from other uses. Fio will manually clear it from the
 	CPU mask of other jobs.
 
+.. option:: job_start_clock_id=int
+   The clock_id passed to the call to `clock_gettime` used to record job_start
+   in the `json` output format. Default is 0, or CLOCK_REALTIME.
+
 
 Target file/device
 ~~~~~~~~~~~~~~~~~~
@@ -843,7 +847,9 @@ Target file/device
 
 .. option:: opendir=str
 
-	Recursively open any files below directory `str`.
+        Recursively open any files below directory `str`. This accepts only a
+        single directory and unlike related options, colons appearing in the
+        path must not be escaped.
 
 .. option:: lockfile=str
 
@@ -1054,22 +1060,34 @@ Target file/device
 
 .. option:: max_open_zones=int
 
-	A zone of a zoned block device is in the open state when it is partially
-	written (i.e. not all sectors of the zone have been written). Zoned
-	block devices may have a limit on the total number of zones that can
-	be simultaneously in the open state, that is, the number of zones that
-	can be written to simultaneously. The :option:`max_open_zones` parameter
-	limits the number of zones to which write commands are issued by all fio
-	jobs, that is, limits the number of zones that will be in the open
-	state. This parameter is relevant only if the :option:`zonemode` =zbd is
-	used. The default value is always equal to maximum number of open zones
-	of the target zoned block device and a value higher than this limit
-	cannot be specified by users unless the option
-	:option:`ignore_zone_limits` is specified. When
-	:option:`ignore_zone_limits` is specified or the target device has no
-	limit on the number of zones that can be in an open state,
-	:option:`max_open_zones` can specify 0 to disable any limit on the
-	number of zones that can be simultaneously written to by all jobs.
+	When a zone of a zoned block device is partially written (i.e. not all
+	sectors of the zone have been written), the zone is in one of three
+	conditions: 'implicit open', 'explicit open' or 'closed'. Zoned block
+	devices may have a limit called 'max_open_zones' (same name as the
+	parameter) on the total number of zones that can simultaneously be in
+	the 'implicit open' or 'explicit open' conditions. Zoned block devices
+	may have another limit called 'max_active_zones', on the total number of
+	zones that can simultaneously be in the three conditions. The
+	:option:`max_open_zones` parameter limits the number of zones to which
+	write commands are issued by all fio jobs, that is, limits the number of
+	zones that will be in the conditions. When the device has the
+	max_open_zones limit and does not have the max_active_zones limit, the
+	:option:`max_open_zones` parameter limits the number of zones in the two
+	open conditions up to the limit. In this case, fio includes zones in the
+	two open conditions to the write target zones at fio start. When the
+	device has both the max_open_zones and the max_active_zones limits, the
+	:option:`max_open_zones` parameter limits the number of zones in the
+	three conditions up to the limit. In this case, fio includes zones in
+	the three conditions to the write target zones at fio start.
+
+	This parameter is relevant only if the :option:`zonemode` =zbd is used.
+	The default value is always equal to the max_open_zones limit of the
+	target zoned block device and a value higher than this limit cannot be
+	specified by users unless the option :option:`ignore_zone_limits` is
+	specified. When :option:`ignore_zone_limits` is specified or the target
+	device does not have the max_open_zones limit, :option:`max_open_zones`
+	can specify 0 to disable any limit on the number of zones that can be
+	simultaneously written to by all jobs.
 
 .. option:: job_max_open_zones=int
 
@@ -2273,6 +2291,16 @@ with the caveat that when used on the command line, they must come after the
 	reads and writes. See :manpage:`ionice(1)`. See also the
 	:option:`prioclass` option.
 
+.. option:: cmdprio_hint=int[,int] : [io_uring] [libaio]
+
+	Set the I/O priority hint to use for I/Os that must be issued with
+	a priority when :option:`cmdprio_percentage` or
+	:option:`cmdprio_bssplit` is set. If not specified when
+	:option:`cmdprio_percentage` or :option:`cmdprio_bssplit` is set,
+	this defaults to 0 (no hint). A single value applies to reads and
+	writes. Comma-separated values may be specified for reads and writes.
+	See also the :option:`priohint` option.
+
 .. option:: cmdprio=int[,int] : [io_uring] [libaio]
 
 	Set the I/O priority value to use for I/Os that must be issued with
@@ -2299,9 +2327,9 @@ with the caveat that when used on the command line, they must come after the
 
 		cmdprio_bssplit=blocksize/percentage:blocksize/percentage
 
-	In this case, each entry will use the priority class and priority
-	level defined by the options :option:`cmdprio_class` and
-	:option:`cmdprio` respectively.
+	In this case, each entry will use the priority class, priority hint
+	and priority level defined by the options :option:`cmdprio_class`,
+        :option:`cmdprio` and :option:`cmdprio_hint` respectively.
 
 	The second accepted format for this option is:
 
@@ -2312,7 +2340,14 @@ with the caveat that when used on the command line, they must come after the
 	accepted format does not restrict all entries to have the same priority
 	class and priority level.
 
-	For both formats, only the read and write data directions are supported,
+	The third accepted format for this option is:
+
+		cmdprio_bssplit=blocksize/percentage/class/level/hint:...
+
+	This is an extension of the second accepted format that allows to also
+	specify a priority hint.
+
+	For all formats, only the read and write data directions are supported,
 	values for trim IOs are ignored. This option is mutually exclusive with
 	the :option:`cmdprio_percentage` option.
 
@@ -2429,17 +2464,71 @@ with the caveat that when used on the command line, they must come after the
 	For direct I/O, requests will only succeed if cache invalidation isn't required,
 	file blocks are fully allocated and the disk request could be issued immediately.
 
-.. option:: fdp=bool : [io_uring_cmd]
+.. option:: fdp=bool : [io_uring_cmd] [xnvme]
 
 	Enable Flexible Data Placement mode for write commands.
 
-.. option:: fdp_pli=str : [io_uring_cmd]
+.. option:: fdp_pli_select=str : [io_uring_cmd] [xnvme]
+
+	Defines how fio decides which placement ID to use next. The following
+	types are defined:
+
+		**random**
+			Choose a placement ID at random (uniform).
+
+		**roundrobin**
+			Round robin over available placement IDs. This is the
+			default.
+
+	The available placement ID index/indices is defined by the option
+	:option:`fdp_pli`.
+
+.. option:: fdp_pli=str : [io_uring_cmd] [xnvme]
 
 	Select which Placement ID Index/Indicies this job is allowed to use for
 	writes. By default, the job will cycle through all available Placement
         IDs, so use this to isolate these identifiers to specific jobs. If you
         want fio to use placement identifier only at indices 0, 2 and 5 specify
         ``fdp_pli=0,2,5``.
+
+.. option:: md_per_io_size=int : [io_uring_cmd]
+
+	Size in bytes for separate metadata buffer per IO. Default: 0.
+
+.. option:: pi_act=int : [io_uring_cmd]
+
+	Action to take when nvme namespace is formatted with protection
+	information. If this is set to 1 and namespace is formatted with
+	metadata size equal to protection information size, fio won't use
+	separate metadata buffer or extended logical block. If this is set to
+	1 and namespace is formatted with metadata size greater than protection
+	information size, fio will not generate or verify the protection
+	information portion of metadata for write or read case respectively.
+	If this is set to 0, fio generates protection information for
+	write case and verifies for read case. Default: 1.
+
+.. option:: pi_chk=str[,str][,str] : [io_uring_cmd]
+
+	Controls the protection information check. This can take one or more
+	of these values. Default: none.
+
+	**GUARD**
+		Enables protection information checking of guard field.
+	**REFTAG**
+		Enables protection information checking of logical block
+		reference tag field.
+	**APPTAG**
+		Enables protection information checking of application tag field.
+
+.. option:: apptag=int : [io_uring_cmd]
+
+	Specifies logical block application tag value, if namespace is
+	formatted to use end to end protection information. Default: 0x1234.
+
+.. option:: apptag_mask=int : [io_uring_cmd]
+
+	Specifies logical block application tag mask value, if namespace is
+	formatted to use end to end protection information. Default: 0xffff.
 
 .. option:: cpuload=int : [cpuio]
 
@@ -3407,6 +3496,18 @@ Threads, processes and job synchronization
 	priority setting, see I/O engine specific :option:`cmdprio_percentage`
 	and :option:`cmdprio_class` options.
 
+.. option:: priohint=int
+
+	Set the I/O priority hint. This is only applicable to platforms that
+	support I/O priority classes and to devices with features controlled
+	through priority hints, e.g. block devices supporting command duration
+	limits, or CDL. CDL is a way to indicate the desired maximum latency
+	of I/Os so that the device can optimize its internal command scheduling
+	according to the latency limits indicated by the user.
+
+	For per-I/O priority hint setting, see the I/O engine specific
+	:option:`cmdprio_hint` option.
+
 .. option:: cpus_allowed=str
 
 	Controls the same options as :option:`cpumask`, but accepts a textual
@@ -3869,6 +3970,13 @@ Measurements and reporting
 	same reporting group, unless if separated by a :option:`stonewall`, or by
 	using :option:`new_group`.
 
+    NOTE: When :option: `group_reporting` is used along with `json` output,
+    there are certain per-job properties which can be different between jobs
+    but do not have a natural group-level equivalent. Examples include
+    `kb_base`, `unit_base`, `sig_figs`, `thread_number`, `pid`, and
+    `job_start`. For these properties, the values for the first job are
+    recorded for the group.
+
 .. option:: new_group
 
 	Start a new reporting group. See: :option:`group_reporting`.  If not given,
@@ -4006,9 +4114,7 @@ Measurements and reporting
 
 .. option:: log_unix_epoch=bool
 
-	If set, fio will log Unix timestamps to the log files produced by enabling
-	write_type_log for each log type, instead of the default zero-based
-	timestamps.
+	Backwards compatible alias for log_alternate_epoch.
 
 .. option:: log_alternate_epoch=bool
 
@@ -4019,9 +4125,9 @@ Measurements and reporting
 
 .. option:: log_alternate_epoch_clock_id=int
 
-	Specifies the clock_id to be used by clock_gettime to obtain the alternate epoch
-	if either log_unix_epoch or log_alternate_epoch are true. Otherwise has no
-	effect. Default value is 0, or CLOCK_REALTIME.
+    Specifies the clock_id to be used by clock_gettime to obtain the alternate
+    epoch if log_alternate_epoch is true. Otherwise has no effect. Default
+    value is 0, or CLOCK_REALTIME.
 
 .. option:: block_error_percentiles=bool
 
@@ -4511,13 +4617,15 @@ For each data direction it prints:
 And finally, the disk statistics are printed. This is Linux specific. They will look like this::
 
   Disk stats (read/write):
-    sda: ios=16398/16511, merge=30/162, ticks=6853/819634, in_queue=826487, util=100.00%
+    sda: ios=16398/16511, sectors=32321/65472, merge=30/162, ticks=6853/819634, in_queue=826487, util=100.00%
 
 Each value is printed for both reads and writes, with reads first. The
 numbers denote:
 
 **ios**
 		Number of I/Os performed by all groups.
+**sectors**
+		Amount of data transferred in units of 512 bytes for all groups.
 **merge**
 		Number of merges performed by the I/O scheduler.
 **ticks**
@@ -4996,6 +5104,9 @@ where `local-args` are arguments for the client where it is running, `server`
 is the connect string, and `remote-args` and `job file(s)` are sent to the
 server. The `server` string follows the same format as it does on the server
 side, to allow IP/hostname/socket and port strings.
+
+Note that all job options must be defined in job files when running fio as a
+client. Any job options specified in `remote-args` will be ignored.
 
 Fio can connect to multiple servers this way::
 

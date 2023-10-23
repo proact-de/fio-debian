@@ -22,6 +22,9 @@
 #include "zbd_types.h"
 
 #include <linux/blkzoned.h>
+#ifndef BLKFINISHZONE
+#define BLKFINISHZONE _IOW(0x12, 136, struct blk_zone_range)
+#endif
 
 /*
  * If the uapi headers installed on the system lacks zone capacity support,
@@ -183,6 +186,29 @@ int blkzoned_get_max_open_zones(struct thread_data *td, struct fio_file *f,
 	return 0;
 }
 
+int blkzoned_get_max_active_zones(struct thread_data *td, struct fio_file *f,
+				  unsigned int *max_active_zones)
+{
+	char *max_active_str;
+
+	if (f->filetype != FIO_TYPE_BLOCK)
+		return -EIO;
+
+	max_active_str = blkzoned_get_sysfs_attr(f->file_name, "queue/max_active_zones");
+	if (!max_active_str) {
+		*max_active_zones = 0;
+		return 0;
+	}
+
+	dprint(FD_ZBD, "%s: max active zones supported by device: %s\n",
+	       f->file_name, max_active_str);
+	*max_active_zones = atoll(max_active_str);
+
+	free(max_active_str);
+
+	return 0;
+}
+
 static uint64_t zone_capacity(struct blk_zone_report *hdr,
 			      struct blk_zone *blkz)
 {
@@ -312,7 +338,6 @@ int blkzoned_reset_wp(struct thread_data *td, struct fio_file *f,
 int blkzoned_finish_zone(struct thread_data *td, struct fio_file *f,
 			 uint64_t offset, uint64_t length)
 {
-#ifdef BLKFINISHZONE
 	struct blk_zone_range zr = {
 		.sector         = offset >> 9,
 		.nr_sectors     = length >> 9,
@@ -327,21 +352,19 @@ int blkzoned_finish_zone(struct thread_data *td, struct fio_file *f,
 			return -errno;
 	}
 
-	if (ioctl(fd, BLKFINISHZONE, &zr) < 0)
+	if (ioctl(fd, BLKFINISHZONE, &zr) < 0) {
 		ret = -errno;
+		/*
+		 * Kernel versions older than 5.5 do not support BLKFINISHZONE
+		 * and return the ENOTTY error code. These old kernels only
+		 * support block devices that close zones automatically.
+		 */
+		if (ret == ENOTTY)
+			ret = 0;
+	}
 
 	if (f->fd < 0)
 		close(fd);
 
 	return ret;
-#else
-	/*
-	 * Kernel versions older than 5.5 does not support BLKFINISHZONE. These
-	 * old kernels assumed zones are closed automatically at max_open_zones
-	 * limit. Also they did not support max_active_zones limit. Then there
-	 * was no need to finish zones to avoid errors caused by max_open_zones
-	 * or max_active_zones. For those old versions, just do nothing.
-	 */
-	return 0;
-#endif
 }

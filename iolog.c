@@ -82,8 +82,8 @@ static void iolog_delay(struct thread_data *td, unsigned long delay)
 {
 	uint64_t usec = utime_since_now(&td->last_issue);
 	unsigned long orig_delay = delay;
-	uint64_t this_delay;
 	struct timespec ts;
+	int ret = 0;
 
 	if (delay < td->time_offset) {
 		td->time_offset = 0;
@@ -97,13 +97,13 @@ static void iolog_delay(struct thread_data *td, unsigned long delay)
 	delay -= usec;
 
 	fio_gettime(&ts, NULL);
-	while (delay && !td->terminate) {
-		this_delay = delay;
-		if (this_delay > 500000)
-			this_delay = 500000;
 
-		usec_sleep(td, this_delay);
-		delay -= this_delay;
+	while (delay && !td->terminate) {
+		ret = io_u_queued_complete(td, 0);
+		if (ret < 0)
+			td_verror(td, -ret, "io_u_queued_complete");
+		if (utime_since_now(&ts) > delay)
+			break;
 	}
 
 	usec = utime_since_now(&ts);
@@ -1002,14 +1002,14 @@ void flush_samples(FILE *f, void *samples, uint64_t sample_size)
 
 	if (log_offset) {
 		if (log_prio)
-			fmt = "%lu, %" PRId64 ", %u, %llu, %llu, 0x%04x\n";
+			fmt = "%" PRIu64 ", %" PRId64 ", %u, %llu, %llu, 0x%04x\n";
 		else
-			fmt = "%lu, %" PRId64 ", %u, %llu, %llu, %u\n";
+			fmt = "%" PRIu64 ", %" PRId64 ", %u, %llu, %llu, %u\n";
 	} else {
 		if (log_prio)
-			fmt = "%lu, %" PRId64 ", %u, %llu, 0x%04x\n";
+			fmt = "%" PRIu64 ", %" PRId64 ", %u, %llu, 0x%04x\n";
 		else
-			fmt = "%lu, %" PRId64 ", %u, %llu, %u\n";
+			fmt = "%" PRIu64 ", %" PRId64 ", %u, %llu, %u\n";
 	}
 
 	nr_samples = sample_size / __log_entry_sz(log_offset);
@@ -1024,7 +1024,7 @@ void flush_samples(FILE *f, void *samples, uint64_t sample_size)
 
 		if (!log_offset) {
 			fprintf(f, fmt,
-				(unsigned long) s->time,
+				s->time,
 				s->data.val,
 				io_sample_ddir(s), (unsigned long long) s->bs,
 				prio_val);
@@ -1032,7 +1032,7 @@ void flush_samples(FILE *f, void *samples, uint64_t sample_size)
 			struct io_sample_offset *so = (void *) s;
 
 			fprintf(f, fmt,
-				(unsigned long) s->time,
+				s->time,
 				s->data.val,
 				io_sample_ddir(s), (unsigned long long) s->bs,
 				(unsigned long long) so->offset,

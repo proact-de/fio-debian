@@ -466,7 +466,7 @@ int io_queue_event(struct thread_data *td, struct io_u *io_u, int *ret,
 				if (!from_verify)
 					unlog_io_piece(td, io_u);
 				td_verror(td, EIO, "full resid");
-				put_io_u(td, io_u);
+				clear_io_u(td, io_u);
 				break;
 			}
 
@@ -897,7 +897,16 @@ static void handle_thinktime(struct thread_data *td, enum fio_ddir ddir,
 	if (left)
 		total = usec_spin(left);
 
-	left = td->o.thinktime - total;
+	/*
+	 * usec_spin() might run for slightly longer than intended in a VM
+	 * where the vCPU could get descheduled or the hypervisor could steal
+	 * CPU time. Ensure "left" doesn't become negative.
+	 */
+	if (total < td->o.thinktime)
+		left = td->o.thinktime - total;
+	else
+		left = 0;
+
 	if (td->o.timeout) {
 		runtime_left = td->o.timeout - utime_since_now(&td->epoch);
 		if (runtime_left < (unsigned long long)left)
@@ -1633,7 +1642,7 @@ static void *thread_main(void *data)
 	uint64_t bytes_done[DDIR_RWDIR_CNT];
 	int deadlock_loop_cnt;
 	bool clear_state;
-	int res, ret;
+	int ret;
 
 	sk_out_assign(sk_out);
 	free(fd);
@@ -1790,13 +1799,16 @@ static void *thread_main(void *data)
 
 	/* ioprio_set() has to be done before td_io_init() */
 	if (fio_option_is_set(o, ioprio) ||
-	    fio_option_is_set(o, ioprio_class)) {
-		ret = ioprio_set(IOPRIO_WHO_PROCESS, 0, o->ioprio_class, o->ioprio);
+	    fio_option_is_set(o, ioprio_class) ||
+	    fio_option_is_set(o, ioprio_hint)) {
+		ret = ioprio_set(IOPRIO_WHO_PROCESS, 0, o->ioprio_class,
+				 o->ioprio, o->ioprio_hint);
 		if (ret == -1) {
 			td_verror(td, errno, "ioprio_set");
 			goto err;
 		}
-		td->ioprio = ioprio_value(o->ioprio_class, o->ioprio);
+		td->ioprio = ioprio_value(o->ioprio_class, o->ioprio,
+					  o->ioprio_hint);
 		td->ts.ioprio = td->ioprio;
 	}
 
@@ -1846,7 +1858,7 @@ static void *thread_main(void *data)
 	if (rate_submit_init(td, sk_out))
 		goto err;
 
-	set_epoch_time(td, o->log_unix_epoch | o->log_alternate_epoch, o->log_alternate_epoch_clock_id);
+	set_epoch_time(td, o->log_alternate_epoch_clock_id, o->job_start_clock_id);
 	fio_getrusage(&td->ru_start);
 	memcpy(&td->bw_sample_time, &td->epoch, sizeof(td->epoch));
 	memcpy(&td->iops_sample_time, &td->epoch, sizeof(td->epoch));
@@ -1974,13 +1986,23 @@ static void *thread_main(void *data)
 	 * another thread is checking its io_u's for overlap
 	 */
 	if (td_offload_overlap(td)) {
-		int res = pthread_mutex_lock(&overlap_check);
-		assert(res == 0);
+		int res;
+
+		res = pthread_mutex_lock(&overlap_check);
+		if (res) {
+			td->error = errno;
+			goto err;
+		}
 	}
 	td_set_runstate(td, TD_FINISHING);
 	if (td_offload_overlap(td)) {
+		int res;
+
 		res = pthread_mutex_unlock(&overlap_check);
-		assert(res == 0);
+		if (res) {
+			td->error = errno;
+			goto err;
+		}
 	}
 
 	update_rusage_stat(td);

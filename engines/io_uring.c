@@ -18,6 +18,7 @@
 #include "../lib/memalign.h"
 #include "../lib/fls.h"
 #include "../lib/roundup.h"
+#include "../verify.h"
 
 #ifdef ARCH_HAVE_IOURING
 
@@ -59,6 +60,7 @@ struct ioring_data {
 	int ring_fd;
 
 	struct io_u **io_u_index;
+	char *md_buf;
 
 	int *fds;
 
@@ -78,6 +80,8 @@ struct ioring_data {
 	struct ioring_mmap mmap[3];
 
 	struct cmdprio cmdprio;
+
+	struct nvme_dsm_range *dsm;
 };
 
 struct ioring_options {
@@ -93,6 +97,12 @@ struct ioring_options {
 	unsigned int uncached;
 	unsigned int nowait;
 	unsigned int force_async;
+	unsigned int md_per_io_size;
+	unsigned int pi_act;
+	unsigned int apptag;
+	unsigned int apptag_mask;
+	unsigned int prchk;
+	char *pi_chk;
 	enum uring_cmd_type cmd_type;
 };
 
@@ -125,87 +135,6 @@ static struct fio_option options[] = {
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_IOURING,
 	},
-#ifdef FIO_HAVE_IOPRIO_CLASS
-	{
-		.name	= "cmdprio_percentage",
-		.lname	= "high priority percentage",
-		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct ioring_options,
-				   cmdprio_options.percentage[DDIR_READ]),
-		.off2	= offsetof(struct ioring_options,
-				   cmdprio_options.percentage[DDIR_WRITE]),
-		.minval	= 0,
-		.maxval	= 100,
-		.help	= "Send high priority I/O this percentage of the time",
-		.category = FIO_OPT_C_ENGINE,
-		.group	= FIO_OPT_G_IOURING,
-	},
-	{
-		.name	= "cmdprio_class",
-		.lname	= "Asynchronous I/O priority class",
-		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct ioring_options,
-				   cmdprio_options.class[DDIR_READ]),
-		.off2	= offsetof(struct ioring_options,
-				   cmdprio_options.class[DDIR_WRITE]),
-		.help	= "Set asynchronous IO priority class",
-		.minval	= IOPRIO_MIN_PRIO_CLASS + 1,
-		.maxval	= IOPRIO_MAX_PRIO_CLASS,
-		.interval = 1,
-		.category = FIO_OPT_C_ENGINE,
-		.group	= FIO_OPT_G_IOURING,
-	},
-	{
-		.name	= "cmdprio",
-		.lname	= "Asynchronous I/O priority level",
-		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct ioring_options,
-				   cmdprio_options.level[DDIR_READ]),
-		.off2	= offsetof(struct ioring_options,
-				   cmdprio_options.level[DDIR_WRITE]),
-		.help	= "Set asynchronous IO priority level",
-		.minval	= IOPRIO_MIN_PRIO,
-		.maxval	= IOPRIO_MAX_PRIO,
-		.interval = 1,
-		.category = FIO_OPT_C_ENGINE,
-		.group	= FIO_OPT_G_IOURING,
-	},
-	{
-		.name   = "cmdprio_bssplit",
-		.lname  = "Priority percentage block size split",
-		.type   = FIO_OPT_STR_STORE,
-		.off1   = offsetof(struct ioring_options,
-				   cmdprio_options.bssplit_str),
-		.help   = "Set priority percentages for different block sizes",
-		.category = FIO_OPT_C_ENGINE,
-		.group	= FIO_OPT_G_IOURING,
-	},
-#else
-	{
-		.name	= "cmdprio_percentage",
-		.lname	= "high priority percentage",
-		.type	= FIO_OPT_UNSUPPORTED,
-		.help	= "Your platform does not support I/O priority classes",
-	},
-	{
-		.name	= "cmdprio_class",
-		.lname	= "Asynchronous I/O priority class",
-		.type	= FIO_OPT_UNSUPPORTED,
-		.help	= "Your platform does not support I/O priority classes",
-	},
-	{
-		.name	= "cmdprio",
-		.lname	= "Asynchronous I/O priority level",
-		.type	= FIO_OPT_UNSUPPORTED,
-		.help	= "Your platform does not support I/O priority classes",
-	},
-	{
-		.name   = "cmdprio_bssplit",
-		.lname  = "Priority percentage block size split",
-		.type	= FIO_OPT_UNSUPPORTED,
-		.help	= "Your platform does not support I/O priority classes",
-	},
-#endif
 	{
 		.name	= "fixedbufs",
 		.lname	= "Fixed (pre-mapped) IO buffers",
@@ -295,6 +224,57 @@ static struct fio_option options[] = {
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_IOURING,
 	},
+	CMDPRIO_OPTIONS(struct ioring_options, FIO_OPT_G_IOURING),
+	{
+		.name	= "md_per_io_size",
+		.lname	= "Separate Metadata Buffer Size per I/O",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct ioring_options, md_per_io_size),
+		.def	= "0",
+		.help	= "Size of separate metadata buffer per I/O (Default: 0)",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "pi_act",
+		.lname	= "Protection Information Action",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct ioring_options, pi_act),
+		.def	= "1",
+		.help	= "Protection Information Action bit (pi_act=1 or pi_act=0)",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "pi_chk",
+		.lname	= "Protection Information Check",
+		.type	= FIO_OPT_STR_STORE,
+		.off1	= offsetof(struct ioring_options, pi_chk),
+		.def	= NULL,
+		.help	= "Control of Protection Information Checking (pi_chk=GUARD,REFTAG,APPTAG)",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "apptag",
+		.lname	= "Application Tag used in Protection Information",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct ioring_options, apptag),
+		.def	= "0x1234",
+		.help	= "Application Tag used in Protection Information field (Default: 0x1234)",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "apptag_mask",
+		.lname	= "Application Tag Mask",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct ioring_options, apptag_mask),
+		.def	= "0xffff",
+		.help	= "Application Tag Mask used with Application Tag (Default: 0xffff)",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
 	{
 		.name	= NULL,
 	},
@@ -363,8 +343,8 @@ static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 		/*
 		 * Since io_uring can have a submission context (sqthread_poll)
 		 * that is different from the process context, we cannot rely on
-		 * the IO priority set by ioprio_set() (option prio/prioclass)
-		 * to be inherited.
+		 * the IO priority set by ioprio_set() (options prio, prioclass,
+		 * and priohint) to be inherited.
 		 * td->ioprio will have the value of the "default prio", so set
 		 * this unconditionally. This value might get overridden by
 		 * fio_ioring_cmdprio_prep() if the option cmdprio_percentage or
@@ -410,7 +390,7 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 	if (o->cmd_type != FIO_URING_CMD_NVME)
 		return -EINVAL;
 
-	if (io_u->ddir == DDIR_TRIM)
+	if (io_u->ddir == DDIR_TRIM && td->io_ops->flags & FIO_ASYNCIO_SYNC_TRIM)
 		return 0;
 
 	sqe = &ld->sqes[(io_u->index) << 1];
@@ -444,7 +424,8 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 
 	cmd = (struct nvme_uring_cmd *)sqe->cmd;
 	return fio_nvme_uring_cmd_prep(cmd, io_u,
-			o->nonvectored ? NULL : &ld->iovecs[io_u->index]);
+			o->nonvectored ? NULL : &ld->iovecs[io_u->index],
+			&ld->dsm[io_u->index]);
 }
 
 static struct io_u *fio_ioring_event(struct thread_data *td, int event)
@@ -476,7 +457,9 @@ static struct io_u *fio_ioring_cmd_event(struct thread_data *td, int event)
 	struct ioring_options *o = td->eo;
 	struct io_uring_cqe *cqe;
 	struct io_u *io_u;
+	struct nvme_data *data;
 	unsigned index;
+	int ret;
 
 	index = (event + ld->cq_ring_off) & ld->cq_ring_mask;
 	if (o->cmd_type == FIO_URING_CMD_NVME)
@@ -489,6 +472,15 @@ static struct io_u *fio_ioring_cmd_event(struct thread_data *td, int event)
 		io_u->error = -cqe->res;
 	else
 		io_u->error = 0;
+
+	if (o->cmd_type == FIO_URING_CMD_NVME) {
+		data = FILE_ENG_DATA(io_u->file);
+		if (data->pi_type && (io_u->ddir == DDIR_READ) && !o->pi_act) {
+			ret = fio_nvme_pi_verify(data, io_u);
+			if (ret)
+				io_u->error = ret;
+		}
+	}
 
 	return io_u;
 }
@@ -551,6 +543,33 @@ static int fio_ioring_getevents(struct thread_data *td, unsigned int min,
 	return r < 0 ? r : events;
 }
 
+static inline void fio_ioring_cmd_nvme_pi(struct thread_data *td,
+					  struct io_u *io_u)
+{
+	struct ioring_data *ld = td->io_ops_data;
+	struct ioring_options *o = td->eo;
+	struct nvme_uring_cmd *cmd;
+	struct io_uring_sqe *sqe;
+	struct nvme_cmd_ext_io_opts ext_opts = {0};
+	struct nvme_data *data = FILE_ENG_DATA(io_u->file);
+
+	if (io_u->ddir == DDIR_TRIM)
+		return;
+
+	sqe = &ld->sqes[(io_u->index) << 1];
+	cmd = (struct nvme_uring_cmd *)sqe->cmd;
+
+	if (data->pi_type) {
+		if (o->pi_act)
+			ext_opts.io_flags |= NVME_IO_PRINFO_PRACT;
+		ext_opts.io_flags |= o->prchk;
+		ext_opts.apptag = o->apptag;
+		ext_opts.apptag_mask = o->apptag_mask;
+	}
+
+	fio_nvme_pi_fill(cmd, io_u, &ext_opts);
+}
+
 static inline void fio_ioring_cmdprio_prep(struct thread_data *td,
 					   struct io_u *io_u)
 {
@@ -561,31 +580,11 @@ static inline void fio_ioring_cmdprio_prep(struct thread_data *td,
 		ld->sqes[io_u->index].ioprio = io_u->ioprio;
 }
 
-static int fio_ioring_cmd_io_u_trim(const struct thread_data *td,
-				    struct io_u *io_u)
-{
-	struct fio_file *f = io_u->file;
-	int ret;
-
-	if (td->o.zone_mode == ZONE_MODE_ZBD) {
-		ret = zbd_do_io_u_trim(td, io_u);
-		if (ret == io_u_completed)
-			return io_u->xfer_buflen;
-		if (ret)
-			goto err;
-	}
-
-	return fio_nvme_trim(td, f, io_u->offset, io_u->xfer_buflen);
-
-err:
-	io_u->error = ret;
-	return 0;
-}
-
 static enum fio_q_status fio_ioring_queue(struct thread_data *td,
 					  struct io_u *io_u)
 {
 	struct ioring_data *ld = td->io_ops_data;
+	struct ioring_options *o = td->eo;
 	struct io_sq_ring *ring = &ld->sq_ring;
 	unsigned tail, next_tail;
 
@@ -594,14 +593,11 @@ static enum fio_q_status fio_ioring_queue(struct thread_data *td,
 	if (ld->queued == ld->iodepth)
 		return FIO_Q_BUSY;
 
-	if (io_u->ddir == DDIR_TRIM) {
+	if (io_u->ddir == DDIR_TRIM && td->io_ops->flags & FIO_ASYNCIO_SYNC_TRIM) {
 		if (ld->queued)
 			return FIO_Q_BUSY;
 
-		if (!strcmp(td->io_ops->name, "io_uring_cmd"))
-			fio_ioring_cmd_io_u_trim(td, io_u);
-		else
-			do_io_u_trim(td, io_u);
+		do_io_u_trim(td, io_u);
 
 		io_u_mark_submit(td, 1);
 		io_u_mark_complete(td, 1);
@@ -610,11 +606,15 @@ static enum fio_q_status fio_ioring_queue(struct thread_data *td,
 
 	tail = *ring->tail;
 	next_tail = tail + 1;
-	if (next_tail == atomic_load_acquire(ring->head))
+	if (next_tail == atomic_load_relaxed(ring->head))
 		return FIO_Q_BUSY;
 
 	if (ld->cmdprio.mode != CMDPRIO_MODE_NONE)
 		fio_ioring_cmdprio_prep(td, io_u);
+
+	if (!strcmp(td->io_ops->name, "io_uring_cmd") &&
+		o->cmd_type == FIO_URING_CMD_NVME)
+		fio_ioring_cmd_nvme_pi(td, io_u);
 
 	ring->array[tail & ld->sq_ring_mask] = io_u->index;
 	atomic_store_release(ring->tail, next_tail);
@@ -667,10 +667,10 @@ static int fio_ioring_commit(struct thread_data *td)
 	 */
 	if (o->sqpoll_thread) {
 		struct io_sq_ring *ring = &ld->sq_ring;
-		unsigned start = *ld->sq_ring.head;
+		unsigned start = *ld->sq_ring.tail - ld->queued;
 		unsigned flags;
 
-		flags = atomic_load_acquire(ring->flags);
+		flags = atomic_load_relaxed(ring->flags);
 		if (flags & IORING_SQ_NEED_WAKEUP)
 			io_uring_enter(ld, ld->queued, 0,
 					IORING_ENTER_SQ_WAKEUP);
@@ -732,8 +732,10 @@ static void fio_ioring_cleanup(struct thread_data *td)
 
 		fio_cmdprio_cleanup(&ld->cmdprio);
 		free(ld->io_u_index);
+		free(ld->md_buf);
 		free(ld->iovecs);
 		free(ld->fds);
+		free(ld->dsm);
 		free(ld);
 	}
 }
@@ -1112,10 +1114,24 @@ static int fio_ioring_cmd_post_init(struct thread_data *td)
 	return 0;
 }
 
+static void parse_prchk_flags(struct ioring_options *o)
+{
+	if (!o->pi_chk)
+		return;
+
+	if (strstr(o->pi_chk, "GUARD") != NULL)
+		o->prchk = NVME_IO_PRINFO_PRCHK_GUARD;
+	if (strstr(o->pi_chk, "REFTAG") != NULL)
+		o->prchk |= NVME_IO_PRINFO_PRCHK_REF;
+	if (strstr(o->pi_chk, "APPTAG") != NULL)
+		o->prchk |= NVME_IO_PRINFO_PRCHK_APP;
+}
+
 static int fio_ioring_init(struct thread_data *td)
 {
 	struct ioring_options *o = td->eo;
 	struct ioring_data *ld;
+	unsigned long long md_size;
 	int ret;
 
 	/* sqthread submission requires registered files */
@@ -1136,6 +1152,32 @@ static int fio_ioring_init(struct thread_data *td)
 
 	/* io_u index */
 	ld->io_u_index = calloc(td->o.iodepth, sizeof(struct io_u *));
+
+	/*
+	 * metadata buffer for nvme command.
+	 * We are only supporting iomem=malloc / mem=malloc as of now.
+	 */
+	if (!strcmp(td->io_ops->name, "io_uring_cmd") &&
+	    (o->cmd_type == FIO_URING_CMD_NVME) && o->md_per_io_size) {
+		md_size = (unsigned long long) o->md_per_io_size
+				* (unsigned long long) td->o.iodepth;
+		md_size += page_mask + td->o.mem_align;
+		if (td->o.mem_align && td->o.mem_align > page_size)
+			md_size += td->o.mem_align - page_size;
+		if (td->o.mem_type == MEM_MALLOC) {
+			ld->md_buf = malloc(md_size);
+			if (!ld->md_buf) {
+				free(ld);
+				return 1;
+			}
+		} else {
+			log_err("fio: Only iomem=malloc or mem=malloc is supported\n");
+			free(ld);
+			return 1;
+		}
+	}
+	parse_prchk_flags(o);
+
 	ld->iovecs = calloc(td->o.iodepth, sizeof(struct iovec));
 
 	td->io_ops_data = ld;
@@ -1146,15 +1188,56 @@ static int fio_ioring_init(struct thread_data *td)
 		return 1;
 	}
 
+	/*
+	 * For io_uring_cmd, trims are async operations unless we are operating
+	 * in zbd mode where trim means zone reset.
+	 */
+	if (!strcmp(td->io_ops->name, "io_uring_cmd") && td_trim(td) &&
+	    td->o.zone_mode == ZONE_MODE_ZBD)
+		td->io_ops->flags |= FIO_ASYNCIO_SYNC_TRIM;
+	else
+		ld->dsm = calloc(ld->iodepth, sizeof(*ld->dsm));
+
 	return 0;
 }
 
 static int fio_ioring_io_u_init(struct thread_data *td, struct io_u *io_u)
 {
 	struct ioring_data *ld = td->io_ops_data;
+	struct ioring_options *o = td->eo;
+	struct nvme_pi_data *pi_data;
+	char *p;
 
 	ld->io_u_index[io_u->index] = io_u;
+
+	if (!strcmp(td->io_ops->name, "io_uring_cmd")) {
+		p = PTR_ALIGN(ld->md_buf, page_mask) + td->o.mem_align;
+		p += o->md_per_io_size * io_u->index;
+		io_u->mmap_data = p;
+
+		if (!o->pi_act) {
+			pi_data = calloc(1, sizeof(*pi_data));
+			pi_data->io_flags |= o->prchk;
+			pi_data->apptag_mask = o->apptag_mask;
+			pi_data->apptag = o->apptag;
+			io_u->engine_data = pi_data;
+		}
+	}
+
 	return 0;
+}
+
+static void fio_ioring_io_u_free(struct thread_data *td, struct io_u *io_u)
+{
+	struct ioring_options *o = td->eo;
+	struct nvme_pi *pi;
+
+	if (!strcmp(td->io_ops->name, "io_uring_cmd") &&
+	    (o->cmd_type == FIO_URING_CMD_NVME)) {
+		pi = io_u->engine_data;
+		free(pi);
+		io_u->engine_data = NULL;
+	}
 }
 
 static int fio_ioring_open_file(struct thread_data *td, struct fio_file *f)
@@ -1176,42 +1259,60 @@ static int fio_ioring_cmd_open_file(struct thread_data *td, struct fio_file *f)
 
 	if (o->cmd_type == FIO_URING_CMD_NVME) {
 		struct nvme_data *data = NULL;
-		unsigned int nsid, lba_size = 0;
-		__u32 ms = 0;
+		unsigned int lba_size = 0;
 		__u64 nlba = 0;
 		int ret;
 
 		/* Store the namespace-id and lba size. */
 		data = FILE_ENG_DATA(f);
 		if (data == NULL) {
-			ret = fio_nvme_get_info(f, &nsid, &lba_size, &ms, &nlba);
-			if (ret)
-				return ret;
-
 			data = calloc(1, sizeof(struct nvme_data));
-			data->nsid = nsid;
-			if (ms)
-				data->lba_ext = lba_size + ms;
-			else
-				data->lba_shift = ilog2(lba_size);
+			ret = fio_nvme_get_info(f, &nlba, o->pi_act, data);
+			if (ret) {
+				free(data);
+				return ret;
+			}
 
 			FILE_SET_ENG_DATA(f, data);
 		}
 
-		assert(data->lba_shift < 32);
-		lba_size = data->lba_ext ? data->lba_ext : (1U << data->lba_shift);
+		lba_size = data->lba_ext ? data->lba_ext : data->lba_size;
 
 		for_each_rw_ddir(ddir) {
 			if (td->o.min_bs[ddir] % lba_size ||
 				td->o.max_bs[ddir] % lba_size) {
 				if (data->lba_ext)
-					log_err("block size must be a multiple of "
-						"(LBA data size + Metadata size)\n");
+					log_err("%s: block size must be a multiple of (LBA data size + Metadata size)\n",
+						f->file_name);
 				else
-					log_err("block size must be a multiple of LBA data size\n");
+					log_err("%s: block size must be a multiple of LBA data size\n",
+						f->file_name);
+				td_verror(td, EINVAL, "fio_ioring_cmd_open_file");
+				return 1;
+			}
+			if (data->ms && !data->lba_ext && ddir != DDIR_TRIM &&
+			    (o->md_per_io_size < ((td->o.max_bs[ddir] / data->lba_size) *
+						  data->ms))) {
+				log_err("%s: md_per_io_size should be at least %llu bytes\n",
+					f->file_name,
+					((td->o.max_bs[ddir] / data->lba_size) * data->ms));
+				td_verror(td, EINVAL, "fio_ioring_cmd_open_file");
 				return 1;
 			}
                 }
+
+		/*
+		 * For extended logical block sizes we cannot use verify when
+		 * end to end data protection checks are enabled, as the PI
+		 * section of data buffer conflicts with verify.
+		 */
+		if (data->ms && data->pi_type && data->lba_ext &&
+		    td->o.verify != VERIFY_NONE) {
+			log_err("%s: for extended LBA, verify cannot be used when E2E data protection is enabled\n",
+				f->file_name);
+			td_verror(td, EINVAL, "fio_ioring_cmd_open_file");
+			return 1;
+		}
 	}
 	if (!ld || !o->registerfiles)
 		return generic_open_file(td, f);
@@ -1261,23 +1362,17 @@ static int fio_ioring_cmd_get_file_size(struct thread_data *td,
 
 	if (o->cmd_type == FIO_URING_CMD_NVME) {
 		struct nvme_data *data = NULL;
-		unsigned int nsid, lba_size = 0;
-		__u32 ms = 0;
 		__u64 nlba = 0;
 		int ret;
 
-		ret = fio_nvme_get_info(f, &nsid, &lba_size, &ms, &nlba);
-		if (ret)
-			return ret;
-
 		data = calloc(1, sizeof(struct nvme_data));
-		data->nsid = nsid;
-		if (ms)
-			data->lba_ext = lba_size + ms;
-		else
-			data->lba_shift = ilog2(lba_size);
+		ret = fio_nvme_get_info(f, &nlba, o->pi_act, data);
+		if (ret) {
+			free(data);
+			return ret;
+		}
 
-		f->real_file_size = lba_size * nlba;
+		f->real_file_size = data->lba_size * nlba;
 		fio_file_set_size_known(f);
 
 		FILE_SET_ENG_DATA(f, data);
@@ -1320,7 +1415,7 @@ static int fio_ioring_cmd_fetch_ruhs(struct thread_data *td, struct fio_file *f,
 	struct nvme_fdp_ruh_status *ruhs;
 	int bytes, ret, i;
 
-	bytes = sizeof(*ruhs) + 128 * sizeof(struct nvme_fdp_ruh_status_desc);
+	bytes = sizeof(*ruhs) + FDP_MAX_RUHS * sizeof(struct nvme_fdp_ruh_status_desc);
 	ruhs = scalloc(1, bytes);
 	if (!ruhs)
 		return -ENOMEM;
@@ -1361,12 +1456,12 @@ static struct ioengine_ops ioengine_uring = {
 static struct ioengine_ops ioengine_uring_cmd = {
 	.name			= "io_uring_cmd",
 	.version		= FIO_IOOPS_VERSION,
-	.flags			= FIO_ASYNCIO_SYNC_TRIM | FIO_NO_OFFLOAD |
-					FIO_MEMALIGN | FIO_RAWIO |
+	.flags			= FIO_NO_OFFLOAD | FIO_MEMALIGN | FIO_RAWIO |
 					FIO_ASYNCIO_SETS_ISSUE_TIME,
 	.init			= fio_ioring_init,
 	.post_init		= fio_ioring_cmd_post_init,
 	.io_u_init		= fio_ioring_io_u_init,
+	.io_u_free		= fio_ioring_io_u_free,
 	.prep			= fio_ioring_cmd_prep,
 	.queue			= fio_ioring_queue,
 	.commit			= fio_ioring_commit,

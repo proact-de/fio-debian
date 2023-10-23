@@ -5,6 +5,9 @@
  *
  */
 #include <assert.h>
+#include <errno.h>
+#include <pthread.h>
+
 #include "fio.h"
 #include "ioengines.h"
 #include "lib/getrusage.h"
@@ -27,7 +30,10 @@ static void check_overlap(struct io_u *io_u)
 	 * threads as they assess overlap.
 	 */
 	res = pthread_mutex_lock(&overlap_check);
-	assert(res == 0);
+	if (fio_unlikely(res != 0)) {
+		log_err("failed to lock overlap check mutex, err: %i:%s", errno, strerror(errno));
+		abort();
+	}
 
 retry:
 	for_each_td(td) {
@@ -41,9 +47,15 @@ retry:
 			continue;
 
 		res = pthread_mutex_unlock(&overlap_check);
-		assert(res == 0);
+		if (fio_unlikely(res != 0)) {
+			log_err("failed to unlock overlap check mutex, err: %i:%s", errno, strerror(errno));
+			abort();
+		}
 		res = pthread_mutex_lock(&overlap_check);
-		assert(res == 0);
+		if (fio_unlikely(res != 0)) {
+			log_err("failed to lock overlap check mutex, err: %i:%s", errno, strerror(errno));
+			abort();
+		}
 		goto retry;
 	} end_for_each();
 }
@@ -173,7 +185,7 @@ static int io_workqueue_init_worker_fn(struct submit_worker *sw)
 	if (td->io_ops->post_init && td->io_ops->post_init(td))
 		goto err_io_init;
 
-	set_epoch_time(td, td->o.log_unix_epoch | td->o.log_alternate_epoch, td->o.log_alternate_epoch_clock_id);
+	set_epoch_time(td, td->o.log_alternate_epoch_clock_id, td->o.job_start_clock_id);
 	fio_getrusage(&td->ru_start);
 	clear_io_state(td, 1);
 

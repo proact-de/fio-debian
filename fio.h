@@ -144,6 +144,7 @@ enum {
 	FIO_RAND_POISSON3_OFF,
 	FIO_RAND_PRIO_CMDS,
 	FIO_RAND_DEDUPE_WORKING_SET_IX,
+	FIO_RAND_FDP_OFF,
 	FIO_RAND_NR_OFFS,
 };
 
@@ -262,6 +263,7 @@ struct thread_data {
 	struct frand_state verify_state_last_do_io;
 	struct frand_state trim_state;
 	struct frand_state delay_state;
+	struct frand_state fdp_state;
 
 	struct frand_state buf_state;
 	struct frand_state buf_state_prev;
@@ -275,7 +277,7 @@ struct thread_data {
 	unsigned long long num_unique_pages;
 
 	struct zone_split_index **zone_state_index;
-	unsigned int num_open_zones;
+	unsigned int num_write_zones;
 
 	unsigned int verify_batch;
 	unsigned int trim_batch;
@@ -386,7 +388,8 @@ struct thread_data {
 
 	struct timespec start;	/* start of this loop */
 	struct timespec epoch;	/* time job was started */
-	unsigned long long alternate_epoch; /* Time job was started, clock_gettime's clock_id epoch based. */
+	unsigned long long alternate_epoch; /* Time job was started, as clock_gettime(log_alternate_epoch_clock_id) */
+	unsigned long long job_start; /* Time job was started, as clock_gettime(job_start_clock_id) */
 	struct timespec last_issue;
 	long time_offset;
 	struct timespec ts_cache;

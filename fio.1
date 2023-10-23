@@ -537,6 +537,10 @@ copy that segment, instead of entering the kernel with a
 \fBgettimeofday\fR\|(2) call. The CPU set aside for doing these time
 calls will be excluded from other uses. Fio will manually clear it from the
 CPU mask of other jobs.
+.TP
+.BI job_start_clock_id \fR=\fPint
+The clock_id passed to the call to \fBclock_gettime\fR used to record job_start
+in the \fBjson\fR output format. Default is 0, or CLOCK_REALTIME.
 .SS "Target file/device"
 .TP
 .BI directory \fR=\fPstr
@@ -627,7 +631,9 @@ generated filenames (with a directory specified) with the source of the
 client connecting. To disable this behavior, set this option to 0.
 .TP
 .BI opendir \fR=\fPstr
-Recursively open any files below directory \fIstr\fR.
+Recursively open any files below directory \fIstr\fR. This accepts only a
+single directory and unlike related options, colons appearing in the path must
+not be escaped.
 .TP
 .BI lockfile \fR=\fPstr
 Fio defaults to not locking any files before it does I/O to them. If a file
@@ -830,18 +836,30 @@ numbers fio only reads beyond the write pointer if explicitly told to do
 so. Default: false.
 .TP
 .BI max_open_zones \fR=\fPint
-A zone of a zoned block device is in the open state when it is partially written
-(i.e. not all sectors of the zone have been written). Zoned block devices may
-have limit a on the total number of zones that can be simultaneously in the
-open state, that is, the number of zones that can be written to simultaneously.
-The \fBmax_open_zones\fR parameter limits the number of zones to which write
-commands are issued by all fio jobs, that is, limits the number of zones that
-will be in the open state. This parameter is relevant only if the
-\fBzonemode=zbd\fR is used. The default value is always equal to maximum number
-of open zones of the target zoned block device and a value higher than this
-limit cannot be specified by users unless the option \fBignore_zone_limits\fR is
-specified. When \fBignore_zone_limits\fR is specified or the target device has
-no limit on the number of zones that can be in an open state,
+When a zone of a zoned block device is partially written (i.e. not all sectors
+of the zone have been written), the zone is in one of three
+conditions: 'implicit open', 'explicit open' or 'closed'. Zoned block devices
+may have a limit called 'max_open_zones' (same name as the parameter) on the
+total number of zones that can simultaneously be in the 'implicit open'
+or 'explicit open' conditions. Zoned block devices may have another limit
+called 'max_active_zones', on the total number of zones that can simultaneously
+be in the three conditions. The \fBmax_open_zones\fR parameter limits
+the number of zones to which write commands are issued by all fio jobs, that is,
+limits the number of zones that will be in the conditions. When the device has
+the max_open_zones limit and does not have the max_active_zones limit, the
+\fBmax_open_zones\fR parameter limits the number of zones in the two open
+conditions up to the limit. In this case, fio includes zones in the two open
+conditions to the write target zones at fio start. When the device has both the
+max_open_zones and the max_active_zones limits, the \fBmax_open_zones\fR
+parameter limits the number of zones in the three conditions up to the limit.
+In this case, fio includes zones in the three conditions to the write target
+zones at fio start.
+
+This parameter is relevant only if the \fBzonemode=zbd\fR is used. The default
+value is always equal to the max_open_zones limit of the target zoned block
+device and a value higher than this limit cannot be specified by users unless
+the option \fBignore_zone_limits\fR is specified. When \fBignore_zone_limits\fR
+is specified or the target device does not have the max_open_zones limit,
 \fBmax_open_zones\fR can specify 0 to disable any limit on the number of zones
 that can be simultaneously written to by all jobs.
 .TP
@@ -2070,6 +2088,14 @@ is set, this defaults to the highest priority class. A single value applies
 to reads and writes. Comma-separated values may be specified for reads and
 writes. See man \fBionice\fR\|(1). See also the \fBprioclass\fR option.
 .TP
+.BI (io_uring,libaio)cmdprio_hint \fR=\fPint[,int]
+Set the I/O priority hint to use for I/Os that must be issued with a
+priority when \fBcmdprio_percentage\fR or \fBcmdprio_bssplit\fR is set.
+If not specified when \fBcmdprio_percentage\fR or \fBcmdprio_bssplit\fR
+is set, this defaults to 0 (no hint). A single value applies to reads and
+writes. Comma-separated values may be specified for reads and writes.
+See also the \fBpriohint\fR option.
+.TP
 .BI (io_uring,libaio)cmdprio \fR=\fPint[,int]
 Set the I/O priority value to use for I/Os that must be issued with a
 priority when \fBcmdprio_percentage\fR or \fBcmdprio_bssplit\fR is set.
@@ -2095,8 +2121,9 @@ The first accepted format for this option is the same as the format of the
 cmdprio_bssplit=blocksize/percentage:blocksize/percentage
 .RE
 .P
-In this case, each entry will use the priority class and priority level defined
-by the options \fBcmdprio_class\fR and \fBcmdprio\fR respectively.
+In this case, each entry will use the priority class, priority hint and
+priority level defined by the options \fBcmdprio_class\fR, \fBcmdprio\fR
+and \fBcmdprio_hint\fR respectively.
 .P
 The second accepted format for this option is:
 .RS
@@ -2109,7 +2136,16 @@ entry. In comparison with the first accepted format, the second accepted format
 does not restrict all entries to have the same priority class and priority
 level.
 .P
-For both formats, only the read and write data directions are supported, values
+The third accepted format for this option is:
+.RS
+.P
+cmdprio_bssplit=blocksize/percentage/class/level/hint:...
+.RE
+.P
+This is an extension of the second accepted format that allows to also
+specify a priority hint.
+.P
+For all formats, only the read and write data directions are supported, values
 for trim IOs are ignored. This option is mutually exclusive with the
 \fBcmdprio_percentage\fR option.
 .RE
@@ -2190,14 +2226,68 @@ cached data. Currently the RWF_NOWAIT flag does not supported for cached write.
 For direct I/O, requests will only succeed if cache invalidation isn't required,
 file blocks are fully allocated and the disk request could be issued immediately.
 .TP
-.BI (io_uring_cmd)fdp \fR=\fPbool
+.BI (io_uring_cmd,xnvme)fdp \fR=\fPbool
 Enable Flexible Data Placement mode for write commands.
 .TP
-.BI (io_uring_cmd)fdp_pli \fR=\fPstr
+.BI (io_uring_cmd,xnvme)fdp_pli_select \fR=\fPstr
+Defines how fio decides which placement ID to use next. The following types
+are defined:
+.RS
+.RS
+.TP
+.B random
+Choose a placement ID at random (uniform).
+.TP
+.B roundrobin
+Round robin over available placement IDs. This is the default.
+.RE
+.P
+The available placement ID index/indices is defined by \fBfdp_pli\fR option.
+.RE
+.TP
+.BI (io_uring_cmd,xnvme)fdp_pli \fR=\fPstr
 Select which Placement ID Index/Indicies this job is allowed to use for writes.
 By default, the job will cycle through all available Placement IDs, so use this
 to isolate these identifiers to specific jobs. If you want fio to use placement
 identifier only at indices 0, 2 and 5 specify, you would set `fdp_pli=0,2,5`.
+.TP
+.BI (io_uring_cmd)md_per_io_size \fR=\fPint
+Size in bytes for separate metadata buffer per IO. Default: 0.
+.TP
+.BI (io_uring_cmd)pi_act \fR=\fPint
+Action to take when nvme namespace is formatted with protection information.
+If this is set to 1 and namespace is formatted with metadata size equal to
+protection information size, fio won't use separate metadata buffer or extended
+logical block. If this is set to 1 and namespace is formatted with metadata
+size greater than protection information size, fio will not generate or verify
+the protection information portion of metadata for write or read case
+respectively. If this is set to 0, fio generates protection information for
+write case and verifies for read case. Default: 1.
+.TP
+.BI (io_uring_cmd)pi_chk \fR=\fPstr[,str][,str]
+Controls the protection information check. This can take one or more of these
+values. Default: none.
+.RS
+.RS
+.TP
+.B GUARD
+Enables protection information checking of guard field.
+.TP
+.B REFTAG
+Enables protection information checking of logical block reference tag field.
+.TP
+.B APPTAG
+Enables protection information checking of application tag field.
+.RE
+.RE
+.TP
+.BI (io_uring_cmd)apptag \fR=\fPint
+Specifies logical block application tag value, if namespace is formatted to use
+end to end protection information. Default: 0x1234.
+.TP
+.BI (io_uring_cmd)apptag_mask \fR=\fPint
+Specifies logical block application tag mask value, if namespace is formatted
+to use end to end protection information. Default: 0xffff.
 .TP
 .BI (cpuio)cpuload \fR=\fPint
 Attempt to use the specified percentage of CPU cycles. This is a mandatory
@@ -3114,6 +3204,15 @@ Set the I/O priority class. See man \fBionice\fR\|(1). For per-command
 priority setting, see the I/O engine specific `cmdprio_percentage` and
 `cmdprio_class` options.
 .TP
+.BI priohint \fR=\fPint
+Set the I/O priority hint. This is only applicable to platforms that support
+I/O priority classes and to devices with features controlled through priority
+hints, e.g. block devices supporting command duration limits, or CDL. CDL is a
+way to indicate the desired maximum latency of I/Os so that the device can
+optimize its internal command scheduling according to the latency limits
+indicated by the user. For per-I/O priority hint setting, see the I/O engine
+specific \fBcmdprio_hint\fB option.
+.TP
 .BI cpus_allowed \fR=\fPstr
 Controls the same options as \fBcpumask\fR, but accepts a textual
 specification of the permitted CPUs instead and CPUs are indexed from 0. So
@@ -3569,6 +3668,15 @@ quickly becomes unwieldy. To see the final report per-group instead of
 per-job, use \fBgroup_reporting\fR. Jobs in a file will be part of the
 same reporting group, unless if separated by a \fBstonewall\fR, or by
 using \fBnew_group\fR.
+.RS
+.P
+NOTE: When \fBgroup_reporting\fR is used along with \fBjson\fR output, there
+are certain per-job properties which can be different between jobs but do not
+have a natural group-level equivalent. Examples include \fBkb_base\fR,
+\fBunit_base\fR, \fBsig_figs\fR, \fBthread_number\fR, \fBpid\fR, and
+\fBjob_start\fR. For these properties, the values for the first job are
+recorded for the group.
+.RE
 .TP
 .BI new_group
 Start a new reporting group. See: \fBgroup_reporting\fR. If not given,
@@ -3700,9 +3808,7 @@ decompressed with fio, using the \fB\-\-inflate\-log\fR command line
 parameter. The files will be stored with a `.fz' suffix.
 .TP
 .BI log_unix_epoch \fR=\fPbool
-If set, fio will log Unix timestamps to the log files produced by enabling
-write_type_log for each log type, instead of the default zero-based
-timestamps.
+Backward-compatible alias for \fBlog_alternate_epoch\fR.
 .TP
 .BI log_alternate_epoch \fR=\fPbool
 If set, fio will log timestamps based on the epoch used by the clock specified
@@ -3711,9 +3817,9 @@ enabling write_type_log for each log type, instead of the default zero-based
 timestamps.
 .TP
 .BI log_alternate_epoch_clock_id \fR=\fPint
-Specifies the clock_id to be used by clock_gettime to obtain the alternate epoch
-if either \fBBlog_unix_epoch\fR or \fBlog_alternate_epoch\fR are true. Otherwise has no
-effect. Default value is 0, or CLOCK_REALTIME.
+Specifies the clock_id to be used by clock_gettime to obtain the alternate
+epoch if \fBlog_alternate_epoch\fR is true. Otherwise has no effect. Default
+value is 0, or CLOCK_REALTIME.
 .TP
 .BI block_error_percentiles \fR=\fPbool
 If set, record errors in trim block-sized units from writes and trims and
@@ -4166,7 +4272,7 @@ They will look like this:
 .P
 .nf
 		  Disk stats (read/write):
-		    sda: ios=16398/16511, merge=30/162, ticks=6853/819634, in_queue=826487, util=100.00%
+		    sda: ios=16398/16511, sectors=32321/65472, merge=30/162, ticks=6853/819634, in_queue=826487, util=100.00%
 .fi
 .P
 Each value is printed for both reads and writes, with reads first. The
@@ -4731,6 +4837,9 @@ where `local\-args' are arguments for the client where it is running, `server'
 is the connect string, and `remote\-args' and `job file(s)' are sent to the
 server. The `server' string follows the same format as it does on the server
 side, to allow IP/hostname/socket and port strings.
+.P
+Note that all job options must be defined in job files when running fio as a
+client. Any job options specified in `remote\-args' will be ignored.
 .P
 Fio can connect to multiple servers this way:
 .RS
