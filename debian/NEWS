@@ -1,4 +1,4 @@
-fio (3.36-1) UNRELEASED; urgency=medium
+fio (3.36-1) unstable; urgency=medium
 
   Since fio 3.35-3 the graphical frontend gfio is no longer being build
   by this package. It is unlikely to be ported to GTK-3 or later and
