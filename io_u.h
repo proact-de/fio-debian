@@ -89,8 +89,8 @@ struct io_u {
 	union {
 		unsigned int index;
 		unsigned int seen;
-		void *engine_data;
 	};
+	void *engine_data;
 
 	union {
 		struct flist_head verify_list;
@@ -162,7 +162,7 @@ void io_u_mark_submit(struct thread_data *, unsigned int);
 bool queue_full(const struct thread_data *);
 
 int do_io_u_sync(const struct thread_data *, struct io_u *);
-int do_io_u_trim(const struct thread_data *, struct io_u *);
+int do_io_u_trim(struct thread_data *, struct io_u *);
 
 #ifdef FIO_INC_DEBUG
 static inline void dprint_io_u(struct io_u *io_u, const char *p)

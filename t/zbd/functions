@@ -4,6 +4,7 @@ blkzone=$(type -p blkzone 2>/dev/null)
 sg_inq=$(type -p sg_inq 2>/dev/null)
 zbc_report_zones=$(type -p zbc_report_zones 2>/dev/null)
 zbc_reset_zone=$(type -p zbc_reset_zone 2>/dev/null)
+zbc_close_zone=$(type -p zbc_close_zone 2>/dev/null)
 zbc_info=$(type -p zbc_info 2>/dev/null)
 if [ -z "${blkzone}" ] &&
        { [ -z "${zbc_report_zones}" ] || [ -z "${zbc_reset_zone}" ]; }; then
@@ -24,6 +25,17 @@ blkzone_reports_capacity() {
 
 	[[ -n "${blkzone}" ]] &&
 		"${blkzone}" report -c 1 -o 0 "${dev}" | grep -q 'cap '
+}
+
+has_command() {
+	local cmd="${1}"
+
+	cmd_path=$(type -p "${cmd}" 2>/dev/null)
+	if [ -z "${cmd_path}" ]; then
+		echo "${cmd} is not available"
+		return 1
+	fi
+	return 0
 }
 
 # Whether or not $1 (/dev/...) is a NVME ZNS device.
@@ -211,8 +223,14 @@ last_online_zone() {
 # max_open_zones in sysfs, or which lacks zoned block device support completely.
 max_open_zones() {
     local dev=$1
+    local realdev syspath
 
-    if [ -n "${sg_inq}" ] && [ ! -n "${use_libzbc}" ]; then
+    realdev=$(readlink -f "$dev")
+    syspath=/sys/block/${realdev##*/}/queue/max_open_zones
+
+    if [ -b "${realdev}" ] && [ -r "${syspath}" ]; then
+	cat ${syspath}
+    elif [ -n "${sg_inq}" ] && [ ! -n "${use_libzbc}" ]; then
 	if ! ${sg_inq} -e --page=0xB6 --len=20 --hex "$dev" \
 		 > /dev/null 2>&1; then
 	    # When sg_inq can not get max open zones, specify 0 which indicates
@@ -236,6 +254,18 @@ max_open_zones() {
     else
 	echo 0
     fi
+}
+
+# If sysfs provides, get max_active_zones limit of the zoned block device.
+max_active_zones() {
+	local dev=$1
+	local sys_queue="/sys/block/${dev##*/}/queue/"
+
+	if [[ -e "$sys_queue/max_active_zones" ]]; then
+		cat "$sys_queue/max_active_zones"
+		return
+	fi
+	echo 0
 }
 
 # Get minimum block size to write to seq zones. Refer the sysfs attribute
@@ -302,6 +332,18 @@ reset_zone() {
 	    ${zbc_reset_zone} -sector "$dev" "${offset}" >/dev/null
 	fi
     fi
+}
+
+# Close the zone on device $1 at offset $2. The offset must be specified in
+# units of 512 byte sectors.
+close_zone() {
+	local dev=$1 offset=$2
+
+	if [ -n "${blkzone}" ] && [ -z "${use_libzbc}" ]; then
+		${blkzone} close -o "${offset}" -c 1 "$dev"
+	else
+		${zbc_close_zone} -sector "$dev" "${offset}" >/dev/null
+	fi
 }
 
 # Extract the number of bytes that have been transferred from a line like

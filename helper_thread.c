@@ -1,4 +1,7 @@
+#include <errno.h>
 #include <signal.h>
+#include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #ifdef CONFIG_HAVE_TIMERFD_CREATE
 #include <sys/timerfd.h>
@@ -103,13 +106,14 @@ static int read_from_pipe(int fd, void *buf, size_t len)
 
 static void block_signals(void)
 {
-#ifdef HAVE_PTHREAD_SIGMASK
+#ifdef CONFIG_PTHREAD_SIGMASK
 	sigset_t sigmask;
+
+	int ret;
 
 	ret = pthread_sigmask(SIG_UNBLOCK, NULL, &sigmask);
 	assert(ret == 0);
 	ret = pthread_sigmask(SIG_BLOCK, &sigmask, NULL);
-	assert(ret == 0);
 #endif
 }
 
@@ -122,7 +126,10 @@ static void submit_action(enum action a)
 		return;
 
 	ret = write_to_pipe(helper_data->pipe[1], &data, sizeof(data));
-	assert(ret == 1);
+	if (ret != 1) {
+		log_err("failed to write action into pipe, err %i:%s", errno, strerror(errno));
+		assert(0);
+	}
 }
 
 void helper_reset(void)

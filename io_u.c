@@ -717,7 +717,7 @@ static enum fio_ddir rate_ddir(struct thread_data *td, enum fio_ddir ddir)
 		 * check if the usec is capable of taking negative values
 		 */
 		if (now > td->o.timeout) {
-			ddir = DDIR_INVAL;
+			ddir = DDIR_TIMEOUT;
 			return ddir;
 		}
 		usec = td->o.timeout - now;
@@ -726,7 +726,7 @@ static enum fio_ddir rate_ddir(struct thread_data *td, enum fio_ddir ddir)
 
 	now = utime_since_now(&td->epoch);
 	if ((td->o.timeout && (now > td->o.timeout)) || td->terminate)
-		ddir = DDIR_INVAL;
+		ddir = DDIR_TIMEOUT;
 
 	return ddir;
 }
@@ -951,7 +951,7 @@ static int fill_io_u(struct thread_data *td, struct io_u *io_u)
 
 	set_rw_ddir(td, io_u);
 
-	if (io_u->ddir == DDIR_INVAL) {
+	if (io_u->ddir == DDIR_INVAL || io_u->ddir == DDIR_TIMEOUT) {
 		dprint(FD_IO, "invalid direction received ddir = %d", io_u->ddir);
 		return 1;
 	}
@@ -1419,6 +1419,10 @@ static long set_io_u_file(struct thread_data *td, struct io_u *io_u)
 		put_file_log(td, f);
 		td_io_close_file(td, f);
 		io_u->file = NULL;
+
+		if (io_u->ddir == DDIR_TIMEOUT)
+			return 1;
+
 		if (td->o.file_service_type & __FIO_FSERVICE_NONUNIFORM)
 			fio_file_reset(td, f);
 		else {
@@ -1613,7 +1617,6 @@ struct io_u *__get_io_u(struct thread_data *td)
 {
 	const bool needs_lock = td_async_processing(td);
 	struct io_u *io_u = NULL;
-	int ret;
 
 	if (td->stop_io)
 		return NULL;
@@ -1647,14 +1650,16 @@ again:
 		io_u_set(td, io_u, IO_U_F_IN_CUR_DEPTH);
 		io_u->ipo = NULL;
 	} else if (td_async_processing(td)) {
+		int ret;
 		/*
 		 * We ran out, wait for async verify threads to finish and
 		 * return one
 		 */
 		assert(!(td->flags & TD_F_CHILD));
 		ret = pthread_cond_wait(&td->free_cond, &td->io_u_lock);
-		assert(ret == 0);
-		if (!td->error)
+		if (fio_unlikely(ret != 0)) {
+			td->error = errno;
+		} else if (!td->error)
 			goto again;
 	}
 
@@ -1877,6 +1882,8 @@ static void __io_u_log_error(struct thread_data *td, struct io_u *io_u)
 		strerror(io_u->error),
 		io_ddir_name(io_u->ddir),
 		io_u->offset, io_u->xfer_buflen);
+
+	zbd_log_err(td, io_u);
 
 	if (td->io_ops->errdetails) {
 		char *err = td->io_ops->errdetails(io_u);
@@ -2379,7 +2386,7 @@ int do_io_u_sync(const struct thread_data *td, struct io_u *io_u)
 	return ret;
 }
 
-int do_io_u_trim(const struct thread_data *td, struct io_u *io_u)
+int do_io_u_trim(struct thread_data *td, struct io_u *io_u)
 {
 #ifndef FIO_HAVE_TRIM
 	io_u->error = EINVAL;

@@ -313,15 +313,17 @@ static int parse_cmdprio_bssplit_entry(struct thread_options *o,
 	int matches = 0;
 	char *bs_str = NULL;
 	long long bs_val;
-	unsigned int perc = 0, class, level;
+	unsigned int perc = 0, class, level, hint;
 
 	/*
 	 * valid entry formats:
 	 * bs/ - %s/ - set perc to 0, prio to -1.
 	 * bs/perc - %s/%u - set prio to -1.
 	 * bs/perc/class/level - %s/%u/%u/%u
+	 * bs/perc/class/level/hint - %s/%u/%u/%u/%u
 	 */
-	matches = sscanf(str, "%m[^/]/%u/%u/%u", &bs_str, &perc, &class, &level);
+	matches = sscanf(str, "%m[^/]/%u/%u/%u/%u",
+			 &bs_str, &perc, &class, &level, &hint);
 	if (matches < 1) {
 		log_err("fio: invalid cmdprio_bssplit format\n");
 		return 1;
@@ -342,9 +344,14 @@ static int parse_cmdprio_bssplit_entry(struct thread_options *o,
 	case 2: /* bs/perc case */
 		break;
 	case 4: /* bs/perc/class/level case */
+	case 5: /* bs/perc/class/level/hint case */
 		class = min(class, (unsigned int) IOPRIO_MAX_PRIO_CLASS);
 		level = min(level, (unsigned int) IOPRIO_MAX_PRIO);
-		entry->prio = ioprio_value(class, level);
+		if (matches == 5)
+			hint = min(hint, (unsigned int) IOPRIO_MAX_PRIO_HINT);
+		else
+			hint = 0;
+		entry->prio = ioprio_value(class, level, hint);
 		break;
 	default:
 		log_err("fio: invalid cmdprio_bssplit format\n");
@@ -589,9 +596,21 @@ static int str_rw_cb(void *data, const char *str)
 	if (!nr)
 		return 0;
 
-	if (td_random(td))
-		o->ddir_seq_nr = atoi(nr);
-	else {
+	if (td_random(td)) {
+		long long val;
+
+		if (str_to_decimal(nr, &val, 1, o, 0, 0)) {
+			log_err("fio: randrw postfix parsing failed\n");
+			free(nr);
+			return 1;
+		}
+		if ((val <= 0) || (val > UINT_MAX)) {
+			log_err("fio: randrw postfix parsing out of range\n");
+			free(nr);
+			return 1;
+		}
+		o->ddir_seq_nr = (unsigned int) val;
+	} else {
 		long long val;
 
 		if (str_to_decimal(nr, &val, 1, o, 0, 0)) {
@@ -3618,7 +3637,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.lname	= "Per device/file maximum number of open zones",
 		.type	= FIO_OPT_INT,
 		.off1	= offsetof(struct thread_options, max_open_zones),
-		.maxval	= ZBD_MAX_OPEN_ZONES,
+		.maxval	= ZBD_MAX_WRITE_ZONES,
 		.help	= "Limit on the number of simultaneously opened sequential write zones with zonemode=zbd",
 		.def	= "0",
 		.category = FIO_OPT_C_IO,
@@ -3629,7 +3648,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.lname	= "Job maximum number of open zones",
 		.type	= FIO_OPT_INT,
 		.off1	= offsetof(struct thread_options, job_max_open_zones),
-		.maxval	= ZBD_MAX_OPEN_ZONES,
+		.maxval	= ZBD_MAX_WRITE_ZONES,
 		.help	= "Limit on the number of simultaneously opened sequential write zones with zonemode=zbd by one thread/process",
 		.def	= "0",
 		.category = FIO_OPT_C_IO,
@@ -3678,6 +3697,26 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.def	= "0",
 		.category = FIO_OPT_C_IO,
 		.group  = FIO_OPT_G_INVALID,
+	},
+	{
+		.name	= "fdp_pli_select",
+		.lname	= "FDP Placement ID select",
+		.type	= FIO_OPT_STR,
+		.off1	= offsetof(struct thread_options, fdp_pli_select),
+		.help	= "Select which FDP placement ID to use next",
+		.def	= "roundrobin",
+		.category = FIO_OPT_C_IO,
+		.group	= FIO_OPT_G_INVALID,
+		.posval	= {
+			  { .ival = "random",
+			    .oval = FIO_FDP_RANDOM,
+			    .help = "Choose a Placement ID at random (uniform)",
+			  },
+			  { .ival = "roundrobin",
+			    .oval = FIO_FDP_RR,
+			    .help = "Round robin select Placement IDs",
+			  },
+		},
 	},
 	{
 		.name	= "fdp_pli",
@@ -3786,12 +3825,30 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.category = FIO_OPT_C_GENERAL,
 		.group	= FIO_OPT_G_CRED,
 	},
+	{
+		.name	= "priohint",
+		.lname	= "I/O nice priority hint",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct thread_options, ioprio_hint),
+		.help	= "Set job IO priority hint",
+		.minval	= IOPRIO_MIN_PRIO_HINT,
+		.maxval	= IOPRIO_MAX_PRIO_HINT,
+		.interval = 1,
+		.category = FIO_OPT_C_GENERAL,
+		.group	= FIO_OPT_G_CRED,
+	},
 #else
 	{
 		.name	= "prioclass",
 		.lname	= "I/O nice priority class",
 		.type	= FIO_OPT_UNSUPPORTED,
 		.help	= "Your platform does not support IO priority classes",
+	},
+	{
+		.name	= "priohint",
+		.lname	= "I/O nice priority hint",
+		.type	= FIO_OPT_UNSUPPORTED,
+		.help	= "Your platform does not support IO priority hints",
 	},
 #endif
 	{
@@ -4556,16 +4613,8 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 	},
 #endif
 	{
-		.name = "log_unix_epoch",
-		.lname = "Log epoch unix",
-		.type = FIO_OPT_BOOL,
-		.off1 = offsetof(struct thread_options, log_unix_epoch),
-		.help = "Use Unix time in log files",
-		.category = FIO_OPT_C_LOG,
-		.group = FIO_OPT_G_INVALID,
-	},
-	{
 		.name = "log_alternate_epoch",
+		.alias = "log_unix_epoch",
 		.lname = "Log epoch alternate",
 		.type = FIO_OPT_BOOL,
 		.off1 = offsetof(struct thread_options, log_alternate_epoch),
@@ -4578,7 +4627,7 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.lname = "Log alternate epoch clock_id",
 		.type = FIO_OPT_INT,
 		.off1 = offsetof(struct thread_options, log_alternate_epoch_clock_id),
-		.help = "If log_alternate_epoch or log_unix_epoch is true, this option specifies the clock_id from clock_gettime whose epoch should be used. If neither of those is true, this option has no effect. Default value is 0, or CLOCK_REALTIME",
+		.help = "If log_alternate_epoch is true, this option specifies the clock_id from clock_gettime whose epoch should be used. If log_alternate_epoch is false, this option has no effect. Default value is 0, or CLOCK_REALTIME",
 		.category = FIO_OPT_C_LOG,
 		.group = FIO_OPT_G_INVALID,
 	},
@@ -4903,6 +4952,16 @@ struct fio_option fio_options[FIO_MAX_OPTS] = {
 		.type	= FIO_OPT_INT,
 		.off1	= offsetof(struct thread_options, gtod_cpu),
 		.help	= "Set up dedicated gettimeofday() thread on this CPU",
+		.verify	= gtod_cpu_verify,
+		.category = FIO_OPT_C_GENERAL,
+		.group	= FIO_OPT_G_CLOCK,
+	},
+	{
+		.name	= "job_start_clock_id",
+		.lname	= "Job start clock_id",
+		.type	= FIO_OPT_INT,
+		.off1	= offsetof(struct thread_options, job_start_clock_id),
+		.help	= "The clock_id passed to the call to clock_gettime used to record job_start in the json output format. Default is 0, or CLOCK_REALTIME",
 		.verify	= gtod_cpu_verify,
 		.category = FIO_OPT_C_GENERAL,
 		.group	= FIO_OPT_G_CLOCK,

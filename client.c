@@ -34,7 +34,7 @@ static void handle_start(struct fio_client *client, struct fio_net_cmd *cmd);
 static void convert_text(struct fio_net_cmd *cmd);
 static void client_display_thread_status(struct jobs_eta *je);
 
-struct client_ops fio_client_ops = {
+struct client_ops const fio_client_ops = {
 	.text		= handle_text,
 	.disk_util	= handle_du,
 	.thread_status	= handle_ts,
@@ -446,7 +446,7 @@ int fio_client_add_ini_file(void *cookie, const char *ini_file, bool remote)
 	return 0;
 }
 
-int fio_client_add(struct client_ops *ops, const char *hostname, void **cookie)
+int fio_client_add(struct client_ops const *ops, const char *hostname, void **cookie)
 {
 	struct fio_client *existing = *cookie;
 	struct fio_client *client;
@@ -956,6 +956,7 @@ static void convert_ts(struct thread_stat *dst, struct thread_stat *src)
 	dst->error		= le32_to_cpu(src->error);
 	dst->thread_number	= le32_to_cpu(src->thread_number);
 	dst->groupid		= le32_to_cpu(src->groupid);
+	dst->job_start		= le64_to_cpu(src->job_start);
 	dst->pid		= le32_to_cpu(src->pid);
 	dst->members		= le32_to_cpu(src->members);
 	dst->unified_rw_rep	= le32_to_cpu(src->unified_rw_rep);
@@ -1772,7 +1773,7 @@ fail:
 
 int fio_handle_client(struct fio_client *client)
 {
-	struct client_ops *ops = client->ops;
+	struct client_ops const *ops = client->ops;
 	struct fio_net_cmd *cmd;
 
 	dprint(FD_NET, "client: handle %s\n", client->hostname);
@@ -1957,7 +1958,7 @@ int fio_clients_send_trigger(const char *cmd)
 	return 0;
 }
 
-static void request_client_etas(struct client_ops *ops)
+static void request_client_etas(struct client_ops const *ops)
 {
 	struct fio_client *client;
 	struct flist_head *entry;
@@ -2089,7 +2090,7 @@ static int fio_check_clients_timed_out(void)
 	return ret;
 }
 
-int fio_handle_clients(struct client_ops *ops)
+int fio_handle_clients(struct client_ops const *ops)
 {
 	struct pollfd *pfds;
 	int i, ret = 0, retval = 0;

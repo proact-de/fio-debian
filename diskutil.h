@@ -2,11 +2,24 @@
 #define FIO_DISKUTIL_H
 #define FIO_DU_NAME_SZ		64
 
+#include <stdint.h>
 #include <limits.h>
 
 #include "helper_thread.h"
 #include "fio_sem.h"
+#include "flist.h"
+#include "lib/ieee754.h"
 
+/**
+ * @ios: Number of I/O operations that have been completed successfully.
+ * @merges: Number of I/O operations that have been merged.
+ * @sectors: I/O size in 512-byte units.
+ * @ticks: Time spent on I/O in milliseconds.
+ * @io_ticks: CPU time spent on I/O in milliseconds.
+ * @time_in_queue: Weighted time spent doing I/O in milliseconds.
+ *
+ * For the array members, index 0 refers to reads and index 1 refers to writes.
+ */
 struct disk_util_stats {
 	uint64_t ios[2];
 	uint64_t merges[2];
@@ -18,7 +31,7 @@ struct disk_util_stats {
 };
 
 /*
- * Disk utils as read in /sys/block/<dev>/stat
+ * Disk utilization as read from /sys/block/<dev>/stat
  */
 struct disk_util_stat {
 	uint8_t name[FIO_DU_NAME_SZ];
