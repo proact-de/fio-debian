@@ -1883,7 +1883,6 @@ void fio_server_send_ts(struct thread_stat *ts, struct group_run_stats *rs)
 
 		offset = (char *)extended_buf_wp - (char *)extended_buf;
 		ptr->ts.ss_bw_data_offset = cpu_to_le64(offset);
-		extended_buf_wp = ss_bw + (int) ts->ss_dur;
 	}
 
 	fio_net_queue_cmd(FIO_NET_CMD_TS, extended_buf, extended_buf_size, NULL, SK_F_COPY);
@@ -2260,6 +2259,7 @@ int fio_send_iolog(struct thread_data *td, struct io_log *log, const char *name)
 		.thread_number		= cpu_to_le32(td->thread_number),
 		.log_type		= cpu_to_le32(log->log_type),
 		.log_hist_coarseness	= cpu_to_le32(log->hist_coarseness),
+		.per_job_logs		= cpu_to_le32(td->o.per_job_logs),
 	};
 	struct sk_entry *first;
 	struct flist_head *entry;
@@ -2288,8 +2288,10 @@ int fio_send_iolog(struct thread_data *td, struct io_log *log, const char *name)
 			struct io_sample *s = get_sample(log, cur_log, i);
 
 			s->time		= cpu_to_le64(s->time);
-			if (log->log_type != IO_LOG_TYPE_HIST)
-				s->data.val	= cpu_to_le64(s->data.val);
+			if (log->log_type != IO_LOG_TYPE_HIST) {
+				s->data.val.val0	= cpu_to_le64(s->data.val.val0);
+				s->data.val.val1	= cpu_to_le64(s->data.val.val1);
+			}
 			s->__ddir	= __cpu_to_le32(s->__ddir);
 			s->bs		= cpu_to_le64(s->bs);
 
