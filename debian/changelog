@@ -1,7 +1,7 @@
 fio (3.37-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.37 (Closes: #1059937).
-  * Refreshed patches. 
+  * Refreshed patches.
   * control: Add build support for LoongArch64 (Closes: #1061728).
     Thanks to Dandan for providing a patch.
 
