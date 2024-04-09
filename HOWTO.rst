@@ -756,8 +756,9 @@ Time related parameters
 	CPU mask of other jobs.
 
 .. option:: job_start_clock_id=int
-   The clock_id passed to the call to `clock_gettime` used to record job_start
-   in the `json` output format. Default is 0, or CLOCK_REALTIME.
+
+        The clock_id passed to the call to `clock_gettime` used to record
+        job_start in the `json` output format. Default is 0, or CLOCK_REALTIME.
 
 
 Target file/device
@@ -801,7 +802,7 @@ Target file/device
 
 	On Windows, disk devices are accessed as :file:`\\\\.\\PhysicalDrive0` for
 	the first device, :file:`\\\\.\\PhysicalDrive1` for the second etc.
-	Note: Windows and FreeBSD prevent write access to areas
+	Note: Windows and FreeBSD (refer to geom(4)) prevent write access to areas
 	of the disk containing in-use data (e.g. filesystems).
 
 	The filename "`-`" is a reserved name, meaning *stdin* or *stdout*.  Which
@@ -970,13 +971,13 @@ Target file/device
 
 .. option:: unlink=bool
 
-	Unlink the job files when done. Not the default, as repeated runs of that
+	Unlink (delete) the job files when done. Not the default, as repeated runs of that
 	job would then waste time recreating the file set again and again. Default:
 	false.
 
 .. option:: unlink_each_loop=bool
 
-	Unlink job files after each iteration or loop.  Default: false.
+	Unlink (delete) job files after each iteration or loop.  Default: false.
 
 .. option:: zonemode=str
 
@@ -1630,7 +1631,7 @@ Block size
 	Comma-separated ranges may be specified for reads, writes, and trims as
 	described in :option:`blocksize`.
 
-	Example: ``bsrange=1k-4k,2k-8k``.
+	Example: ``bsrange=1k-4k,2k-8k`` also the ':' delimiter ``bsrange=1k:4k,2k:8k``.
 
 .. option:: bssplit=str[,str][,str]
 
@@ -2191,6 +2192,21 @@ I/O engine
 			and 'nrfiles', so that the files will be created.
 			This engine is to measure file delete.
 
+		**dircreate**
+			Simply create the directories and do no I/O to them.  You still need to
+			set  `filesize` so that all the accounting still occurs, but no
+			actual I/O will be done other than creating the directories.
+
+		**dirstat**
+			Simply do stat() and do no I/O to the directories. You need to set 'filesize'
+			and 'nrfiles', so that directories will be created.
+			This engine is to measure directory lookup and meta data access.
+
+		**dirdelete**
+			Simply delete the directories by rmdir() and do no I/O to them. You need to set 'filesize'
+			and 'nrfiles', so that the directories will be created.
+			This engine is to measure directory delete.
+
 		**libpmem**
 			Read and write using mmap I/O to a file on a filesystem
 			mounted with DAX on a persistent memory device through the PMDK
@@ -2344,8 +2360,8 @@ with the caveat that when used on the command line, they must come after the
 
 		cmdprio_bssplit=blocksize/percentage/class/level/hint:...
 
-	This is an extension of the second accepted format that allows to also
-	specify a priority hint.
+	This is an extension of the second accepted format that allows one to
+	also specify a priority hint.
 
 	For all formats, only the read and write data directions are supported,
 	values for trim IOs are ignored. This option is mutually exclusive with
@@ -2491,11 +2507,11 @@ with the caveat that when used on the command line, they must come after the
         want fio to use placement identifier only at indices 0, 2 and 5 specify
         ``fdp_pli=0,2,5``.
 
-.. option:: md_per_io_size=int : [io_uring_cmd]
+.. option:: md_per_io_size=int : [io_uring_cmd] [xnvme]
 
 	Size in bytes for separate metadata buffer per IO. Default: 0.
 
-.. option:: pi_act=int : [io_uring_cmd]
+.. option:: pi_act=int : [io_uring_cmd] [xnvme]
 
 	Action to take when nvme namespace is formatted with protection
 	information. If this is set to 1 and namespace is formatted with
@@ -2507,7 +2523,11 @@ with the caveat that when used on the command line, they must come after the
 	If this is set to 0, fio generates protection information for
 	write case and verifies for read case. Default: 1.
 
-.. option:: pi_chk=str[,str][,str] : [io_uring_cmd]
+	For 16 bit CRC generation fio will use isa-l if available otherwise
+	it will use the default slower generator.
+	(see: https://github.com/intel/isa-l)
+
+.. option:: pi_chk=str[,str][,str] : [io_uring_cmd] [xnvme]
 
 	Controls the protection information check. This can take one or more
 	of these values. Default: none.
@@ -2520,15 +2540,24 @@ with the caveat that when used on the command line, they must come after the
 	**APPTAG**
 		Enables protection information checking of application tag field.
 
-.. option:: apptag=int : [io_uring_cmd]
+.. option:: apptag=int : [io_uring_cmd] [xnvme]
 
 	Specifies logical block application tag value, if namespace is
 	formatted to use end to end protection information. Default: 0x1234.
 
-.. option:: apptag_mask=int : [io_uring_cmd]
+.. option:: apptag_mask=int : [io_uring_cmd] [xnvme]
 
 	Specifies logical block application tag mask value, if namespace is
 	formatted to use end to end protection information. Default: 0xffff.
+
+.. option:: num_range=int : [io_uring_cmd]
+
+	For trim command this will be the number of ranges to trim per I/O
+	request. The number of logical blocks per range is determined by the
+	:option:`bs` option which should be a multiple of logical block size.
+	This cannot be used with read or write. Note that setting this
+	option > 1, :option:`log_offset` will not be able to log all the
+	offsets. Default: 1.
 
 .. option:: cpuload=int : [cpuio]
 
@@ -2622,10 +2651,13 @@ with the caveat that when used on the command line, they must come after the
 		User datagram protocol V6.
 	**unix**
 		UNIX domain socket.
+	**vsock**
+		VSOCK protocol.
 
-	When the protocol is TCP or UDP, the port must also be given, as well as the
-	hostname if the job is a TCP listener or UDP reader. For unix sockets, the
+	When the protocol is TCP, UDP or VSOCK, the port must also be given, as well as the
+	hostname if the job is a TCP or VSOCK listener or UDP reader. For unix sockets, the
 	normal :option:`filename` option should be used and the port is invalid.
+	When the protocol is VSOCK, the :option:`hostname` is the CID of the remote VM.
 
 .. option:: listen : [netsplice] [net]
 
@@ -2769,7 +2801,7 @@ with the caveat that when used on the command line, they must come after the
 
 .. option:: sg_write_mode=str : [sg]
 
-	Specify the type of write commands to issue. This option can take three values:
+	Specify the type of write commands to issue. This option can take ten values:
 
 	**write**
 		This is the default where write opcodes are issued as usual.
@@ -3014,7 +3046,7 @@ with the caveat that when used on the command line, they must come after the
 	**hugepage**
 		Use hugepages, instead of existing posix memory backend. The
 		memory backend uses hugetlbfs. This require users to allocate
-		hugepages, mount hugetlbfs and set an enviornment variable for
+		hugepages, mount hugetlbfs and set an environment variable for
 		XNVME_HUGETLB_PATH.
 	**spdk**
 		Uses SPDK's memory allocator.
@@ -3047,7 +3079,7 @@ with the caveat that when used on the command line, they must come after the
 	creating but before connecting the libblkio instance. Each property must
 	have the format ``<name>=<value>``. Colons can be escaped as ``\:``.
 	These are set after the engine sets any other properties, so those can
-	be overriden. Available properties depend on the libblkio version in use
+	be overridden. Available properties depend on the libblkio version in use
 	and are listed at
 	https://libblkio.gitlab.io/libblkio/blkio.html#properties
 
@@ -3071,7 +3103,7 @@ with the caveat that when used on the command line, they must come after the
 	connecting but before starting the libblkio instance. Each property must
 	have the format ``<name>=<value>``. Colons can be escaped as ``\:``.
 	These are set after the engine sets any other properties, so those can
-	be overriden. Available properties depend on the libblkio version in use
+	be overridden. Available properties depend on the libblkio version in use
 	and are listed at
 	https://libblkio.gitlab.io/libblkio/blkio.html#properties
 
@@ -3205,6 +3237,14 @@ I/O depth
 I/O rate
 ~~~~~~~~
 
+.. option:: thinkcycles=int
+
+	Stall the job for the specified number of cycles after an I/O has completed before
+	issuing the next. May be used to simulate processing being done by an application.
+	This is not taken into account for the time to be waited on for  :option:`thinktime`.
+	Might not have any effect on some platforms, this can be checked by trying a setting
+	a high enough amount of thinkcycles.
+
 .. option:: thinktime=time
 
 	Stall the job for the specified period of time after an I/O has completed before issuing the
@@ -3298,8 +3338,8 @@ I/O rate
 
 .. option:: rate_cycle=int
 
-	Average bandwidth for :option:`rate` and :option:`rate_min` over this number
-	of milliseconds. Defaults to 1000.
+        Average bandwidth for :option:`rate_min` and :option:`rate_iops_min`
+        over this number of milliseconds. Defaults to 1000.
 
 
 I/O latency
@@ -3635,8 +3675,8 @@ Threads, processes and job synchronization
 	By default, fio will continue running all other jobs when one job finishes.
 	Sometimes this is not the desired action. Setting ``exitall`` will
 	instead make fio terminate all jobs in the same group. The option
-        ``exit_what`` allows to control which jobs get terminated when ``exitall`` is
-        enabled. The default is ``group`` and does not change the behaviour of
+        ``exit_what`` allows one to control which jobs get terminated when ``exitall``
+        is enabled. The default is ``group`` and does not change the behaviour of
         ``exitall``. The setting ``all`` terminates all jobs. The setting ``stonewall``
         terminates all currently running jobs across all groups and continues execution
         with the next stonewalled group.
@@ -3956,9 +3996,11 @@ Measurements and reporting
 
 .. option:: per_job_logs=bool
 
-	If set, this generates bw/clat/iops log with per file private filenames. If
-	not set, jobs with identical names will share the log filename. Default:
-	true.
+        If set to true, fio generates bw/clat/iops logs with per job unique
+        filenames. If set to false, jobs with identical names will share a log
+        filename. Note that when this option is set to false log files will be
+        opened in append mode and if log files already exist the previous
+        contents will not be overwritten. Default: true.
 
 .. option:: group_reporting
 
@@ -3970,12 +4012,12 @@ Measurements and reporting
 	same reporting group, unless if separated by a :option:`stonewall`, or by
 	using :option:`new_group`.
 
-    NOTE: When :option: `group_reporting` is used along with `json` output,
-    there are certain per-job properties which can be different between jobs
-    but do not have a natural group-level equivalent. Examples include
-    `kb_base`, `unit_base`, `sig_figs`, `thread_number`, `pid`, and
-    `job_start`. For these properties, the values for the first job are
-    recorded for the group.
+	NOTE: When :option:`group_reporting` is used along with `json` output,
+	there are certain per-job properties which can be different between jobs
+	but do not have a natural group-level equivalent. Examples include
+	`kb_base`, `unit_base`, `sig_figs`, `thread_number`, `pid`, and
+	`job_start`. For these properties, the values for the first job are
+	recorded for the group.
 
 .. option:: new_group
 
@@ -4049,12 +4091,15 @@ Measurements and reporting
 
 .. option:: log_avg_msec=int
 
-	By default, fio will log an entry in the iops, latency, or bw log for every
-	I/O that completes. When writing to the disk log, that can quickly grow to a
-	very large size. Setting this option makes fio average the each log entry
-	over the specified period of time, reducing the resolution of the log.  See
-	:option:`log_max_value` as well. Defaults to 0, logging all entries.
-	Also see `Log File Formats`_.
+        By default, fio will log an entry in the iops, latency, or bw log for
+        every I/O that completes. When writing to the disk log, that can
+        quickly grow to a very large size. Setting this option directs fio to
+        instead record an average over the specified duration for each log
+        entry, reducing the resolution of the log. When the job completes, fio
+        will flush any accumulated latency log data, so the final log interval
+        may not match the value specified by this option and there may even be
+        duplicate timestamps. See :option:`log_window_value` as well. Defaults
+        to 0, logging entries for each I/O. Also see `Log File Formats`_.
 
 .. option:: log_hist_msec=int
 
@@ -4074,11 +4119,28 @@ Measurements and reporting
 	histogram logs contain 1216 latency bins. See :option:`write_hist_log`
 	and `Log File Formats`_.
 
-.. option:: log_max_value=bool
+.. option:: log_window_value=str, log_max_value=str
 
-	If :option:`log_avg_msec` is set, fio logs the average over that window. If
-	you instead want to log the maximum value, set this option to 1. Defaults to
-	0, meaning that averaged values are logged.
+	If :option:`log_avg_msec` is set, fio by default logs the average over that
+	window. This option determines whether fio logs the average, maximum or
+	both the values over the window. This only affects the latency logging,
+	as both average and maximum values for iops or bw log will be same.
+	Accepted values are:
+
+		**avg**
+			Log average value over the window. The default.
+
+		**max**
+			Log maximum value in the window.
+
+		**both**
+			Log both average and maximum value over the window.
+
+		**0**
+			Backward-compatible alias for **avg**.
+
+		**1**
+			Backward-compatible alias for **max**.
 
 .. option:: log_offset=bool
 
@@ -5047,11 +5109,19 @@ toggled with :option:`log_offset`.
 by the ioengine specific :option:`cmdprio_percentage`.
 
 Fio defaults to logging every individual I/O but when windowed logging is set
-through :option:`log_avg_msec`, either the average (by default) or the maximum
-(:option:`log_max_value` is set) *value* seen over the specified period of time
-is recorded. Each *data direction* seen within the window period will aggregate
-its values in a separate row. Further, when using windowed logging the *block
-size* and *offset* entries will always contain 0.
+through :option:`log_avg_msec`, either the average (by default), the maximum
+(:option:`log_window_value` is set to max) *value* seen over the specified period
+of time, or both the average *value* and maximum *value1* (:option:`log_window_value`
+is set to both) is recorded. The log file format when both the values are reported
+takes this form:
+
+    *time* (`msec`), *value*, *value1*, *data direction*, *block size* (`bytes`),
+    *offset* (`bytes`), *command priority*
+
+
+Each *data direction* seen within the window period will aggregate its values in a
+separate row. Further, when using windowed logging the *block size* and *offset*
+entries will always contain 0.
 
 
 Client/Server

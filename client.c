@@ -1452,10 +1452,13 @@ static int fio_client_handle_iolog(struct fio_client *client,
 	if (store_direct) {
 		ssize_t wrote;
 		size_t sz;
-		int fd;
+		int fd, flags;
 
-		fd = open((const char *) log_pathname,
-				O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (pdu->per_job_logs)
+			flags = O_WRONLY | O_CREAT | O_TRUNC;
+		else
+			flags = O_WRONLY | O_CREAT | O_APPEND;
+		fd = open((const char *) log_pathname, flags, 0644);
 		if (fd < 0) {
 			log_err("fio: open log %s: %s\n",
 				log_pathname, strerror(errno));
@@ -1476,7 +1479,13 @@ static int fio_client_handle_iolog(struct fio_client *client,
 		ret = 0;
 	} else {
 		FILE *f;
-		f = fopen((const char *) log_pathname, "w");
+		const char *mode;
+
+		if (pdu->per_job_logs)
+			mode = "w";
+		else
+			mode = "a";
+		f = fopen((const char *) log_pathname, mode);
 		if (!f) {
 			log_err("fio: fopen log %s : %s\n",
 				log_pathname, strerror(errno));
@@ -1695,6 +1704,7 @@ static struct cmd_iolog_pdu *convert_iolog(struct fio_net_cmd *cmd,
 	ret->log_offset		= le32_to_cpu(ret->log_offset);
 	ret->log_prio		= le32_to_cpu(ret->log_prio);
 	ret->log_hist_coarseness = le32_to_cpu(ret->log_hist_coarseness);
+	ret->per_job_logs	= le32_to_cpu(ret->per_job_logs);
 
 	if (*store_direct)
 		return ret;
@@ -1708,8 +1718,10 @@ static struct cmd_iolog_pdu *convert_iolog(struct fio_net_cmd *cmd,
 			s = (struct io_sample *)((char *)s + sizeof(struct io_u_plat_entry) * i);
 
 		s->time		= le64_to_cpu(s->time);
-		if (ret->log_type != IO_LOG_TYPE_HIST)
-			s->data.val	= le64_to_cpu(s->data.val);
+		if (ret->log_type != IO_LOG_TYPE_HIST) {
+			s->data.val.val0	= le64_to_cpu(s->data.val.val0);
+			s->data.val.val1	= le64_to_cpu(s->data.val.val1);
+		}
 		s->__ddir	= __le32_to_cpu(s->__ddir);
 		s->bs		= le64_to_cpu(s->bs);
 		s->priority	= le16_to_cpu(s->priority);
