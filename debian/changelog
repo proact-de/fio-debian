@@ -1,10 +1,10 @@
-fio (3.39) UNRELEASED; urgency=medium
+fio (3.38-1) UNRELEASED; urgency=medium
 
   * Imported new upstream version 3.38.
   * control: Enabled NFS engine. Thanks to Braiam for the report and the
     patch (Closes: #1084803).
 
- -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 14 Oct 2024 15:17:43 +0200
+ -- Martin Steigerwald <martin.steigerwald@proact.de>  Mon, 14 Oct 2024 15:21:28 +0200
 
 fio (3.37-1) unstable; urgency=medium
 
