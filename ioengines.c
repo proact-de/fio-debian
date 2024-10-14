@@ -413,7 +413,7 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	if (io_u->error == EINVAL && td->io_issues[io_u->ddir & 1] == 1 &&
 	    td->o.odirect) {
 
-		log_err("fio: first direct IO errored. File system may not "
+		log_info("fio: first direct IO errored. File system may not "
 			 "support direct IO, or iomem_align= is bad, or "
 			 "invalid block size. Try setting direct=0.\n");
 	}
@@ -421,7 +421,7 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 	if (zbd_unaligned_write(io_u->error) &&
 	    td->io_issues[io_u->ddir & 1] == 1 &&
 	    td->o.zone_mode != ZONE_MODE_ZBD) {
-		log_err("fio: first I/O failed. If %s is a zoned block device, consider --zonemode=zbd\n",
+		log_info("fio: first I/O failed. If %s is a zoned block device, consider --zonemode=zbd\n",
 			 io_u->file->file_name);
 	}
 
@@ -436,6 +436,8 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 			io_u_mark_depth(td, 1);
 			td->ts.total_io_u[io_u->ddir]++;
 		}
+
+		td->last_ddir_issued = ddir;
 	} else if (ret == FIO_Q_QUEUED) {
 		td->io_u_queued++;
 
@@ -445,6 +447,8 @@ enum fio_q_status td_io_queue(struct thread_data *td, struct io_u *io_u)
 
 		if (td->io_u_queued >= td->o.iodepth_batch)
 			td_io_commit(td);
+
+		td->last_ddir_issued = ddir;
 	}
 
 	if (!td_ioengine_flagged(td, FIO_SYNCIO) &&

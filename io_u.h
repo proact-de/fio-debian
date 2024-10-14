@@ -22,6 +22,8 @@ enum {
 	IO_U_F_BARRIER		= 1 << 6,
 	IO_U_F_VER_LIST		= 1 << 7,
 	IO_U_F_PATTERN_DONE	= 1 << 8,
+	IO_U_F_DEVICE_ERROR	= 1 << 9,
+	IO_U_F_VER_IN_DEV	= 1 << 10, /* Verify data in device */
 };
 
 /*

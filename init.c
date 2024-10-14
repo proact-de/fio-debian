@@ -853,6 +853,20 @@ static int fixup_options(struct thread_data *td)
 		    (o->max_bs[DDIR_WRITE] % o->verify_interval))
 			o->verify_interval = gcd(o->min_bs[DDIR_WRITE],
 							o->max_bs[DDIR_WRITE]);
+
+		if (td->o.verify_only)
+			o->verify_write_sequence = 0;
+	}
+
+	if (td->o.oatomic) {
+		if (!td_ioengine_flagged(td, FIO_ATOMICWRITES)) {
+			log_err("fio: engine does not support atomic writes\n");
+			td->o.oatomic = 0;
+			ret |= 1;
+		}
+
+		if (!td_write(td))
+			td->o.oatomic = 0;
 	}
 
 	if (o->pre_read) {
@@ -1015,7 +1029,15 @@ static int fixup_options(struct thread_data *td)
 		ret |= 1;
 	}
 
-
+	if (td->o.fdp) {
+		if (fio_option_is_set(&td->o, dp_type) &&
+			(td->o.dp_type == FIO_DP_STREAMS || td->o.dp_type == FIO_DP_NONE)) {
+			log_err("fio: fdp=1 is not compatible with dataplacement={streams, none}\n");
+			ret |= 1;
+		} else {
+			td->o.dp_type = FIO_DP_FDP;
+		}
+	}
 	return ret;
 }
 
@@ -1613,11 +1635,17 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_type = IO_LOG_TYPE_LAT,
 			.log_offset = o->log_offset,
 			.log_prio = o->log_prio,
+			.log_issue_time = o->log_issue_time,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
 		const char *pre = make_log_name(o->lat_log_file, o->name);
 		const char *suf;
+
+		if (o->log_issue_time && !o->log_offset) {
+			log_err("fio: log_issue_time option requires write_lat_log and log_offset options\n");
+			goto err;
+		}
 
 		if (p.log_gz_store)
 			suf = "log.fz";
@@ -1642,6 +1670,9 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			setup_log(&td->clat_log, &p, logname);
 		}
 
+	} else if (o->log_issue_time) {
+		log_err("fio: log_issue_time option requires write_lat_log and log_offset options\n");
+		goto err;
 	}
 
 	if (o->write_hist_log) {
@@ -1653,6 +1684,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_type = IO_LOG_TYPE_HIST,
 			.log_offset = o->log_offset,
 			.log_prio = o->log_prio,
+			.log_issue_time = o->log_issue_time,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
@@ -1685,6 +1717,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_type = IO_LOG_TYPE_BW,
 			.log_offset = o->log_offset,
 			.log_prio = o->log_prio,
+			.log_issue_time = o->log_issue_time,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
@@ -1717,6 +1750,7 @@ static int add_job(struct thread_data *td, const char *jobname, int job_add_num,
 			.log_type = IO_LOG_TYPE_IOPS,
 			.log_offset = o->log_offset,
 			.log_prio = o->log_prio,
+			.log_issue_time = o->log_issue_time,
 			.log_gz = o->log_gz,
 			.log_gz_store = o->log_gz_store,
 		};
