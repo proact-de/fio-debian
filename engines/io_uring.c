@@ -34,6 +34,18 @@ enum uring_cmd_type {
 	FIO_URING_CMD_NVME = 1,
 };
 
+enum uring_cmd_write_mode {
+	FIO_URING_CMD_WMODE_WRITE = 1,
+	FIO_URING_CMD_WMODE_UNCOR,
+	FIO_URING_CMD_WMODE_ZEROES,
+	FIO_URING_CMD_WMODE_VERIFY,
+};
+
+enum uring_cmd_verify_mode {
+	FIO_URING_CMD_VMODE_READ = 1,
+	FIO_URING_CMD_VMODE_COMPARE,
+};
+
 struct io_sq_ring {
 	unsigned *head;
 	unsigned *tail;
@@ -72,6 +84,7 @@ struct ioring_data {
 	struct io_cq_ring cq_ring;
 	unsigned cq_ring_mask;
 
+	int async_trim_fail;
 	int queued;
 	int cq_ring_off;
 	unsigned iodepth;
@@ -82,11 +95,17 @@ struct ioring_data {
 	struct cmdprio cmdprio;
 
 	struct nvme_dsm *dsm;
+	uint32_t cdw12_flags[DDIR_RWDIR_CNT];
+	uint8_t write_opcode;
 };
 
 struct ioring_options {
 	struct thread_data *td;
 	unsigned int hipri;
+	unsigned int readfua;
+	unsigned int writefua;
+	unsigned int write_mode;
+	unsigned int verify_mode;
 	struct cmdprio_options cmdprio_options;
 	unsigned int fixedbufs;
 	unsigned int registerfiles;
@@ -94,7 +113,6 @@ struct ioring_options {
 	unsigned int sqpoll_set;
 	unsigned int sqpoll_cpu;
 	unsigned int nonvectored;
-	unsigned int uncached;
 	unsigned int nowait;
 	unsigned int force_async;
 	unsigned int md_per_io_size;
@@ -132,6 +150,74 @@ static struct fio_option options[] = {
 		.type	= FIO_OPT_STR_SET,
 		.off1	= offsetof(struct ioring_options, hipri),
 		.help	= "Use polled IO completions",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "readfua",
+		.lname	= "Read fua flag support",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct ioring_options, readfua),
+		.help	= "Set FUA flag (force unit access) for all Read operations",
+		.def	= "0",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "writefua",
+		.lname	= "Write fua flag support",
+		.type	= FIO_OPT_BOOL,
+		.off1	= offsetof(struct ioring_options, writefua),
+		.help	= "Set FUA flag (force unit access) for all Write operations",
+		.def	= "0",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "write_mode",
+		.lname	= "Additional Write commands support (Write Uncorrectable, Write Zeores)",
+		.type	= FIO_OPT_STR,
+		.off1	= offsetof(struct ioring_options, write_mode),
+		.help	= "Issue Write Uncorrectable or Zeroes command instaed of Write command",
+		.def	= "write",
+		.posval = {
+			  { .ival = "write",
+			    .oval = FIO_URING_CMD_WMODE_WRITE,
+			    .help = "Issue Write commands for write operations"
+			  },
+			  { .ival = "uncor",
+			    .oval = FIO_URING_CMD_WMODE_UNCOR,
+			    .help = "Issue Write Uncorrectable commands for write operations"
+			  },
+			  { .ival = "zeroes",
+			    .oval = FIO_URING_CMD_WMODE_ZEROES,
+			    .help = "Issue Write Zeroes commands for write operations"
+			  },
+			  { .ival = "verify",
+			    .oval = FIO_URING_CMD_WMODE_VERIFY,
+			    .help = "Issue Verify commands for write operations"
+			  },
+		},
+		.category = FIO_OPT_C_ENGINE,
+		.group	= FIO_OPT_G_IOURING,
+	},
+	{
+		.name	= "verify_mode",
+		.lname	= "Do verify based on the configured command (e.g., Read or Compare command)",
+		.type	= FIO_OPT_STR,
+		.off1	= offsetof(struct ioring_options, verify_mode),
+		.help	= "Issue Read or Compare command in the verification phase",
+		.def	= "read",
+		.posval = {
+			  { .ival = "read",
+			    .oval = FIO_URING_CMD_VMODE_READ,
+			    .help = "Issue Read commands in the verification phase"
+			  },
+			  { .ival = "compare",
+			    .oval = FIO_URING_CMD_VMODE_COMPARE,
+			    .help = "Issue Compare commands in the verification phase"
+			  },
+		},
 		.category = FIO_OPT_C_ENGINE,
 		.group	= FIO_OPT_G_IOURING,
 	},
@@ -184,11 +270,7 @@ static struct fio_option options[] = {
 	{
 		.name	= "uncached",
 		.lname	= "Uncached",
-		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct ioring_options, uncached),
-		.help	= "Use RWF_UNCACHED for buffered read/writes",
-		.category = FIO_OPT_C_ENGINE,
-		.group	= FIO_OPT_G_IOURING,
+		.type	= FIO_OPT_SOFT_DEPRECATED,
 	},
 	{
 		.name	= "nowait",
@@ -292,6 +374,10 @@ static int io_uring_enter(struct ioring_data *ld, unsigned int to_submit,
 #endif
 }
 
+#ifndef BLOCK_URING_CMD_DISCARD
+#define BLOCK_URING_CMD_DISCARD	_IO(0x12, 0)
+#endif
+
 static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 {
 	struct ioring_data *ld = td->io_ops_data;
@@ -335,10 +421,10 @@ static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 			}
 		}
 		sqe->rw_flags = 0;
-		if (!td->o.odirect && o->uncached)
-			sqe->rw_flags |= RWF_UNCACHED;
 		if (o->nowait)
 			sqe->rw_flags |= RWF_NOWAIT;
+		if (td->o.oatomic && io_u->ddir == DDIR_WRITE)
+			sqe->rw_flags |= RWF_ATOMIC;
 
 		/*
 		 * Since io_uring can have a submission context (sqthread_poll)
@@ -367,6 +453,16 @@ static int fio_ioring_prep(struct thread_data *td, struct io_u *io_u)
 				sqe->fsync_flags |= IORING_FSYNC_DATASYNC;
 			sqe->opcode = IORING_OP_FSYNC;
 		}
+	} else if (io_u->ddir == DDIR_TRIM) {
+		sqe->opcode = IORING_OP_URING_CMD;
+		sqe->addr = io_u->offset;
+		sqe->addr3 = io_u->xfer_buflen;
+		sqe->rw_flags = 0;
+		sqe->len = sqe->off = 0;
+		sqe->ioprio = 0;
+		sqe->cmd_op = BLOCK_URING_CMD_DISCARD;
+		sqe->__pad1 = 0;
+		sqe->file_index = 0;
 	}
 
 	if (o->force_async && ++ld->prepped == o->force_async) {
@@ -388,6 +484,7 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 	struct nvme_dsm *dsm;
 	void *ptr = ld->dsm;
 	unsigned int dsm_size;
+	uint8_t read_opcode = nvme_cmd_read;
 
 	/* only supports nvme_uring_cmd */
 	if (o->cmd_type != FIO_URING_CMD_NVME)
@@ -405,8 +502,6 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 		sqe->fd = f->fd;
 	}
 	sqe->rw_flags = 0;
-	if (!td->o.odirect && o->uncached)
-		sqe->rw_flags |= RWF_UNCACHED;
 	if (o->nowait)
 		sqe->rw_flags |= RWF_NOWAIT;
 
@@ -430,9 +525,21 @@ static int fio_ioring_cmd_prep(struct thread_data *td, struct io_u *io_u)
 	ptr += io_u->index * dsm_size;
 	dsm = (struct nvme_dsm *)ptr;
 
+	/*
+	 * If READ command belongs to the verification phase and the
+	 * verify_mode=compare, convert READ to COMPARE command.
+	 */
+	if (io_u->flags & IO_U_F_VER_LIST && io_u->ddir == DDIR_READ &&
+			o->verify_mode == FIO_URING_CMD_VMODE_COMPARE) {
+		populate_verify_io_u(td, io_u);
+		read_opcode = nvme_cmd_compare;
+		io_u_set(td, io_u, IO_U_F_VER_IN_DEV);
+	}
+
 	return fio_nvme_uring_cmd_prep(cmd, io_u,
 			o->nonvectored ? NULL : &ld->iovecs[io_u->index],
-			dsm);
+			dsm, read_opcode, ld->write_opcode,
+			ld->cdw12_flags[io_u->ddir]);
 }
 
 static struct io_u *fio_ioring_event(struct thread_data *td, int event)
@@ -447,13 +554,23 @@ static struct io_u *fio_ioring_event(struct thread_data *td, int event)
 	cqe = &ld->cq_ring.cqes[index];
 	io_u = (struct io_u *) (uintptr_t) cqe->user_data;
 
+	/* trim returns 0 on success */
+	if (cqe->res == io_u->xfer_buflen ||
+	    (io_u->ddir == DDIR_TRIM && !cqe->res)) {
+		io_u->error = 0;
+		return io_u;
+	}
+
 	if (cqe->res != io_u->xfer_buflen) {
+		if (io_u->ddir == DDIR_TRIM) {
+			ld->async_trim_fail = 1;
+			cqe->res = 0;
+		}
 		if (cqe->res > io_u->xfer_buflen)
 			io_u->error = -cqe->res;
 		else
 			io_u->resid = io_u->xfer_buflen - cqe->res;
-	} else
-		io_u->error = 0;
+	}
 
 	return io_u;
 }
@@ -475,12 +592,9 @@ static struct io_u *fio_ioring_cmd_event(struct thread_data *td, int event)
 	cqe = &ld->cq_ring.cqes[index];
 	io_u = (struct io_u *) (uintptr_t) cqe->user_data;
 
-	if (cqe->res != 0) {
-		io_u->error = -cqe->res;
-		return io_u;
-	} else {
-		io_u->error = 0;
-	}
+	io_u->error = cqe->res;
+	if (io_u->error != 0)
+		goto ret;
 
 	if (o->cmd_type == FIO_URING_CMD_NVME) {
 		data = FILE_ENG_DATA(io_u->file);
@@ -491,7 +605,53 @@ static struct io_u *fio_ioring_cmd_event(struct thread_data *td, int event)
 		}
 	}
 
+ret:
+	/*
+	 * If IO_U_F_DEVICE_ERROR is not set, io_u->error will be parsed as an
+	 * errno, otherwise device-specific error value (status value in CQE).
+	 */
+	if ((int)io_u->error > 0)
+		io_u_set(td, io_u, IO_U_F_DEVICE_ERROR);
+	else
+		io_u_clear(td, io_u, IO_U_F_DEVICE_ERROR);
+	io_u->error = abs((int)io_u->error);
 	return io_u;
+}
+
+static char *fio_ioring_cmd_errdetails(struct thread_data *td,
+				       struct io_u *io_u)
+{
+	struct ioring_options *o = td->eo;
+	unsigned int sct = (io_u->error >> 8) & 0x7;
+	unsigned int sc = io_u->error & 0xff;
+#define MAXERRDETAIL 1024
+#define MAXMSGCHUNK 128
+	char *msg, msgchunk[MAXMSGCHUNK];
+
+	if (!(io_u->flags & IO_U_F_DEVICE_ERROR))
+		return NULL;
+
+	msg = calloc(1, MAXERRDETAIL);
+	strcpy(msg, "io_uring_cmd: ");
+
+	snprintf(msgchunk, MAXMSGCHUNK, "%s: ", io_u->file->file_name);
+	strlcat(msg, msgchunk, MAXERRDETAIL);
+
+	if (o->cmd_type == FIO_URING_CMD_NVME) {
+		strlcat(msg, "cq entry status (", MAXERRDETAIL);
+
+		snprintf(msgchunk, MAXMSGCHUNK, "sct=0x%02x; ", sct);
+		strlcat(msg, msgchunk, MAXERRDETAIL);
+
+		snprintf(msgchunk, MAXMSGCHUNK, "sc=0x%02x)", sc);
+		strlcat(msg, msgchunk, MAXERRDETAIL);
+	} else {
+		/* Print status code in generic */
+		snprintf(msgchunk, MAXMSGCHUNK, "status=0x%x", io_u->error);
+		strlcat(msg, msgchunk, MAXERRDETAIL);
+	}
+
+	return msg;
 }
 
 static int fio_ioring_cqring_reap(struct thread_data *td, unsigned int events,
@@ -602,7 +762,8 @@ static enum fio_q_status fio_ioring_queue(struct thread_data *td,
 	if (ld->queued == ld->iodepth)
 		return FIO_Q_BUSY;
 
-	if (io_u->ddir == DDIR_TRIM && td->io_ops->flags & FIO_ASYNCIO_SYNC_TRIM) {
+	/* if async trim has been tried and failed, punt to sync */
+	if (io_u->ddir == DDIR_TRIM && ld->async_trim_fail) {
 		if (ld->queued)
 			return FIO_Q_BUSY;
 
@@ -1219,6 +1380,30 @@ static int fio_ioring_init(struct thread_data *td)
 		}
 	}
 
+	if (!strcmp(td->io_ops->name, "io_uring_cmd")) {
+		if (td_write(td)) {
+			switch (o->write_mode) {
+			case FIO_URING_CMD_WMODE_UNCOR:
+				ld->write_opcode = nvme_cmd_write_uncor;
+				break;
+			case FIO_URING_CMD_WMODE_ZEROES:
+				ld->write_opcode = nvme_cmd_write_zeroes;
+				break;
+			case FIO_URING_CMD_WMODE_VERIFY:
+				ld->write_opcode = nvme_cmd_verify;
+				break;
+			default:
+				ld->write_opcode = nvme_cmd_write;
+				break;
+			}
+		}
+
+		if (o->readfua)
+			ld->cdw12_flags[DDIR_READ] = 1 << 30;
+		if (o->writefua)
+			ld->cdw12_flags[DDIR_WRITE] = 1 << 30;
+	}
+
 	return 0;
 }
 
@@ -1341,6 +1526,14 @@ static int fio_ioring_cmd_open_file(struct thread_data *td, struct fio_file *f)
 			td_verror(td, EINVAL, "fio_ioring_cmd_open_file");
 			return 1;
 		}
+
+		if (o->write_mode != FIO_URING_CMD_WMODE_WRITE &&
+		    !td_write(td)) {
+			log_err("%s: 'readwrite=|rw=' has no write\n",
+					f->file_name);
+			td_verror(td, EINVAL, "fio_ioring_cmd_open_file");
+			return 1;
+		}
 	}
 	if (!ld || !o->registerfiles)
 		return generic_open_file(td, f);
@@ -1441,10 +1634,12 @@ static int fio_ioring_cmd_fetch_ruhs(struct thread_data *td, struct fio_file *f,
 				     struct fio_ruhs_info *fruhs_info)
 {
 	struct nvme_fdp_ruh_status *ruhs;
-	int bytes, ret, i;
+	int bytes, nr_ruhs, ret, i;
 
-	bytes = sizeof(*ruhs) + FDP_MAX_RUHS * sizeof(struct nvme_fdp_ruh_status_desc);
-	ruhs = scalloc(1, bytes);
+	nr_ruhs = fruhs_info->nr_ruhs;
+	bytes = sizeof(*ruhs) + fruhs_info->nr_ruhs * sizeof(struct nvme_fdp_ruh_status_desc);
+
+	ruhs = calloc(1, bytes);
 	if (!ruhs)
 		return -ENOMEM;
 
@@ -1453,18 +1648,18 @@ static int fio_ioring_cmd_fetch_ruhs(struct thread_data *td, struct fio_file *f,
 		goto free;
 
 	fruhs_info->nr_ruhs = le16_to_cpu(ruhs->nruhsd);
-	for (i = 0; i < fruhs_info->nr_ruhs; i++)
+	for (i = 0; i < nr_ruhs; i++)
 		fruhs_info->plis[i] = le16_to_cpu(ruhs->ruhss[i].pid);
 free:
-	sfree(ruhs);
+	free(ruhs);
 	return ret;
 }
 
 static struct ioengine_ops ioengine_uring = {
 	.name			= "io_uring",
 	.version		= FIO_IOOPS_VERSION,
-	.flags			= FIO_ASYNCIO_SYNC_TRIM | FIO_NO_OFFLOAD |
-					FIO_ASYNCIO_SETS_ISSUE_TIME,
+	.flags			= FIO_NO_OFFLOAD | FIO_ASYNCIO_SETS_ISSUE_TIME |
+				  FIO_ATOMICWRITES,
 	.init			= fio_ioring_init,
 	.post_init		= fio_ioring_post_init,
 	.io_u_init		= fio_ioring_io_u_init,
@@ -1496,6 +1691,7 @@ static struct ioengine_ops ioengine_uring_cmd = {
 	.commit			= fio_ioring_commit,
 	.getevents		= fio_ioring_getevents,
 	.event			= fio_ioring_cmd_event,
+	.errdetails		= fio_ioring_cmd_errdetails,
 	.cleanup		= fio_ioring_cleanup,
 	.open_file		= fio_ioring_cmd_open_file,
 	.close_file		= fio_ioring_cmd_close_file,

@@ -39,7 +39,6 @@ struct psyncv2_options {
 	void *pad;
 	unsigned int hipri;
 	unsigned int hipri_percentage;
-	unsigned int uncached;
 	unsigned int nowait;
 };
 
@@ -68,11 +67,7 @@ static struct fio_option options[] = {
 	{
 		.name	= "uncached",
 		.lname	= "Uncached",
-		.type	= FIO_OPT_INT,
-		.off1	= offsetof(struct psyncv2_options, uncached),
-		.help	= "Use RWF_UNCACHED for buffered read/writes",
-		.category = FIO_OPT_C_ENGINE,
-		.group	= FIO_OPT_G_INVALID,
+		.type	= FIO_OPT_SOFT_DEPRECATED,
 	},
 	{
 		.name	= "nowait",
@@ -172,8 +167,6 @@ static enum fio_q_status fio_pvsyncio2_queue(struct thread_data *td,
 	if (o->hipri &&
 	    (rand_between(&sd->rand_state, 1, 100) <= o->hipri_percentage))
 		flags |= RWF_HIPRI;
-	if (!td->o.odirect && o->uncached)
-		flags |= RWF_UNCACHED;
 	if (o->nowait)
 		flags |= RWF_NOWAIT;
 
@@ -182,9 +175,11 @@ static enum fio_q_status fio_pvsyncio2_queue(struct thread_data *td,
 
 	if (io_u->ddir == DDIR_READ)
 		ret = preadv2(f->fd, iov, 1, io_u->offset, flags);
-	else if (io_u->ddir == DDIR_WRITE)
+	else if (io_u->ddir == DDIR_WRITE) {
+		if (td->o.oatomic)
+			flags |= RWF_ATOMIC;
 		ret = pwritev2(f->fd, iov, 1, io_u->offset, flags);
-	else if (io_u->ddir == DDIR_TRIM) {
+	} else if (io_u->ddir == DDIR_TRIM) {
 		do_io_u_trim(td, io_u);
 		return FIO_Q_COMPLETED;
 	} else
@@ -483,7 +478,8 @@ static struct ioengine_ops ioengine_pvrw2 = {
 	.open_file	= generic_open_file,
 	.close_file	= generic_close_file,
 	.get_file_size	= generic_get_file_size,
-	.flags		= FIO_SYNCIO,
+	.flags		= FIO_SYNCIO |
+			  FIO_ATOMICWRITES,
 	.options	= options,
 	.option_struct_size	= sizeof(struct psyncv2_options),
 };

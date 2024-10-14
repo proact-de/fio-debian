@@ -585,6 +585,11 @@ the first device, `\\\\.\\PhysicalDrive1' for the second etc.
 Note: Windows and FreeBSD prevent write access to areas
 of the disk containing in-use data (e.g. filesystems).
 .P
+For HTTP and S3 access, specify a valid URL path or S3 key, respectively. 
+A filename for path-style S3 includes a bucket name (`/bucket/k/e.y') 
+while a virtual-hosted-style S3 filename (`/k/e.y') does not because its 
+bucket name is specified in \fBhttp_host\fR.
+.P
 The filename `\-' is a reserved name, meaning *stdin* or *stdout*. Which
 of the two depends on the read/write direction set.
 .RE
@@ -1794,8 +1799,9 @@ started on the result.
 .SS "I/O engine"
 .TP
 .BI ioengine \fR=\fPstr
-Defines how the job issues I/O to the file. The following types are defined:
-.RS
+fio supports 2 kinds of performance measurement: I/O and file/directory operation.
+
+I/O engines define how the job issues I/O to the file. The following types are defined:
 .RS
 .TP
 .B sync
@@ -1989,36 +1995,6 @@ ioengine `foo.o' in `/tmp'. The path can be either
 absolute or relative. See `engines/skeleton_external.c' in the fio source for
 details of writing an external I/O engine.
 .TP
-.B filecreate
-Simply create the files and do no I/O to them.  You still need to set
-\fBfilesize\fR so that all the accounting still occurs, but no actual I/O will be
-done other than creating the file.
-.TP
-.B filestat
-Simply do stat() and do no I/O to the file. You need to set 'filesize'
-and 'nrfiles', so that files will be created.
-This engine is to measure file lookup and meta data access.
-.TP
-.B filedelete
-Simply delete files by unlink() and do no I/O to the file. You need to set 'filesize'
-and 'nrfiles', so that files will be created.
-This engine is to measure file delete.
-.TP
-.B dircreate
-Simply create the directories and do no I/O to them.  You still need to set
-\fBfilesize\fR so that all the accounting still occurs, but no actual I/O will be
-done other than creating the directories.
-.TP
-.B dirstat
-Simply do stat() and do no I/O to the directory. You need to set 'filesize'
-and 'nrfiles', so that directories will be created.
-This engine is to measure directory lookup and meta data access.
-.TP
-.B dirdelete
-Simply delete directories by unlink() and do no I/O to the directory. You need to set 'filesize'
-and 'nrfiles', so that directories will be created.
-This engine is to measure directory delete.
-.TP
 .B libpmem
 Read and write using mmap I/O to a file on a filesystem
 mounted with DAX on a persistent memory device through the PMDK
@@ -2079,6 +2055,55 @@ instance is used per process, so all jobs setting option \fBthread\fR will share
 a single instance (with one queue per thread) and must specify compatible
 options. Note that some drivers don't allow several instances to access the same
 device or file simultaneously, but allow it for threads.
+.TP
+.RE
+.P
+File/directory operation engines define how the job operates file or directory.
+The following types are defined:
+.RS
+.TP
+.B filecreate
+Simply create the files and do no I/O to them.  You still need to
+set  \fBfilesize\fP so that all the accounting still occurs, but no
+actual I/O will be done other than creating the file.
+Example job file: filecreate-ioengine.fio.
+.TP
+.B filestat
+Simply do stat() and do no I/O to the file. You need to set \fBfilesize\fP
+and \fBnrfiles\fP, so that files will be created.
+This engine is to measure file lookup and meta data access.
+Example job file: filestat-ioengine.fio.
+.TP
+.B filedelete
+Simply delete the files by unlink() and do no I/O to them. You need to set \fBfilesize\fP
+and \fBnrfiles\fP, so that the files will be created.
+This engine is to measure file delete.
+Example job file: filedelete-ioengine.fio.
+.TP
+.B dircreate
+Simply create the directories and do no I/O to them.  You still need to
+set  \fBfilesize\fP so that all the accounting still occurs, but no
+actual I/O will be done other than creating the directories.
+Example job file: dircreate-ioengine.fio.
+.TP
+.B dirstat
+Simply do stat() and do no I/O to the directories. You need to set \fBfilesize\fP
+and \fBnrfiles\fP, so that directories will be created.
+This engine is to measure directory lookup and meta data access.
+Example job file: dirstat-ioengine.fio.
+.TP
+.B dirdelete
+Simply delete the directories by rmdir() and do no I/O to them. You need to set \fBfilesize\fP
+and \fBnrfiles\fP, so that the directories will be created.
+This engine is to measure directory delete.
+.TP
+.RE
+.P
+For file and directory operation engines, there is no I/O throughput, then the statistics \
+data in report have different meanings. The meaningful output indexes are: \fBiops\fP and \fBclat\fP. \
+\fBbw\fP is meaningless. Refer to section: "Interpreting the output" for more details.
+.RE
+.P
 .SS "I/O engine specific parameters"
 In addition, there are some parameters which are only valid when a specific
 \fBioengine\fR is in use. These are used identically to normal parameters,
@@ -2241,10 +2266,42 @@ cached data. Currently the RWF_NOWAIT flag does not supported for cached write.
 For direct I/O, requests will only succeed if cache invalidation isn't required,
 file blocks are fully allocated and the disk request could be issued immediately.
 .TP
+.BI (pvsync2,libaio,io_uring)atomic \fR=\fPbool
+This option means that writes are issued with torn-write protection, meaning
+that for a power fail or kernel crash, all or none of the data from the write
+will be stored, but never a mix of old and new data. Torn-write protection is
+also known as atomic writes.
+
+This option sets the RWF_ATOMIC flag (supported from the 6.11 Linux kernel) on
+a per-IO basis.
+
+Writes with RWF_ATOMIC set will be rejected by the kernel when the file does
+not support torn-write protection. To learn a file's torn-write limits, issue
+statx with STATX_WRITE_ATOMIC.
+.TP
 .BI (io_uring_cmd,xnvme)fdp \fR=\fPbool
 Enable Flexible Data Placement mode for write commands.
 .TP
-.BI (io_uring_cmd,xnvme)fdp_pli_select \fR=\fPstr
+.BI (io_uring_cmd,xnvme)dataplacement \fR=\fPstr
+Specifies the data placement directive type to use for write commands. The
+following types are supported:
+.RS
+.RS
+.TP
+.B none
+Do not use a data placement directive. This is the default.
+.TP
+.B fdp
+Use Flexible Data placement directives for write commands. This is equivalent
+to specifying \fBfdp\fR=1.
+.TP
+.B streams
+Use Streams directives for write commands.
+.TP
+.RE
+.RE
+.TP
+.BI (io_uring_cmd,xnvme)plid_select=str, fdp_pli_select \fR=\fPstr
 Defines how fio decides which placement ID to use next. The following types
 are defined:
 .RS
@@ -2255,16 +2312,53 @@ Choose a placement ID at random (uniform).
 .TP
 .B roundrobin
 Round robin over available placement IDs. This is the default.
+.TP
+.B scheme
+Choose a placement ID (index) based on the scheme file defined by
+the option \fBdp_scheme\fP.
 .RE
 .P
-The available placement ID index/indices is defined by \fBfdp_pli\fR option.
+The available placement ID (indices) are defined by \fBplids\fR or
+\fBfdp_pli\fR option except for the case of \fBscheme\fP.
 .RE
 .TP
-.BI (io_uring_cmd,xnvme)fdp_pli \fR=\fPstr
-Select which Placement ID Index/Indicies this job is allowed to use for writes.
-By default, the job will cycle through all available Placement IDs, so use this
-to isolate these identifiers to specific jobs. If you want fio to use placement
-identifier only at indices 0, 2 and 5 specify, you would set `fdp_pli=0,2,5`.
+.BI (io_uring_cmd,xnvme)plids=str, fdp_pli \fR=\fPstr
+Select which Placement ID Indices (FDP) or Placement IDs (streams) this job is
+allowed to use for writes. This option accepts a comma-separated list of values
+or ranges (e.g., 1,2-4,5,6-8).
+
+For FDP by default, the job will cycle through all available Placement IDs, so
+use this option to be selective. The values specified here are array indices
+for the list of placement IDs returned by the nvme-cli command `nvme fdp
+status'. If you want fio to use FDP placement identifiers only at indices 0, 2
+and 5, set `plids=0,2,5'.
+
+For streams this should be a list of Stream IDs.
+.TP
+.BI (io_uring_cmd,xnvme)\fR\fBdp_scheme\fP=str
+Defines which placement ID (index) to be selected based on offset(LBA) range.
+The file should contains one or more scheme entries in the following format:
+.sp
+.RS
+.RS
+0, 10737418240, 0
+.br
+10737418240, 21474836480, 1
+.br
+21474836480, 32212254720, 2
+.br
+\&...
+.RE
+.sp
+Each line, a scheme entry, contains start offset, end offset, and placement ID
+(index) separated by comma(,). If the write offset is within the range of a certain
+scheme entry(start offset ≤ offset < end offset), the corresponding placement ID
+(index) will be selected. If the write offset belongs to multiple scheme entries,
+the first matched scheme entry will be applied. If the offset is not within any range
+of scheme entry, dspec field will be set to 0, default RUH. (Caution: In case of
+multiple devices in a job, all devices of the job will be affected by the scheme. If
+this option is specified, the option \fBplids\fP or \fBfdp_pli\fP will be ignored.)
+.RE
 .TP
 .BI (io_uring_cmd,xnvme)md_per_io_size \fR=\fPint
 Size in bytes for separate metadata buffer per IO. Default: 0.
@@ -2350,7 +2444,7 @@ The TCP or UDP port to bind to or connect to. If this is used with
 this will be the starting port number since fio will use a range of
 ports.
 .TP
-.BI (rdma,librpma_*)port \fR=\fPint
+.BI (rdma)port \fR=\fPint
 The port to use for RDMA-CM communication. This should be the same
 value on the client and the server side.
 .TP
@@ -2358,16 +2452,6 @@ value on the client and the server side.
 The hostname or IP address to use for TCP, UDP or RDMA-CM based I/O.
 If the job is a TCP listener or UDP reader, the hostname is not used
 and must be omitted unless it is a valid UDP multicast address.
-.TP
-.BI (librpma_*)serverip \fR=\fPstr
-The IP address to be used for RDMA-CM based I/O.
-.TP
-.BI (librpma_*_server)direct_write_to_pmem \fR=\fPbool
-Set to 1 only when Direct Write to PMem from the remote host is possible. Otherwise, set to 0.
-.TP
-.BI (librpma_*_server)busy_wait_polling \fR=\fPbool
-Set to 0 to wait for completion instead of busy-wait polling completion.
-Default: 1.
 .TP
 .BI (netsplice,net)interface \fR=\fPstr
 The IP address of the network interface used to send or receive UDP
@@ -2478,8 +2562,10 @@ Touching all objects affects ceph caches and likely impacts test results.
 Enabled by default.
 .TP
 .BI (http)http_host \fR=\fPstr
-Hostname to connect to. For S3, this could be the bucket name. Default
-is \fBlocalhost\fR
+Hostname to connect to.  HTTP port 80 is used automatically when the value 
+of the \fBhttps\fP parameter is \fRoff\fP, and HTTPS port 443 if it is \Ron\fP.  
+A virtual-hosted-style S3 hostname starts with a bucket name, while a 
+path-style S3 hostname does not.  Default is \fBlocalhost\fR.
 .TP
 .BI (http)http_user \fR=\fPstr
 Username for HTTP authentication.
@@ -2561,13 +2647,47 @@ that "owns" the device also needs to support hipri (also known as iopoll
 and mq_poll). The MegaRAID driver is an example of a SCSI LLD.
 Default: clear (0) which does normal (interrupted based) IO.
 .TP
-.BI (sg)readfua \fR=\fPbool
+.BI (sg, io_uring_cmd)readfua \fR=\fPbool
 With readfua option set to 1, read operations include the force
 unit access (fua) flag. Default: 0.
 .TP
-.BI (sg)writefua \fR=\fPbool
+.BI (sg, io_uring_cmd)writefua \fR=\fPbool
 With writefua option set to 1, write operations include the force
 unit access (fua) flag. Default: 0.
+.TP
+.BI (io_uring_cmd)write_mode \fR=\fPstr
+Specifies the type of write operation.  Defaults to 'write'.
+.RS
+.RS
+.TP
+.B write
+Use Write commands for write operations
+.TP
+.B uncor
+Use Write Uncorrectable commands for write operations
+.TP
+.B zeroes
+Use Write Zeroes commands for write operations
+.TP
+.B verify
+Use Verify commands for write operations
+.TP
+.RE
+.RE
+.TP
+.BI (io_uring_cmd)verify_mode \fR=\fPstr
+Specifies the type of command to be used in the verification phase. Defaults to 'read'.
+.RS
+.RS
+.TP
+.B read
+Use Read commands for data verification
+.TP
+.B compare
+Use Compare commands for data verification
+.TP
+.RE
+.RE
 .TP
 .BI (sg)sg_write_mode \fR=\fPstr
 Specify the type of write commands to issue. This option can take multiple
@@ -3620,6 +3740,14 @@ Enable experimental verification. Standard verify records I/O metadata for
 later use during the verification phase. Experimental verify instead resets the
 file after the write phase and then replays I/Os for the verification phase.
 .TP
+.BI verify_write_sequence \fR=\fPbool
+Verify the header write sequence number. In a scenario with multiple jobs,
+verification of the write sequence number may fail. Disabling this option
+will mean that write sequence number checking is skipped. Doing that can be
+useful for testing atomic writes, as it means that checksum verification can
+still be attempted. For when \fBatomic\fR is enabled, checksum verification
+is expected to succeed (while write sequence checking can still fail).
+.TP
 .BI trim_percentage \fR=\fPint
 Number of verify blocks to discard/trim.
 .TP
@@ -3840,9 +3968,16 @@ entry as well as the other data values. Defaults to 0 meaning that
 offsets are not present in logs. Also see \fBLOG FILE FORMATS\fR section.
 .TP
 .BI log_prio \fR=\fPbool
-If this is set, the iolog options will include the I/O priority for the I/O
-entry as well as the other data values. Defaults to 0 meaning that
-I/O priorities are not present in logs. Also see \fBLOG FILE FORMATS\fR section.
+If this is set, the `Command priority` field in \fBLOG FILE FORMATS\fR
+shows the priority value and the IO priority class of the command.
+Otherwise, the field shows if the command has the highest RT priority
+class or not. Also see \fBLOG FILE FORMATS\fR section.
+.TP
+.BI log_issue_time \fR=\fPbool
+If this is set, the iolog options will include the command issue time for the
+I/O entry as well as the other data values. Defaults to 0 meaning that command
+issue times are not present in logs. Also see \fBLOG FILE FORMATS\fR section.
+This option shall be set together with \fBwrite_lat_log\fR and \fBlog_offset\fR.
 .TP
 .BI log_compression \fR=\fPint
 If this is set, fio will compress the I/O logs as it goes, to keep the
@@ -4236,6 +4371,24 @@ submission to completion of the I/O pieces. For sync I/O, clat will
 usually be equal (or very close) to 0, as the time from submit to
 complete is basically just CPU time (I/O has already been done, see slat
 explanation).
+
+For file and directory operation engines, \fBclat\fP denotes the time
+to complete one file or directory operation.
+.RS
+.TP
+\fBfilecreate engine\fP:\tthe time cost to create a new file
+.TP
+\fBfilestat engine\fP:\tthe time cost to look up an existing file
+.TP
+\fBfiledelete engine\fP:\tthe time cost to delete a file
+.TP
+\fBdircreate engine\fP:\tthe time cost to create a new directory
+.TP
+\fBdirstat engine\fP:\tthe time cost to look up an existing directory
+.TP
+\fBdirdelete engine\fP:\tthe time cost to delete a directory
+.TP
+.RE
 .TP
 .B lat
 Total latency. Same names as slat and clat, this denotes the time from
@@ -4250,12 +4403,33 @@ xlat stats, but also includes the number of samples taken (\fIsamples\fR) and an
 approximate percentage of total aggregate bandwidth this thread received in its
 group (\fIper\fR). This last value is only really useful if the threads in this
 group are on the same disk, since they are then competing for disk access.
+
+For file and directory operation engines, \fBbw\fR is meaningless.
 .TP
 .B iops
 IOPS statistics based on measurements from discrete intervals.
 For details see the description for \fBbw\fR above. See
 \fBiopsavgtime\fR to control the duration of the intervals.
 Same values reported here as for \fBbw\fR except for percentage.
+
+For file and directory operation engines, \fBiops\fP is the most
+fundamental index to denote the performance.
+It means how many files or directories can be operated per second.
+.RS
+.TP
+\fBfilecreate engine\fP:\tnumber of files can be created per second
+.TP
+\fBfilestat engine\fP:\tnumber of files can be looked up per second
+.TP
+\fBfiledelete engine\fP:\tnumber of files can be deleted per second
+.TP
+\fBdircreate engine\fP:\tnumber of directories can be created per second
+.TP
+\fBdirstat engine\fP:\tnumber of directories can be looked up per second
+.TP
+\fBdirdelete engine\fP:\tnumber of directories can be deleted per second
+.TP
+.RE
 .TP
 .B lat (nsec/usec/msec)
 The distribution of I/O completion latencies. This is the time from when
@@ -4800,7 +4974,7 @@ and IOPS. The logs share a common format, which looks like this:
 .RS
 .P
 time (msec), value, data direction, block size (bytes), offset (bytes),
-command priority
+command priority, issue time (nsec)
 .RE
 .P
 `Time' for the log entry is always in milliseconds. The `value' logged depends
@@ -4843,6 +5017,11 @@ number with the lowest 13 bits indicating the priority value (\fBprio\fR and
 \fBcmdprio\fR options) and the highest 3 bits indicating the IO priority class
 (\fBprioclass\fR and \fBcmdprio_class\fR options).
 .P
+The entry's `issue time` is the command issue time in nanoseconds. The logging
+of the issue time can be toggled with \fBlog_issue_time\fR. This field has valid
+values in completion latency log file (clat), or submit latency log file (slat).
+The field has value 0 in other log files.
+.P
 Fio defaults to logging every individual I/O but when windowed logging is set
 through \fBlog_avg_msec\fR, either the average (by default), the maximum
 (\fBlog_window_value\fR is set to max) `value' seen over the specified period of
@@ -4852,12 +5031,12 @@ takes this form:
 .RS
 .P
 time (msec), value, value1, data direction, block size (bytes), offset (bytes),
-command priority
+command priority, issue time (nsec)
 .RE
 .P
 Each `data direction' seen within the window period will aggregate its values
-in a separate row. Further, when using windowed logging the `block size' and
-`offset' entries will always contain 0.
+in a separate row. Further, when using windowed logging the `block size',
+`offset' and `issue time` entries will always contain 0.
 .SH CLIENT / SERVER
 Normally fio is invoked as a stand-alone application on the machine where the
 I/O workload should be generated. However, the backend and frontend of fio can

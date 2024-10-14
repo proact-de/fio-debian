@@ -47,6 +47,7 @@ import time
 import shutil
 import logging
 import argparse
+import re
 from pathlib import Path
 from statsmodels.sandbox.stats.runs import runstest_1samp
 from fiotestlib import FioExeTest, FioJobFileTest, run_fio_tests
@@ -553,6 +554,51 @@ class FioJobFileTest_t0029(FioJobFileTest):
         if self.json_data['jobs'][1]['read']['io_kbytes'] != 8:
             self.passed = False
 
+class FioJobFileTest_LogFileFormat(FioJobFileTest):
+    """Test log file format"""
+    def setup(self, *args, **kws):
+        super().setup(*args, **kws)
+        self.patterns = {}
+
+    def check_result(self):
+        super().check_result()
+
+        if not self.passed:
+            return
+
+        for logfile in self.patterns.keys():
+            file_path = os.path.join(self.paths['test_dir'], logfile)
+            with open(file_path, "r") as f:
+                line = f.readline()
+                if not re.match(self.patterns[logfile], line):
+                    self.passed = False
+                    self.failure_reason = "wrong log file format: " + logfile
+                    return
+
+class FioJobFileTest_t0033(FioJobFileTest_LogFileFormat):
+    """Test log file format"""
+    def setup(self, *args, **kws):
+        super().setup(*args, **kws)
+        self.patterns = {
+            'log_bw.1.log': '\\d+, \\d+, \\d+, \\d+, 0x[\\da-f]+\\n',
+            'log_clat.2.log': '\\d+, \\d+, \\d+, \\d+, 0, \\d+\\n',
+            'log_iops.3.log': '\\d+, \\d+, \\d+, \\d+, \\d+, 0x[\\da-f]+\\n',
+            'log_iops.4.log': '\\d+, \\d+, \\d+, \\d+, 0, 0, \\d+\\n',
+        }
+
+class FioJobFileTest_t0034(FioJobFileTest_LogFileFormat):
+    """Test log file format"""
+    def setup(self, *args, **kws):
+        super().setup(*args, **kws)
+        self.patterns = {
+            'log_clat.1.log': '\\d+, \\d+, \\d+, \\d+, \\d+, \\d+, \\d+\\n',
+            'log_slat.1.log': '\\d+, \\d+, \\d+, \\d+, \\d+, \\d+, \\d+\\n',
+            'log_lat.1.log': '\\d+, \\d+, \\d+, \\d+, \\d+, \\d+, 0\\n',
+            'log_clat.2.log': '\\d+, \\d+, \\d+, \\d+, 0, 0, \\d+, 0\\n',
+            'log_bw.3.log': '\\d+, \\d+, \\d+, \\d+, \\d+, \\d+, 0\\n',
+            'log_iops.3.log': '\\d+, \\d+, \\d+, \\d+, \\d+, \\d+, 0\\n',
+        }
+
 class FioJobFileTest_iops_rate(FioJobFileTest):
     """Test consists of fio test job t0011
     Confirm that job0 iops == 1000
@@ -877,6 +923,36 @@ TEST_LIST = [
         'pre_job':          't0031-pre.fio',
         'pre_success':      SUCCESS_DEFAULT,
         'requirements':     [Requirements.linux, Requirements.libaio],
+    },
+    {
+        'test_id':          33,
+        'test_class':       FioJobFileTest_t0033,
+        'job':              't0033.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'pre_success':      SUCCESS_DEFAULT,
+        'requirements':     [Requirements.linux, Requirements.libaio],
+    },
+    {
+        'test_id':          34,
+        'test_class':       FioJobFileTest_t0034,
+        'job':              't0034.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'pre_success':      SUCCESS_DEFAULT,
+        'requirements':     [Requirements.linux, Requirements.libaio],
+    },
+    {
+        'test_id':          35,
+        'test_class':       FioJobFileTest,
+        'job':              't0035.fio',
+        'success':          SUCCESS_DEFAULT,
+        'pre_job':          None,
+        'pre_success':      None,
+        'pre_success':      SUCCESS_DEFAULT,
+        'requirements':     [],
     },
     {
         'test_id':          1000,
