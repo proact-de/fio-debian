@@ -120,10 +120,6 @@ Copyright: 2017 Nippon Telegraph and Telephone Corporation
            2018-2021, Intel Corporation
 License: GPL-2
 
-Files: engines/librpma_apm.c
-Copyright: Copyright 2020-2021, Intel Corporation
-License: GPL-2
-
 Files: engines/librpma_fio_pmem.h engines/librpma_fio_pmem2.h
 Copyright: Copyright 2022, Intel Corporation
 License: GPL-2
