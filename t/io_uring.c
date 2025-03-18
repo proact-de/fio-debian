@@ -137,6 +137,7 @@ static int buffered = 0;	/* use buffered IO, not O_DIRECT */
 static int sq_thread_poll = 0;	/* use kernel submission/poller thread */
 static int sq_thread_cpu = -1;	/* pin above thread to this CPU */
 static int do_nop = 0;		/* no-op SQ ring commands */
+static int use_files = 1;
 static int nthreads = 1;
 static int stats = 0;		/* generate IO stats */
 static int aio = 0;		/* use libaio */
@@ -398,19 +399,22 @@ static void add_stat(struct submitter *s, int clock_index, int nr)
 
 static int io_uring_register_buffers(struct submitter *s)
 {
-	if (do_nop)
-		return 0;
+	int ret;
 
-	return syscall(__NR_io_uring_register, s->ring_fd,
-			IORING_REGISTER_BUFFERS, s->iovecs, roundup_pow2(depth));
+	/*
+	 * All iovecs are filled in case of readv, but it's all contig
+	 * from vec0. Just register a single buffer for all buffers.
+	 */
+	s->iovecs[0].iov_len = bs * roundup_pow2(depth);
+	ret = syscall(__NR_io_uring_register, s->ring_fd,
+			IORING_REGISTER_BUFFERS, s->iovecs, 1);
+	s->iovecs[0].iov_len = bs;
+	return ret;
 }
 
 static int io_uring_register_files(struct submitter *s)
 {
 	int i;
-
-	if (do_nop)
-		return 0;
 
 	s->fds = calloc(s->nr_files, sizeof(__s32));
 	for (i = 0; i < s->nr_files; i++) {
@@ -539,12 +543,23 @@ static void init_io(struct submitter *s, unsigned index)
 	struct io_uring_sqe *sqe = &s->sqes[index];
 	struct file *f;
 
+	f = get_next_file(s);
+
 	if (do_nop) {
+		sqe->rw_flags = IORING_NOP_FILE;
+		if (register_files) {
+			sqe->fd = f->fixed_fd;
+			sqe->rw_flags |= IORING_NOP_FIXED_FILE;
+		} else {
+			sqe->fd = f->real_fd;
+		}
+		if (fixedbufs)
+			sqe->rw_flags |= IORING_NOP_FIXED_BUFFER;
+		sqe->rw_flags |= IORING_NOP_INJECT_RESULT;
+		sqe->len = bs;
 		sqe->opcode = IORING_OP_NOP;
 		return;
 	}
-
-	f = get_next_file(s);
 
 	if (register_files) {
 		sqe->flags = IOSQE_FIXED_FILE;
@@ -557,7 +572,7 @@ static void init_io(struct submitter *s, unsigned index)
 		sqe->opcode = IORING_OP_READ_FIXED;
 		sqe->addr = (unsigned long) s->iovecs[index].iov_base;
 		sqe->len = bs;
-		sqe->buf_index = index;
+		sqe->buf_index = 0;
 	} else if (!vectored) {
 		sqe->opcode = IORING_OP_READ;
 		sqe->addr = (unsigned long) s->iovecs[index].iov_base;
@@ -613,7 +628,7 @@ static void init_io_pt(struct submitter *s, unsigned index)
 	cmd->data_len = bs;
 	if (fixedbufs) {
 		sqe->uring_cmd_flags = IORING_URING_CMD_FIXED;
-		sqe->buf_index = index;
+		sqe->buf_index = 0;
 	}
 	cmd->nsid = f->nsid;
 	cmd->opcode = 2;
@@ -710,7 +725,7 @@ static int reap_events_uring(struct submitter *s)
 		if (head == tail)
 			break;
 		cqe = &ring->cqes[head & cq_ring_mask];
-		if (!do_nop) {
+		if (use_files) {
 			int fileno = cqe->user_data & 0xffffffff;
 
 			f = &s->files[fileno];
@@ -991,7 +1006,7 @@ static void *allocate_mem(struct submitter *s, int size)
 		return numa_alloc_onnode(size, s->numa_node);
 #endif
 
-	if (posix_memalign(&buf, t_io_uring_page_size, bs)) {
+	if (posix_memalign(&buf, t_io_uring_page_size, size)) {
 		printf("failed alloc\n");
 		return NULL;
 	}
@@ -1003,10 +1018,12 @@ static int submitter_init(struct submitter *s)
 {
 	int i, nr_batch, err;
 	static int init_printed;
+	void *mem, *ptr;
 	char buf[80];
+
 	s->tid = gettid();
-	printf("submitter=%d, tid=%d, file=%s, nfiles=%d, node=%d\n", s->index, s->tid,
-							s->filename, s->nr_files, s->numa_node);
+	printf("submitter=%d, tid=%d, file=%s, nfiles=%d, node=%d\n", s->index,
+				s->tid, s->filename, s->nr_files, s->numa_node);
 
 	set_affinity(s);
 
@@ -1016,14 +1033,11 @@ static int submitter_init(struct submitter *s)
 	for (i = 0; i < MAX_FDS; i++)
 		s->files[i].fileno = i;
 
-	for (i = 0; i < roundup_pow2(depth); i++) {
-		void *buf;
-
-		buf = allocate_mem(s, bs);
-		if (!buf)
-			return -1;
-		s->iovecs[i].iov_base = buf;
+	mem = allocate_mem(s, bs * roundup_pow2(depth));
+	for (i = 0, ptr = mem; i < roundup_pow2(depth); i++) {
+		s->iovecs[i].iov_base = ptr;
 		s->iovecs[i].iov_len = bs;
+		ptr += bs;
 	}
 
 	if (use_sync) {
@@ -1683,7 +1697,7 @@ int main(int argc, char *argv[])
 	j = 0;
 	i = optind;
 	nfiles = argc - i;
-	if (!do_nop) {
+	if (use_files) {
 		if (!nfiles) {
 			printf("No files specified\n");
 			usage(argv[0], 1);
@@ -1696,7 +1710,7 @@ int main(int argc, char *argv[])
 			threads_rem = nthreads - threads_per_f * nfiles;
 		}
 	}
-	while (!do_nop && i < argc) {
+	while (use_files && i < argc) {
 		int k, limit;
 
 		memset(&f, 0, sizeof(f));

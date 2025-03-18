@@ -19,6 +19,11 @@ SUCCESS_DEFAULT = {
     'stderr_empty': True,
     'timeout': 600,
     }
+SUCCESS_LONG = {
+    'zero_return': True,
+    'stderr_empty': True,
+    'timeout': 1800,
+    }
 SUCCESS_NONZERO = {
     'zero_return': False,
     'stderr_empty': False,
@@ -101,7 +106,7 @@ class Requirements():
         Requirements._unittests = os.path.exists(unittest_path)
 
         Requirements._cpucount4 = multiprocessing.cpu_count() >= 4
-        Requirements._nvmecdev = args.nvmecdev
+        Requirements._nvmecdev = args.nvmecdev if hasattr(args, 'nvmecdev') else False
 
         req_list = [
                 Requirements.linux,

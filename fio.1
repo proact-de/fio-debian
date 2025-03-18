@@ -955,7 +955,9 @@ modifier with a value of 8. If the suffix is used with a sequential I/O
 pattern, then the `<nr>' value specified will be added to the generated
 offset for each I/O turning sequential I/O into sequential I/O with holes.
 For instance, using `rw=write:4k' will skip 4k for every write. Also see
-the \fBrw_sequencer\fR option.
+the \fBrw_sequencer\fR option. If this is used with \fBverify\fR then
+\fBverify_header_seed\fR option will be disabled, unless its explicitly
+enabled.
 .RE
 .TP
 .BI rw_sequencer \fR=\fPstr
@@ -1368,11 +1370,11 @@ Normally fio will cover every block of the file when doing random I/O. If
 this option is given, fio will just get a new random offset without looking
 at past I/O history. This means that some blocks may not be read or written,
 and that some blocks may be read/written more than once. If this option is
-used with \fBverify\fR and multiple blocksizes (via \fBbsrange\fR),
+used with \fBverify\fR then \fBverify_header_seed\fR will be disabled. If this
+option is used with \fBverify\fR and multiple blocksizes (via \fBbsrange\fR),
 only intact blocks are verified, i.e., partially-overwritten blocks are
-ignored.  With an async I/O engine and an I/O depth > 1, it is possible for
-the same block to be overwritten, which can cause verification errors.  Either
-do not use norandommap in this case, or also use the lfsr random generator.
+ignored. With an async I/O engine and an I/O depth > 1, header write sequence
+number verification will be disabled. See \fBverify_write_sequence\fR.
 .TP
 .BI softrandommap \fR=\fPbool
 See \fBnorandommap\fR. If fio runs with the random block map enabled and
@@ -2361,7 +2363,9 @@ this option is specified, the option \fBplids\fP or \fBfdp_pli\fP will be ignore
 .RE
 .TP
 .BI (io_uring_cmd,xnvme)md_per_io_size \fR=\fPint
-Size in bytes for separate metadata buffer per IO. Default: 0.
+Size in bytes for separate metadata buffer per IO. For io_uring_cmd these
+buffers are allocated using malloc regardless of what is set for \fBiomem\fR.
+Default: 0.
 .TP
 .BI (io_uring_cmd,xnvme)pi_act \fR=\fPint
 Action to take when nvme namespace is formatted with protection information.
@@ -2684,7 +2688,9 @@ Specifies the type of command to be used in the verification phase. Defaults to 
 Use Read commands for data verification
 .TP
 .B compare
-Use Compare commands for data verification
+Use Compare commands for data verification.  This option is only valid with
+specific pattern(s), which means it *must* be given with `verify=pattern` and
+`verify_pattern=<pattern>`.
 .TP
 .RE
 .RE
@@ -3540,7 +3546,9 @@ Do not perform specified workload, only verify data still matches previous
 invocation of this workload. This option allows one to check data multiple
 times at a later date without overwriting it. This option makes sense only
 for workloads that write data, and does not support workloads with the
-\fBtime_based\fR option set.
+\fBtime_based\fR option set. Options \fBverify_write_sequence\fR and
+\fBverify_header_seed\fR will be disabled in this mode, unless they are
+explicitly enabled.
 .TP
 .BI do_verify \fR=\fPbool
 Run the verify phase after a write phase. Only valid if \fBverify\fR is
@@ -3551,8 +3559,9 @@ If writing to a file, fio can verify the file contents after each iteration
 of the job. Each verification method also implies verification of special
 header, which is written to the beginning of each block. This header also
 includes meta information, like offset of the block, block number, timestamp
-when block was written, etc. \fBverify\fR can be combined with
-\fBverify_pattern\fR option. The allowed values are:
+when block was written, initial seed value used to generate the buffer
+contents, etc. \fBverify\fR can be combined with \fBverify_pattern\fR option.
+The allowed values are:
 .RS
 .RS
 .TP
@@ -3629,10 +3638,17 @@ Only pretend to verify. Useful for testing internals with
 .RE
 .P
 This option can be used for repeated burn\-in tests of a system to make sure
-that the written data is also correctly read back. If the data direction
-given is a read or random read, fio will assume that it should verify a
-previously written file. If the data direction includes any form of write,
-the verify will be of the newly written data.
+that the written data is also correctly read back.
+.P
+If the data direction given is a read or random read, fio will assume that it
+should verify a previously written file. In this scenario fio will not verify
+the block number written in the header. The header seed won't be verified,
+unless its explicitly requested by setting \fBverify_header_seed\fR option.
+Note in this scenario the header seed check will only work if the read
+invocation exactly matches the original write invocation.
+.P
+If the data direction includes any form of write, the verify will be of the
+newly written data.
 .P
 To avoid false verification errors, do not use the norandommap option when
 verifying data with async I/O engines and I/O depths > 1.  Or use the
@@ -3642,7 +3658,8 @@ same offset with multiple outstanding I/Os.
 .TP
 .BI verify_offset \fR=\fPint
 Swap the verification header with data somewhere else in the block before
-writing. It is swapped back before verifying.
+writing. It is swapped back before verifying. This should be within the range
+of \fBverify_interval\fR.
 .TP
 .BI verify_interval \fR=\fPint
 Write the verification header at a finer granularity than the
@@ -3748,6 +3765,13 @@ useful for testing atomic writes, as it means that checksum verification can
 still be attempted. For when \fBatomic\fR is enabled, checksum verification
 is expected to succeed (while write sequence checking can still fail).
 .TP
+.BI verify_header_seed \fR=\fPbool
+Verify the header seed value which was used to generate the buffer contents.
+In certain scenarios with read / verify only workloads, when \fBnorandommap\fR
+is enabled, with offset modifiers (refer options \fBreadwrite\fR and
+\fBrw_sequencer\fR), etc verification of header seed may fail. Disabling this
+option will mean that header seed checking is skipped. Defaults to true.
+.TP
 .BI trim_percentage \fR=\fPint
 Number of verify blocks to discard/trim.
 .TP
@@ -3844,6 +3868,10 @@ have a natural group-level equivalent. Examples include \fBkb_base\fR,
 \fBunit_base\fR, \fBsig_figs\fR, \fBthread_number\fR, \fBpid\fR, and
 \fBjob_start\fR. For these properties, the values for the first job are
 recorded for the group.
+.P
+Also, options like \fBpercentile_list\fR and \fBunified_rw_reporting\fR should
+be consistent among the jobs in a reporting group. Having options like these
+vary across the jobs in a reporting group is an unsupported configuration.
 .RE
 .TP
 .BI new_group
@@ -5142,8 +5170,17 @@ containing two hostnames `h1' and `h2' with IP addresses 192.168.10.120 and
 .PD
 .RE
 .P
+This behavior can be disabled by the \fBunique_filename\fR option.
+.P
 Terse output in client/server mode will differ slightly from what is produced
 when fio is run in stand-alone mode. See the terse output section for details.
+.P
+Also, if one fio invocation runs workloads on multiple servers, fio will
+provide at the end an aggregate summary report for all workloads. This
+aggregate summary report assumes that options affecting reporting like
+\fBunified_rw_reporting\fR and \fBpercentile_list\fR are identical across all
+the jobs summarized. Having different values for these options is an
+unsupported configuration.
 .SH AUTHORS
 .B fio
 was written by Jens Axboe <axboe@kernel.dk>.
