@@ -537,6 +537,7 @@ static int verify_io_u_sha512(struct verify_header *hdr, struct vcont *vc)
 
 	fio_sha512_init(&sha512_ctx);
 	fio_sha512_update(&sha512_ctx, p, hdr->len - hdr_size(vc->td, hdr));
+	fio_sha512_final(&sha512_ctx);
 
 	if (!memcmp(vh->sha512, sha512_ctx.buf, sizeof(sha512)))
 		return 0;
@@ -832,7 +833,7 @@ static int verify_header(struct io_u *io_u, struct thread_data *td,
 			hdr->len, hdr_len);
 		goto err;
 	}
-	if (hdr->rand_seed != io_u->rand_seed) {
+	if (td->o.verify_header_seed && (hdr->rand_seed != io_u->rand_seed)) {
 		log_err("verify: bad header rand_seed %"PRIu64
 			", wanted %"PRIu64,
 			hdr->rand_seed, io_u->rand_seed);
@@ -932,14 +933,6 @@ int verify_io_u(struct thread_data *td, struct io_u **io_u_ptr)
 		if (td->o.verify_offset)
 			memswp(p, p + td->o.verify_offset, header_size);
 		hdr = p;
-
-		/*
-		 * Make rand_seed check pass when have verify_backlog or
-		 * zone reset frequency for zonemode=zbd.
-		 */
-		if (!td_rw(td) || (td->flags & TD_F_VER_BACKLOG) ||
-		    td->o.zrf.u.f)
-			io_u->rand_seed = hdr->rand_seed;
 
 		if (td->o.verify != VERIFY_PATTERN_NO_HDR) {
 			ret = verify_header(io_u, td, hdr, hdr_num, hdr_inc);
@@ -1092,6 +1085,7 @@ static void fill_sha512(struct verify_header *hdr, void *p, unsigned int len)
 
 	fio_sha512_init(&sha512_ctx);
 	fio_sha512_update(&sha512_ctx, p, len);
+	fio_sha512_final(&sha512_ctx);
 }
 
 static void fill_sha256(struct verify_header *hdr, void *p, unsigned int len)
@@ -1551,15 +1545,15 @@ static int __fill_file_completions(struct thread_data *td,
 	if (!f->last_write_comp)
 		return 0;
 
-	if (td->io_blocks[DDIR_WRITE] < td->o.iodepth)
+	if (td->io_blocks[DDIR_WRITE] < td->last_write_comp_depth)
 		comps = td->io_blocks[DDIR_WRITE];
 	else
-		comps = td->o.iodepth;
+		comps = td->last_write_comp_depth;
 
 	j = f->last_write_idx - 1;
 	for (i = 0; i < comps; i++) {
 		if (j == -1)
-			j = td->o.iodepth - 1;
+			j = td->last_write_comp_depth - 1;
 		s->comps[*index].fileno = __cpu_to_le64(f->fileno);
 		s->comps[*index].offset = cpu_to_le64(f->last_write_comp[j]);
 		(*index)++;
@@ -1602,7 +1596,7 @@ struct all_io_list *get_all_io_list(int save_mask, size_t *sz)
 			continue;
 		td->stop_io = 1;
 		td->flags |= TD_F_VSTATE_SAVED;
-		depth += (td->o.iodepth * td->o.nr_files);
+		depth += (td->last_write_comp_depth * td->o.nr_files);
 		nr++;
 	} end_for_each();
 
@@ -1628,6 +1622,7 @@ struct all_io_list *get_all_io_list(int save_mask, size_t *sz)
 
 		s->no_comps = cpu_to_le64((uint64_t) comps);
 		s->depth = cpu_to_le32((uint32_t) td->o.iodepth);
+		s->max_no_comps_per_file = cpu_to_le32((uint32_t) td->last_write_comp_depth);
 		s->nofiles = cpu_to_le32((uint32_t) td->o.nr_files);
 		s->numberio = cpu_to_le64((uint64_t) td->io_issues[DDIR_WRITE]);
 		s->index = cpu_to_le64((uint64_t) __td_index);
@@ -1759,6 +1754,7 @@ void verify_assign_state(struct thread_data *td, void *p)
 
 	s->no_comps = le64_to_cpu(s->no_comps);
 	s->depth = le32_to_cpu(s->depth);
+	s->max_no_comps_per_file = le32_to_cpu(s->max_no_comps_per_file);
 	s->nofiles = le32_to_cpu(s->nofiles);
 	s->numberio = le64_to_cpu(s->numberio);
 	s->rand.use64 = le64_to_cpu(s->rand.use64);
@@ -1892,5 +1888,7 @@ int verify_state_should_stop(struct thread_data *td, struct io_u *io_u)
 	/*
 	 * Not found, we have to stop
 	 */
+	log_info("Stop verify because offset %llu in %s is not recorded in verify state\n",
+		 io_u->verify_offset, f->file_name);
 	return 1;
 }

@@ -978,8 +978,11 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 	if (td_write(td) && td_random(td) && td->o.norandommap)
 		total_bytes = max(total_bytes, (uint64_t) td->o.io_size);
 
-	/* Don't break too early if io_size > size */
-	if (td_rw(td) && !td_random(td))
+	/*
+	 * Don't break too early if io_size > size. The exception is when
+	 * verify is enabled.
+	 */
+	if (td_rw(td) && !td_random(td) && td->o.verify == VERIFY_NONE)
 		total_bytes = max(total_bytes, (uint64_t)td->o.io_size);
 
 	/*
@@ -1068,6 +1071,17 @@ static void do_io(struct thread_data *td, uint64_t *bytes_done)
 		 */
 		if (td->o.verify != VERIFY_NONE && io_u->ddir == DDIR_READ &&
 		    ((io_u->flags & IO_U_F_VER_LIST) || !td_rw(td))) {
+
+			/*
+			 * For read only workloads generate the seed. This way
+			 * we can still verify header seed at any later
+			 * invocation.
+			 */
+			if (!td_write(td) && !td->o.verify_pattern_bytes) {
+				io_u->rand_seed = __rand(&td->verify_state);
+				if (sizeof(int) != sizeof(long *))
+					io_u->rand_seed *= __rand(&td->verify_state);
+			}
 
 			if (verify_state_should_stop(td, io_u)) {
 				put_io_u(td, io_u);
@@ -1234,8 +1248,18 @@ static int init_file_completion_logging(struct thread_data *td,
 	if (td->o.verify == VERIFY_NONE || !td->o.verify_state_save)
 		return 0;
 
+	/*
+	 * Async IO completion order may be different from issue order. Double
+	 * the number of write completions to cover the case the writes issued
+	 * earlier complete slowly and fall in the last write log entries.
+	 */
+	td->last_write_comp_depth = depth;
+	if (!td_ioengine_flagged(td, FIO_SYNCIO))
+		td->last_write_comp_depth += depth;
+
 	for_each_file(td, f, i) {
-		f->last_write_comp = scalloc(depth, sizeof(uint64_t));
+		f->last_write_comp = scalloc(td->last_write_comp_depth,
+					     sizeof(uint64_t));
 		if (!f->last_write_comp)
 			goto cleanup;
 	}

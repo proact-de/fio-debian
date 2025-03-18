@@ -1185,7 +1185,9 @@ I/O type
 	pattern, then the *<nr>* value specified will be **added** to the generated
 	offset for each I/O turning sequential I/O into sequential I/O with holes.
 	For instance, using ``rw=write:4k`` will skip 4k for every write.  Also see
-	the :option:`rw_sequencer` option.
+	the :option:`rw_sequencer` option. If this is used with :option:`verify`
+	then :option:`verify_header_seed` will be disabled, unless its explicitly
+	enabled.
 
 .. option:: rw_sequencer=str
 
@@ -1564,11 +1566,12 @@ I/O type
 	this option is given, fio will just get a new random offset without looking
 	at past I/O history. This means that some blocks may not be read or written,
 	and that some blocks may be read/written more than once. If this option is
-	used with :option:`verify` and multiple blocksizes (via :option:`bsrange`),
-	only intact blocks are verified, i.e., partially-overwritten blocks are
-	ignored.  With an async I/O engine and an I/O depth > 1, it is possible for
-	the same block to be overwritten, which can cause verification errors.  Either
-	do not use norandommap in this case, or also use the lfsr random generator.
+	used with :option:`verify` then :option:`verify_header_seed` will be
+	disabled. If this option is used with :option:`verify` and multiple blocksizes
+	(via :option:`bsrange`), only intact blocks are verified, i.e.,
+	partially-overwritten blocks are ignored. With an async I/O engine and an I/O
+	depth > 1, header write sequence number verification will be disabled. See
+	:option:`verify_write_sequence`.
 
 .. option:: softrandommap=bool
 
@@ -2515,6 +2518,10 @@ with the caveat that when used on the command line, they must come after the
 	not support torn-write protection. To learn a file's torn-write limits, issue
 	statx with STATX_WRITE_ATOMIC.
 
+.. option:: libaio_vectored=bool : [libaio]
+
+    Submit vectored read and write requests.
+
 .. option:: fdp=bool : [io_uring_cmd] [xnvme]
 
 	Enable Flexible Data Placement mode for write commands.
@@ -2591,7 +2598,9 @@ with the caveat that when used on the command line, they must come after the
 
 .. option:: md_per_io_size=int : [io_uring_cmd] [xnvme]
 
-	Size in bytes for separate metadata buffer per IO. Default: 0.
+        Size in bytes for separate metadata buffer per IO. For io_uring_cmd
+        these buffers are allocated using malloc regardless of what is set for
+        :option:`iomem`. Default: 0.
 
 .. option:: pi_act=int : [io_uring_cmd] [xnvme]
 
@@ -2890,7 +2899,9 @@ with the caveat that when used on the command line, they must come after the
                 **read**
                         Use Read commands for data verification
                 **compare**
-                        Use Compare commands for data verification
+                        Use Compare commands for data verification.  This option is only valid with
+                        specific pattern(s), which means it *must* be given with `verify=pattern` and
+                        `verify_pattern=<pattern>`.
 
 .. option:: sg_write_mode=str : [sg]
 
@@ -3810,7 +3821,9 @@ Verification
 	invocation of this workload. This option allows one to check data multiple
 	times at a later date without overwriting it. This option makes sense only
 	for workloads that write data, and does not support workloads with the
-	:option:`time_based` option set.
+	:option:`time_based` option set. :option:`verify_write_sequence` and
+	:option:`verify_header_seed` will be disabled in this mode, unless they are
+	explicitly enabled.
 
 .. option:: do_verify=bool
 
@@ -3823,8 +3836,9 @@ Verification
 	of the job. Each verification method also implies verification of special
 	header, which is written to the beginning of each block. This header also
 	includes meta information, like offset of the block, block number, timestamp
-	when block was written, etc.  :option:`verify` can be combined with
-	:option:`verify_pattern` option.  The allowed values are:
+	when block was written, initial seed value used to generate the buffer
+	contents etc. :option:`verify` can be combined with :option:`verify_pattern`
+	option.  The allowed values are:
 
 		**md5**
 			Use an md5 sum of the data area and store it in the header of
@@ -3898,10 +3912,18 @@ Verification
 			:option:`ioengine`\=null, not for much else.
 
 	This option can be used for repeated burn-in tests of a system to make sure
-	that the written data is also correctly read back. If the data direction
-	given is a read or random read, fio will assume that it should verify a
-	previously written file. If the data direction includes any form of write,
-	the verify will be of the newly written data.
+	that the written data is also correctly read back.
+
+	If the data direction given is a read or random read, fio will assume that
+	it should verify a previously written file. In this scenario fio will not
+	verify the block number written in the header. The header seed won't be
+	verified, unless its explicitly requested by setting
+	:option:`verify_header_seed`. Note in this scenario the header seed check
+	will only work if the read invocation exactly matches the original write
+	invocation.
+
+	If the data direction includes any form of write, the verify will be of the
+	newly written data.
 
 	To avoid false verification errors, do not use the norandommap option when
 	verifying data with async I/O engines and I/O depths > 1.  Or use the
@@ -3911,7 +3933,8 @@ Verification
 .. option:: verify_offset=int
 
 	Swap the verification header with data somewhere else in the block before
-	writing. It is swapped back before verifying.
+	writing. It is swapped back before verifying. This should be within the
+	range of :option:`verify_interval`.
 
 .. option:: verify_interval=int
 
@@ -4022,6 +4045,15 @@ Verification
         fail).
         Defaults to true.
 
+.. option:: verify_header_seed=bool
+
+	Verify the header seed value which was used to generate the buffer contents.
+	In certain scenarios with read / verify only workloads, when
+	:option:`norandommap` is enabled, with offset modifiers
+	(refer :option:`readwrite` and :option:`rw_sequencer`) etc verification of
+	header seed may fail. Disabling this option will mean that header seed
+	checking is skipped. Defaults to true.
+
 .. option:: trim_percentage=int
 
 	Number of verify blocks to discard/trim.
@@ -4127,6 +4159,11 @@ Measurements and reporting
 	`kb_base`, `unit_base`, `sig_figs`, `thread_number`, `pid`, and
 	`job_start`. For these properties, the values for the first job are
 	recorded for the group.
+
+        Also, options like :option:`percentile_list` and
+        :option:`unified_rw_reporting` should be consistent among the jobs in a
+        reporting group. Having options like these vary across the jobs in a
+        reporting group is an unsupported configuration.
 
 .. option:: new_group
 
@@ -5385,5 +5422,14 @@ containing two hostnames ``h1`` and ``h2`` with IP addresses 192.168.10.120 and
 	/mnt/nfs/fio/192.168.10.120.fileio.tmp
 	/mnt/nfs/fio/192.168.10.121.fileio.tmp
 
+This behavior can be disabled by the :option:`unique_filename` option.
+
 Terse output in client/server mode will differ slightly from what is produced
 when fio is run in stand-alone mode. See the terse output section for details.
+
+Also, if one fio invocation runs workloads on multiple servers, fio will
+provide at the end an aggregate summary report for all workloads. This
+aggregate summary report assumes that options affecting reporting like
+:option:`unified_rw_reporting` and :option:`percentile_list` are identical
+across all the jobs summarized. Having different values for these options is an
+unsupported configuration.

@@ -387,6 +387,7 @@ struct thread_data {
 	struct fio_sem *sem;
 	uint64_t bytes_done[DDIR_RWDIR_CNT];
 	uint64_t bytes_verified;
+	uint32_t last_write_comp_depth;
 
 	uint64_t *thinktime_blocks_counter;
 	struct timespec last_thinktime;
@@ -798,6 +799,15 @@ extern void lat_target_reset(struct thread_data *);
 		for ((i) = 0, (f) = (td)->files[0];			\
 	    	 (i) < (td)->o.nr_files && ((f) = (td)->files[i]) != NULL; \
 		 (i)++)
+
+static inline bool fio_offset_overlap_risk(struct thread_data *td)
+{
+	if (td->o.norandommap || td->o.softrandommap ||
+	    td->o.ddir_seq_add || (td->o.ddir_seq_nr > 1))
+		return true;
+
+	return false;
+}
 
 static inline bool fio_fill_issue_time(struct thread_data *td)
 {

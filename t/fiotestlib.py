@@ -139,7 +139,7 @@ class FioExeTest(FioTest):
         if 'stderr_empty' in self.success:
             if self.success['stderr_empty']:
                 if stderr_size != 0:
-                    self.failure_reason = f"{self.failure_reason} stderr not empty,"
+                    self.failure_reason = f"{self.failure_reason} stderr not empty size {stderr_size},"
                     self.passed = False
             else:
                 if stderr_size == 0:
@@ -260,12 +260,13 @@ class FioJobFileTest(FioExeTest):
             return
 
         #
-        # Sometimes fio informational messages are included at the top of the
-        # JSON output, especially under Windows. Try to decode output as JSON
-        # data, skipping everything until the first {
+        # Sometimes fio informational messages are included outside the JSON
+        # output, especially under Windows. Try to decode output as JSON data,
+        # skipping outside the first { and last }
         #
         lines = file_data.splitlines()
-        file_data = '\n'.join(lines[lines.index("{"):])
+        last = len(lines) - lines[::-1].index("}")
+        file_data = '\n'.join(lines[lines.index("{"):last])
         try:
             self.json_data = json.loads(file_data)
         except json.JSONDecodeError:
@@ -320,21 +321,19 @@ class FioJobCmdTest(FioExeTest):
             file_data = file.read()
 
         #
-        # Sometimes fio informational messages are included at the top of the
-        # JSON output, especially under Windows. Try to decode output as JSON
-        # data, lopping off up to the first four lines
+        # Sometimes fio informational messages are included outside the JSON
+        # output, especially under Windows. Try to decode output as JSON data,
+        # skipping outside the first { and last }
         #
         lines = file_data.splitlines()
-        for i in range(5):
-            file_data = '\n'.join(lines[i:])
-            try:
-                self.json_data = json.loads(file_data)
-            except json.JSONDecodeError:
-                continue
-            else:
-                return True
+        last = len(lines) - lines[::-1].index("}")
+        file_data = '\n'.join(lines[lines.index("{"):last])
+        try:
+            self.json_data = json.loads(file_data)
+        except json.JSONDecodeError:
+            return False
 
-        return False
+        return True
 
     @staticmethod
     def check_empty(job):

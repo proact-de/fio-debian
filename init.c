@@ -854,8 +854,47 @@ static int fixup_options(struct thread_data *td)
 			o->verify_interval = gcd(o->min_bs[DDIR_WRITE],
 							o->max_bs[DDIR_WRITE]);
 
-		if (td->o.verify_only)
-			o->verify_write_sequence = 0;
+		if (o->verify_only) {
+			if (!fio_option_is_set(o, verify_write_sequence))
+				o->verify_write_sequence = 0;
+
+			if (!fio_option_is_set(o, verify_header_seed))
+				o->verify_header_seed = 0;
+		}
+
+		if (o->norandommap && !td_ioengine_flagged(td, FIO_SYNCIO) &&
+		    o->iodepth > 1) {
+			/*
+			 * Disable write sequence checks with norandommap and
+			 * iodepth > 1.
+			 * Unless we were explicitly asked to enable it.
+			 */
+			if (!fio_option_is_set(o, verify_write_sequence))
+				o->verify_write_sequence = 0;
+		}
+
+		/*
+		 * Verify header should not be offset beyond the verify
+		 * interval.
+		 */
+		if (o->verify_offset + sizeof(struct verify_header) >
+		    o->verify_interval) {
+			log_err("fio: cannot offset verify header beyond the "
+				"verify interval.\n");
+			ret |= 1;
+		}
+
+		/*
+		 * Disable rand_seed check when we have verify_backlog,
+		 * zone reset frequency for zonemode=zbd, or if we are using
+		 * an RB tree for IO history logs.
+		 * Unless we were explicitly asked to enable it.
+		 */
+		if (!td_write(td) || (td->flags & TD_F_VER_BACKLOG) ||
+		    o->zrf.u.f || fio_offset_overlap_risk(td)) {
+			if (!fio_option_is_set(o, verify_header_seed))
+				o->verify_header_seed = 0;
+		}
 	}
 
 	if (td->o.oatomic) {
